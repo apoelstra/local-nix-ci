@@ -10,7 +10,7 @@
 , prNum 
 }:
 let
-  utils = import ../../nix-setup/scrap/andrew-utils.nix {};
+  utils = import ./andrew-utils.nix {};
   tools-nix = pkgs.callPackage utils.tools-nix-path {};
   gitCommitDrv = import (utils.githubPrCommits {
     gitDir = ./master/.git;
