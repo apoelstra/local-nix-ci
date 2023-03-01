@@ -4,6 +4,8 @@ set -ex
 
 GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
 JSON="$GIT_DIR/../../repo.json"
+OUT_DIR=/nix/var/nix/gcroots/per-user/apoelstra/ci-output
+OUT_FILE="$OUT_DIR/$PRNUM--$(date "+%FT%H%M%S")"
 
 PRNUM=$1
 ACK=$2
