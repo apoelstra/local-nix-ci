@@ -6,26 +6,29 @@
   }
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
-, gitRepo
-, gitUrl
+, jsonConfigFile
 , prNum 
 }:
 let
   utils = import ./andrew-utils.nix {};
   tools-nix = pkgs.callPackage utils.tools-nix-path {};
+  jsonConfig = lib.trivial.importJSON jsonConfigFile;
   gitCommitDrv = import (utils.githubPrCommits {
-    gitDir = gitRepo;
+    # This must be a .git directory, not a URL or anything, since githubPrCommits
+    # well set the GIT_DIR env variable to it before calling git commands. The
+    # intention is for this to be run locally.
+    gitDir = /. + jsonConfig.gitDir;
     inherit prNum;
   }) {};
   gitCommits = gitCommitDrv.gitCommits;
   checkData = rec {
-    projectName = builtins.baseNameOf gitUrl;
+    projectName = jsonConfig.repoName;
     inherit prNum;
     argsMatrix = rec {
       attr = [ "c" "coq" "haskell" "compcert" "vst" ];
       src = map (commit: {
         src = builtins.fetchGit {
-          url = gitUrl;
+          url = jsonConfig.gitUrl;
           ref = "refs/pull/${builtins.toString prNum}/head";
           rev = commit;
         };
@@ -77,7 +80,7 @@ in
     argsMatrix = checkData.argsMatrix // {
       src = {
         src = builtins.fetchGit {
-          url = gitRepo;
+          url = jsonConfig.gitDir;
           ref = prNum;
         };
         name = builtins.toString prNum;
