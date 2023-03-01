@@ -3,13 +3,11 @@
 set -ex
 
 GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
-GIT_URL="\"$(git remote get-url origin)\""
-OUT_DIR=/nix/var/nix/gcroots/per-user/apoelstra/ci-output
-OUT_FILE="$OUT_DIR/$PRNUM--$(date "+%FT%H%M%S")"
+JSON="$GIT_DIR/../../repo.json"
 
 PRNUM=$1
 ACK=$2
-if git rev-parse --quiet "$1"; then
+if git rev-parse --verify --quiet "$1^{commit}"; then
 	COMMIT_ID="$PRNUM"  # no quotes
 	TARGET=checkHead
 elif [ "$PRNUM" == "" ]; then
@@ -20,19 +18,19 @@ else
 	TARGET=checkPr
 fi
 
+banner "Testing $PRNUM"
+
 nix-build \
 	--out-link "$OUT_FILE" \
 	--no-build-output \
-	--arg gitRepo "$GIT_DIR" \
-	--arg gitUrl "$GIT_URL" \
+	--arg jsonConfigFile "$JSON" \
 	--arg prNum "\"$PRNUM\"" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix"
 
 DRV_FILE=$(
 nix-instantiate \
-	--arg gitRepo "$GIT_DIR/.git" \
-	--arg gitUrl "$GIT_URL" \
+	--arg jsonConfigFile "$JSON" \
 	--arg prNum "\"$PRNUM\"" \
 	--add-root "$OUT_FILE.drv" \
 	-A "$TARGET" \
@@ -42,8 +40,7 @@ OUT_FILE=$(
 nix-build \
 	--no-build-output \
 	--out-link "$OUT_FILE" \
-	--arg gitRepo "$GIT_DIR" \
-	--arg gitUrl "$GIT_URL" \
+	--arg jsonConfigFile "$JSON" \
 	--arg prNum "\"$PRNUM\"" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix"
