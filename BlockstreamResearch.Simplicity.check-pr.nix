@@ -6,6 +6,7 @@
   }
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
+, gitRepo
 , gitUrl
 , prNum 
 }:
@@ -13,7 +14,7 @@ let
   utils = import ./andrew-utils.nix {};
   tools-nix = pkgs.callPackage utils.tools-nix-path {};
   gitCommitDrv = import (utils.githubPrCommits {
-    gitDir = ./master/.git;
+    gitDir = gitRepo;
     inherit prNum;
   }) {};
   gitCommits = gitCommitDrv.gitCommits;
@@ -76,7 +77,7 @@ in
     argsMatrix = checkData.argsMatrix // {
       src = {
         src = builtins.fetchGit {
-          url = gitUrl;
+          url = gitRepo;
           ref = prNum;
         };
         name = builtins.toString prNum;
