@@ -13,40 +13,47 @@ let
   utils = import ./andrew-utils.nix {};
   tools-nix = pkgs.callPackage utils.tools-nix-path {};
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
-  gitCommitDrv = import (utils.githubPrCommits {
+  allRustcs = [
+    (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
+    pkgs.rust-bin.stable.latest.default
+    pkgs.rust-bin.beta.latest.default
+    pkgs.rust-bin.stable."1.41.0".default
+  ];
+  gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
     # well set the GIT_DIR env variable to it before calling git commands. The
     # intention is for this to be run locally.
     gitDir = /. + jsonConfig.gitDir;
+    gitUrl = jsonConfig.gitUrl;
     inherit prNum;
-  }) {};
-  gitCommits = gitCommitDrv.gitCommits;
+  };
   checkData = rec {
     projectName = jsonConfig.repoName;
     inherit prNum;
-    argsMatrix = rec {
-      features = [
-        []
-        ["bitcoin"]
-        ["elements"]
-        ["bitcoin" "elements"]
-      ];
-      rustc = [
-        (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
-        pkgs.rust-bin.stable.latest.default
-        pkgs.rust-bin.beta.latest.default
-        pkgs.rust-bin.stable."1.41.0".default
-      ];
-      overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
-      src = map (commit: {
-        src = builtins.fetchGit {
-          url = jsonConfig.gitUrl;
-          ref = "refs/pull/${builtins.toString prNum}/head";
-          rev = commit;
-        };
-        name = builtins.substring 0 8 commit;
-      }) gitCommits;
-    };
+    argsMatrices = [
+      # Main project
+      {
+        features = [
+          []
+          ["bitcoin"]
+          ["elements"]
+          ["bitcoin" "elements"]
+        ];
+        rustc = allRustcs;
+        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+
+      # simplicity-sys
+      {
+        features = [];
+        rustc = allRustcs;
+        src = map (commit: commit // {
+          src = (dirOf commit.src) + "/simplicity-sys";
+          shortId = "simplicity-sys-${commit.shortId}";
+        }) gitCommits;
+      }
+    ];
   
     checkSingleCommit =
     { src
@@ -60,7 +67,7 @@ let
         overlays = [ (self: super: { inherit rustc; }) ];
       };
       generated = tools-nix.generatedCargoNix {
-        name = src.name; #projectName + "-" + src.name;
+        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
         src = src.src;
         inherit overrideLockFile;
       };
@@ -79,8 +86,8 @@ let
 in
 {
   checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr (checkData // {
-    argsMatrix = checkData.argsMatrix // {
+  checkHead = utils.checkPr (checkData // rec {
+    argsMatrices = map (argsMtx: argsMtx // {
       src = {
         src = builtins.fetchGit {
           url = jsonConfig.gitDir;
@@ -88,6 +95,6 @@ in
         };
         name = builtins.toString prNum;
       };
-    };
+    }) checkData.argsMatrices;
   });
 }

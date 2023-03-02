@@ -61,13 +61,25 @@ rec {
     phases = [ "buildPhase" ];
 
     buildPhase = ''
-      set -ex
+      set -e
       export GIT_DIR="${gitDir}"
+
+      MERGE_COMMIT="pr/${builtins.toString prNum}/merge"
+      if ! git rev-parse --verify --quiet "$MERGE_COMMIT^{commit}"; then
+        echo "Merge commit $MERGE_COMMIT not found in git dir $GIT_DIR."
+        exit 1
+      fi
+
+      HEAD_COMMIT="pr/${builtins.toString prNum}/head"
+      if ! git rev-parse --verify --quiet "$HEAD_COMMIT^{commit}"; then
+        echo "Merge commit $HEAD_COMMIT not found in git dir $GIT_DIR."
+        exit 1
+      fi
 
       mkdir -p "$out"
 
       echo 'pkgs: { gitCommits = [' >> "$out/default.nix"
-      REVS=$(git rev-list "pr/${builtins.toString prNum}/head" --not "pr/${builtins.toString prNum}/merge~")
+      REVS=$(git rev-list "$HEAD_COMMIT" --not "$MERGE_COMMIT~")
       for rev in $REVS;
         do echo " \"$rev\"" >> "$out/default.nix"
       done
@@ -76,11 +88,35 @@ rec {
     '';
   };
 
+  # Wrapper of githubPrCommits that actually calls the derivation to obtain the list of
+  # git commits, then calls fetchGit on everything in the list
+  #
+  # If gitUrl is provided, it is used to fetch the actual commits. This is provided
+  # to assist with remote building: githubPrCommits is always run locally, so it is
+  # fastest to provide it with a local git checkout via gitDir. But this just gets
+  # a list of commit IDs. To fetch the actual commits, which will happen remotely,
+  # it may be faster to provide a github URL (so the remote machine can directly
+  # connect to github rather than copying over the local derivation)
+  githubPrSrcs = 
+  { gitDir
+  , prNum
+  , gitUrl ? gitDir
+  }:
+  map (commit: {
+    src = builtins.fetchGit {
+      url = gitUrl;
+      ref = "refs/pull/${builtins.toString prNum}/head";
+      rev = commit;
+    };
+    commitId = commit;
+    shortId = builtins.substring 0 8 commit;
+  }) (import (githubPrCommits { inherit gitDir prNum; }) {}).gitCommits;
+
   # Given a bunch of data, do a full PR check
   checkPr = {
     projectName,
     prNum,
-    argsMatrix,
+    argsMatrices,
     checkSingleCommit,
   }:
   nixpkgs.linkFarm
@@ -91,6 +127,6 @@ rec {
     in rec {
       path = checkSingleCommit mtxEntry;
       name = "${path.name}-${hashEntry}";
-    }) (matrix argsMatrix));
+    }) (builtins.concatMap matrix argsMatrices));
 }
 
