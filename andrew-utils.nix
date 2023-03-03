@@ -112,6 +112,9 @@ rec {
     shortId = builtins.substring 0 8 commit;
   }) (import (githubPrCommits { inherit gitDir prNum; }) {}).gitCommits;
 
+  derivationName = drv:
+    builtins.unsafeDiscardStringContext (builtins.baseNameOf (builtins.toString drv));
+
   # Given a bunch of data, do a full PR check. T
   # Thanks roconnor for this
   checkPr = {
@@ -127,11 +130,14 @@ rec {
         let check = checkSingleCommit mtxEntry memoTable.${genName check.generatedCargoNix};
         in {
           generatedCargoNix = check.generatedCargoNix;
-          drv = check.drv;
+          link = {
+            path = check.drv;
+            name = derivationName check.drv;
+          };
         };
       genLinkPairs = map mkPair mtxs;
       genCargoNixes = map (x: x.generatedCargoNix) genLinkPairs;
-      calledCargoNixes = map (x: x.drv) genLinkPairs;
+      calledCargoNixes = map (x: x.link) genLinkPairs;
       memoTable = builtins.listToAttrs (map (gen: { name = genName gen; value = callCargoNix gen; }) genCargoNixes);
   in nixpkgs.linkFarm "${projectName}-pr-${builtins.toString prNum}" calledCargoNixes;
 }
