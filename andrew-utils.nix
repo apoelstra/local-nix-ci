@@ -4,7 +4,7 @@
 rec {
   # Re-export crate2nix tools.nix path so that I don't need to worry about its
   # exact vaule in more than one place.
-  tools-nix-path = ../nix-setup/crate2nix/tools.nix;
+  tools-nix-path = ../nix-setup/crate2nix/currently-using/tools.nix;
 
   # Given a set with a set of list-valued attributes, explode it into
   # a list of sets with every possible combination of attributes. If
