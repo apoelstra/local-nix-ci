@@ -112,21 +112,27 @@ rec {
     shortId = builtins.substring 0 8 commit;
   }) (import (githubPrCommits { inherit gitDir prNum; }) {}).gitCommits;
 
-  # Given a bunch of data, do a full PR check
+  # Given a bunch of data, do a full PR check. T
+  # Thanks roconnor for this
   checkPr = {
     projectName,
     prNum,
     argsMatrices,
     checkSingleCommit,
+    callCargoNix,
   }:
-  nixpkgs.linkFarm
-    "${projectName}-pr-${builtins.toString prNum}"
-    (map (mtxEntry: let
-      strEntry = builtins.unsafeDiscardStringContext (builtins.toJSON mtxEntry);
-      hashEntry = builtins.hashString "sha256" strEntry;
-    in rec {
-      path = checkSingleCommit mtxEntry;
-      name = "${path.name}-${hashEntry}";
-    }) (builtins.concatMap matrix argsMatrices));
+  let genName = gen: builtins.unsafeDiscardStringContext (builtins.toString gen);
+      mtxs = builtins.concatMap matrix argsMatrices;
+      mkPair = mtxEntry:
+        let check = checkSingleCommit mtxEntry memoTable.${genName check.generatedCargoNix};
+        in {
+          generatedCargoNix = check.generatedCargoNix;
+          drv = check.drv;
+        };
+      genLinkPairs = map mkPair mtxs;
+      genCargoNixes = map (x: x.generatedCargoNix) genLinkPairs;
+      calledCargoNixes = map (x: x.drv) genLinkPairs;
+      memoTable = builtins.listToAttrs (map (gen: { name = genName gen; value = callCargoNix gen; }) genCargoNixes);
+  in nixpkgs.linkFarm "${projectName}-pr-${builtins.toString prNum}" calledCargoNixes;
 }
 

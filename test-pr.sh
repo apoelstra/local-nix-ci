@@ -25,6 +25,7 @@ banner "Testing $PRNUM"
 nix-build \
 	--out-link "$OUT_FILE" \
 	--no-build-output \
+	--keep-failed \
 	--arg jsonConfigFile "$JSON" \
 	--arg prNum "\"$PRNUM\"" \
 	-A "$TARGET" \

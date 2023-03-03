@@ -31,37 +31,34 @@ let
     projectName = jsonConfig.repoName;
     inherit prNum;
     argsMatrices = [
-      # Main project
       {
-        features = [
-          []
-          ["bitcoin"]
-          ["elements"]
-          ["bitcoin" "elements"]
-        ];
+        workspace = "bitcoincore-rpc-json";
+        features = [ [] ];
         rustc = allRustcs;
         overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
-      # simplicity-sys
       {
-        features = [
-          []
-          ["test-utils"]
-        ];
+        workspace = "bitcoincore-rpc";
+        features = [ [] ];
         rustc = allRustcs;
-        src = map (commit: commit // {
-          src = "${commit.src}/simplicity-sys";
-          shortId = "simplicity-sys-${commit.shortId}";
-        }) gitCommits;
-        # FIXME avoid hardcoding this
-        overrideLockFile = /home/apoelstra/code/BlockstreamResearch/rust-simplicity/Cargo.simplicity-sys.lock;
+        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+
+      {
+        workspace = "integration_test";
+        features = [ [] ];
+        rustc = allRustcs;
+        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
       }
     ];
   
     checkSingleCommit =
     { src
+    , workspace
     , overrideLockFile
     , features ? [ "default" ]
     , rustc ? pkgs.rust-bin.stable.latest.default
@@ -78,7 +75,7 @@ let
       };
       called = pkgs.callPackage "${generated}/default.nix" {};
     in
-      called.rootCrate.build.override {
+      builtins.trace (called.workspaceMembers) called.workspaceMembers.${workspace}.build.override {
         inherit features;
         runTests = true;
         testPreRun = ''
