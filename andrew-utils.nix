@@ -159,12 +159,22 @@ rec {
   }:
   let
     mtxs = builtins.concatMap matrix argsMatrices;
-    memoTable = builtins.listToAttrs (map singleCheckMemo mtxs);
-    singleLink = mtx: rec {
-      path = singleCheckDrv mtx memoTable.${(singleCheckMemo mtx).name};
-      name = "${mtx.srcName mtx}/${mtx.mtxName mtx}--${derivationName path}";
-    };
-  in nixpkgs.linkFarm name (map singleLink mtxs);
+    # This twisty memoAndLinks logic is due to roconnor. It avoids computing
+    # memo.name (which is potentially expensive) twice, which would be needed
+    # if we first computing memoTable "normally" and then later indexed into
+    # it when producing a list of links.
+    memoTable = builtins.listToAttrs (map (x: x.memo) memoAndLinks);
+    memoAndLinks = map (mtx:
+      let memo = singleCheckMemo mtx;
+      in {
+        inherit memo;
+        link = rec {
+          path = singleCheckDrv mtx memoTable.${memo.name};
+          name = "${mtx.srcName mtx}/${mtx.mtxName mtx}--${derivationName path}";
+        };
+      }
+    ) mtxs;
+  in nixpkgs.linkFarm name (map (x: x.link) memoAndLinks);
 }
 
 
