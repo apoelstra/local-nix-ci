@@ -125,9 +125,10 @@ rec {
   #  multiple sets, each of which has a different element from the list in place of
   #  that field. See documentation for 'matrix' for more information.
   #
-  #  THERE IS ONE REQUIRED FIELD, srcName, which is used to put the linkFarm outputs
-  #  into subdirectories. Otherwise each matrix entry is arbitrary and just passed
-  #  verbatim as input to singleCheckDrv and singleCheckMemo.
+  #  THERE ARE TWO REQUIRED FIELD, srcName and mtxNames. These should be functions
+  #  which take the matrix itself and output a string. The srcName string is used
+  #  to split the linkFarm links into separate directories, while the mtxName
+  #  string goes into the derivation name and can be anything.
   #
   # singleCheck is a function which takes:
   #  1. A matrix entry
@@ -161,7 +162,7 @@ rec {
     memoTable = builtins.listToAttrs (map singleCheckMemo mtxs);
     singleLink = mtx: rec {
       path = singleCheckDrv mtx memoTable.${(singleCheckMemo mtx).name};
-      name = "${mtx.srcName mtx}/${derivationName path}";
+      name = "${mtx.srcName mtx}/${mtx.mtxName mtx}--${derivationName path}";
     };
   in nixpkgs.linkFarm name (map singleLink mtxs);
 }

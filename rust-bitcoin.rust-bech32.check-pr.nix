@@ -41,23 +41,24 @@ let
         ["default" "strict"]
       ];
       rustc = allRustcs;
-      overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+      lockFile = map (x: /. + x) jsonConfig.lockFiles;
       src = gitCommits;
 
-      srcName = self: self.src.shortId;
+      srcName = self: self.src.commitId;
+      mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
     }];
 
     singleCheckMemo = {
       projectName,
       prNum,
-      overrideLockFile,
+      lockFile,
       src,
       ...
     }:
     let generatedCargoNix = tools-nix.generatedCargoNix {
       name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
       src = src.src;
-      inherit overrideLockFile;
+      overrideLockFile = lockFile;
     };
     in {
       name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
@@ -69,9 +70,10 @@ let
       prNum,
       features,
       rustc,
-      overrideLockFile,
+      lockFile,
       src,
       srcName,
+      mtxName,
     }:
     calledCargoNix:
     with pkgs;
