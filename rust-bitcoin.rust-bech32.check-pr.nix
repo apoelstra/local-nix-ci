@@ -26,32 +26,51 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
+  srcName = self: self.src.commitId;
+  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
-    argsMatrices = [{
-      projectName = jsonConfig.repoName;
-      inherit prNum;
+    argsMatrices = [
+      {
+        projectName = jsonConfig.repoName;
+        inherit srcName mtxName prNum;
 
-      features = [
-        []
-        ["default"]
-        ["strict"]
-        ["default" "strict"]
-      ];
-      rustc = allRustcs;
-      lockFile = map (x: /. + x) jsonConfig.lockFiles;
-      src = gitCommits;
+        isTip = false;
 
-      srcName = self: self.src.commitId;
-      mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
-    }];
+        features = [
+          []
+          ["default"]
+          ["strict"]
+          ["default" "strict"]
+        ];
+        rustc = allRustcs;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+
+      # Only tip
+      {
+        projectName = jsonConfig.repoName;
+        inherit srcName prNum;
+
+        isTip = true;
+
+        features = [ [ "default" "strict" ] ];
+        rustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
+        lockFile = /. + builtins.head jsonConfig.lockFiles;
+        src = builtins.head gitCommits;
+
+        mtxName = self: (mtxName self) + "-tip";
+      }
+    ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
 
     singleCheckDrv = {
       projectName,
       prNum,
+      isTip,
       features,
       rustc,
       lockFile,
@@ -73,6 +92,13 @@ let
         ${rustc}/bin/cargo -V
         echo "Features: ${builtins.toJSON features}"
       '';
+      testPostRun = if isTip
+      then ''
+        export PATH=$PATH:${rustc}/bin
+        cargo fmt --check
+        cargo clippy
+      ''
+      else "";
     };
   };
 in
