@@ -5,6 +5,8 @@ rec {
   # Re-export crate2nix tools.nix path so that I don't need to worry about its
   # exact vaule in more than one place.
   tools-nix-path = ../nix-setup/crate2nix/currently-using/tools.nix;
+  # Laziness means this is only called when used
+  tools-nix = nixpkgs.callPackage tools-nix-path {};
 
   # Given a set with a set of list-valued attributes, explode it into
   # a list of sets with every possible combination of attributes. If
@@ -49,7 +51,7 @@ rec {
   # in
   #   pr1207.gitCommits
   #
-  githubPrCommits = 
+  githubPrCommits =
   { gitDir
   , prNum
   }:
@@ -97,7 +99,7 @@ rec {
   # a list of commit IDs. To fetch the actual commits, which will happen remotely,
   # it may be faster to provide a github URL (so the remote machine can directly
   # connect to github rather than copying over the local derivation)
-  githubPrSrcs = 
+  githubPrSrcs =
   { gitDir
   , prNum
   , gitUrl ? gitDir
@@ -175,6 +177,27 @@ rec {
       }
     ) mtxs;
   in nixpkgs.linkFarm name (map (x: x.link) memoAndLinks);
+
+  # A value of singleCheckMemo useful for Rust projects, which uses a crate2nix generated
+  # Cargo.nix as the key, and the result of calling it as the value.
+  #
+  # Assumes that your matrix has entries projectName, prNum, lockFile, src.
+  crate2nixSingleCheckMemo = {
+    projectName,
+    prNum,
+    lockFile,
+    src,
+    ...
+  }:
+  let generatedCargoNix = tools-nix.generatedCargoNix {
+    name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
+    src = src.src;
+    overrideLockFile = lockFile;
+  };
+  in {
+    name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
+    value = nixpkgs.callPackage generatedCargoNix {};
+  };
 }
 
 

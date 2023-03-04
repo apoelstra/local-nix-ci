@@ -11,7 +11,6 @@
 }:
 let
   utils = import ./andrew-utils.nix {};
-  tools-nix = pkgs.callPackage utils.tools-nix-path {};
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   allRustcs = [
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
@@ -48,22 +47,7 @@ let
       mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
     }];
 
-    singleCheckMemo = {
-      projectName,
-      prNum,
-      lockFile,
-      src,
-      ...
-    }:
-    let generatedCargoNix = tools-nix.generatedCargoNix {
-      name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
-      src = src.src;
-      overrideLockFile = lockFile;
-    };
-    in {
-      name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
-      value = pkgs.callPackage generatedCargoNix {};
-    };
+    singleCheckMemo = utils.crate2nixSingleCheckMemo;
 
     singleCheckDrv = {
       projectName,
@@ -95,15 +79,16 @@ in
 {
   checkPr = utils.checkPr checkData;
   checkHead = utils.checkPr (checkData // {
-    gitCommits = [{
-      src = {
+    argsMatrices = map (argsMtx: argsMtx // {
+      src = rec {
         src = builtins.fetchGit {
           url = jsonConfig.gitDir;
           ref = prNum;
         };
         name = builtins.toString prNum;
-        shortId = builtins.toString prNum;
+        shortId = name;
+        commitId = shortId;
       };
-    }];
+    }) checkData.argsMatrices;
   });
 }

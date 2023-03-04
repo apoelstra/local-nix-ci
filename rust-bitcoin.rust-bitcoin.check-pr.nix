@@ -7,11 +7,10 @@
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
-, prNum 
+, prNum
 }:
 let
   utils = import ./andrew-utils.nix {};
-  tools-nix = pkgs.callPackage utils.tools-nix-path {};
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   allRustcs = [
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
@@ -27,11 +26,16 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
+  srcName = self: self.src.commitId;
+  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${self.workspace}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
   checkData = rec {
-    projectName = jsonConfig.repoName;
-    inherit prNum;
+    name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
+
     argsMatrices = [
       {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName;
+
         workspace = "bitcoin";
         features = [
           [ "default" ]
@@ -42,11 +46,14 @@ let
           [ "default" "base64" "serde" "rand" "rand-std" "secp-lowmemory" "bitcoinconsensus-std" ]
         ];
         rustc = allRustcs;
-        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
       # bitcoin, no-std (does not work on 1.41)
       {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName;
+
         workspace = "bitcoin";
         features = [
           [ "no-std" ]
@@ -64,11 +71,14 @@ let
            pkgs.rust-bin.beta.latest.default
            pkgs.rust-bin.stable."1.50.0".default
         ];
-        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
       {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName;
+
         workspace = "bitcoin_hashes";
         features = [
           [ ]
@@ -83,11 +93,14 @@ let
           [ "std" "serde" "serde-std" "alloc" "schemars" ]
         ];
         rustc = allRustcs;
-        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
       {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName;
+
         workspace = "bitcoin-internals";
         features = [
           []
@@ -95,11 +108,14 @@ let
           [ "std" ]
         ];
         rustc = allRustcs;
-        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
       {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName;
+
         workspace = "bitcoin-hex";
         features = [
           []
@@ -107,43 +123,37 @@ let
           [ "std" ]
         ];
         rustc = allRustcs;
-        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
     ];
-  
-    callCargoNix = generatedCargoNix: pkgs.callPackage generatedCargoNix {
-      # We have some should_panic tests that fail in release mode
-      release = false;
-    };
 
-    checkSingleCommit = {
-      src,
+    singleCheckMemo = utils.crate2nixSingleCheckMemo;
+
+    singleCheckDrv = {
+      projectName,
+      prNum,
       workspace,
-      overrideLockFile,
-      features ? [ "default" ],
-      rustc ? pkgs.rust-bin.stable.latest.default,
+      features,
+      rustc,
+      lockFile,
+      src,
+      srcName,
+      mtxName,
     }:
     calledCargoNix:
     let
       pkgs = import <nixpkgs> {
         overlays = [ (self: super: { inherit rustc; }) ];
       };
-    in {
-      generatedCargoNix = tools-nix.generatedCargoNix {
-        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
-        src = src.src;
-        inherit overrideLockFile;
-      };
-      drv = calledCargoNix.workspaceMembers.${workspace}.build.override {
-        inherit features;
-        runTests = true;
-        testPreRun = ''
-          ${rustc}/bin/rustc -V
-          ${rustc}/bin/cargo -V
-          echo "Features: ${builtins.toJSON features}"
-        '';
-      };
+    in calledCargoNix.workspaceMembers.${workspace}.build.override {
+      inherit features;
+      runTests = true;
+      testPreRun = ''
+        ${rustc}/bin/rustc -V
+        ${rustc}/bin/cargo -V
+        echo "Features: ${builtins.toJSON features}"
+      '';
     };
   };
 in
