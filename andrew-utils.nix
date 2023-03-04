@@ -102,7 +102,9 @@ rec {
   , prNum
   , gitUrl ? gitDir
   }:
-  map (commit: {
+  let
+    bareCommits = (import (githubPrCommits { inherit gitDir prNum; }) {}).gitCommits;
+  in map (commit: {
     src = builtins.fetchGit {
       url = gitUrl;
       ref = "refs/pull/${builtins.toString prNum}/head";
@@ -110,35 +112,59 @@ rec {
     };
     commitId = commit;
     shortId = builtins.substring 0 8 commit;
-  }) (import (githubPrCommits { inherit gitDir prNum; }) {}).gitCommits;
+  }) bareCommits;
 
   derivationName = drv:
     builtins.unsafeDiscardStringContext (builtins.baseNameOf (builtins.toString drv));
 
-  # Given a bunch of data, do a full PR check. T
-  # Thanks roconnor for this
+  # Given a bunch of data, do a full PR check.
+  #
+  # name is a string that will be used as the name of the total linkFarm
+  # argsMatrices should be a list of "argument matrices", which are arbitrary-shaped
+  #  sets, which will be exploded so that any list-typed fields will be turned into
+  #  multiple sets, each of which has a different element from the list in place of
+  #  that field. See documentation for 'matrix' for more information.
+  #
+  #  THERE IS ONE REQUIRED FIELD, srcName, which is used to put the linkFarm outputs
+  #  into subdirectories. Otherwise each matrix entry is arbitrary and just passed
+  #  verbatim as input to singleCheckDrv and singleCheckMemo.
+  #
+  # singleCheck is a function which takes:
+  #  1. A matrix entry
+  #  2. A value from singleCheckMemo, or null if singleCheckMemo is not provided.
+  #
+  # singleCheckMemo is a bit of a weird function. If provided, it takes a matrix
+  # entry and returns a { name, value } pair where:
+  #  1. name is a string uniquely specifying the inputs needed to compute "value"
+  #     from the matrix entry.
+  #  2. value is some arbitrary computation.
+  #
+  # The idea behind singleCheckMemo is that there are often heavy computations
+  # which depend only on a subset of the matrix data (e.g. calling a Cargo.nix
+  # derivation in a crate2nix-based rust build, which needs only the source
+  # code and Cargo.lock file). Then we can feed the output of this function into
+  # builtins.listToAttrs, and nix's lazy field mean that if a given name appears
+  # multiple times, the value will only be computed for the final one (i.e. the
+  # one that gets accessed).
+  #
+  # This has the same complexity as "lookup the value if it exists, otherwise do
+  # an expensive computation and cache it", though the actual mechanics are quite
+  # different.
   checkPr = {
-    projectName,
-    prNum,
+    name,
     argsMatrices,
-    checkSingleCommit,
-    callCargoNix,
+    singleCheckDrv,
+    singleCheckMemo ? x: { name = ""; value = null; },
   }:
-  let genName = gen: builtins.unsafeDiscardStringContext (builtins.toString gen);
-      mtxs = builtins.concatMap matrix argsMatrices;
-      mkPair = mtxEntry:
-        let check = checkSingleCommit mtxEntry memoTable.${genName check.generatedCargoNix};
-        in {
-          generatedCargoNix = check.generatedCargoNix;
-          link = {
-            path = check.drv;
-            name = derivationName check.drv;
-          };
-        };
-      genLinkPairs = map mkPair mtxs;
-      genCargoNixes = map (x: x.generatedCargoNix) genLinkPairs;
-      calledCargoNixes = map (x: x.link) genLinkPairs;
-      memoTable = builtins.listToAttrs (map (gen: { name = genName gen; value = callCargoNix gen; }) genCargoNixes);
-  in nixpkgs.linkFarm "${projectName}-pr-${builtins.toString prNum}" calledCargoNixes;
+  let
+    mtxs = builtins.concatMap matrix argsMatrices;
+    memoTable = builtins.listToAttrs (map singleCheckMemo mtxs);
+    singleLink = mtx: rec {
+      path = singleCheckDrv mtx memoTable.${(singleCheckMemo mtx).name};
+      name = "${mtx.srcName mtx}/${derivationName path}";
+    };
+  in nixpkgs.linkFarm name (map singleLink mtxs);
 }
+
+
 

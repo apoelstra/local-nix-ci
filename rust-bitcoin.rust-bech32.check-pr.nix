@@ -28,9 +28,12 @@ let
     inherit prNum;
   };
   checkData = rec {
-    projectName = jsonConfig.repoName;
-    inherit prNum;
+    name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
+
     argsMatrices = [{
+      projectName = jsonConfig.repoName;
+      inherit prNum;
+
       features = [
         []
         ["default"]
@@ -40,15 +43,35 @@ let
       rustc = allRustcs;
       overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
       src = gitCommits;
+
+      srcName = self: self.src.shortId;
     }];
 
-    callCargoNix = generatedCargoNix: pkgs.callPackage generatedCargoNix {};
-  
-    checkSingleCommit =
-    { src
-    , overrideLockFile
-    , features ? [ "default" ]
-    , rustc ? pkgs.rust-bin.stable.latest.default
+    singleCheckMemo = {
+      projectName,
+      prNum,
+      overrideLockFile,
+      src,
+      ...
+    }:
+    let generatedCargoNix = tools-nix.generatedCargoNix {
+      name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
+      src = src.src;
+      inherit overrideLockFile;
+    };
+    in {
+      name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
+      value = pkgs.callPackage generatedCargoNix {};
+    };
+
+    singleCheckDrv = {
+      projectName,
+      prNum,
+      features,
+      rustc,
+      overrideLockFile,
+      src,
+      srcName,
     }:
     calledCargoNix:
     with pkgs;
@@ -56,28 +79,21 @@ let
       pkgs = import <nixpkgs> {
         overlays = [ (self: super: { inherit rustc; }) ];
       };
-    in {
-      generatedCargoNix = tools-nix.generatedCargoNix {
-        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
-        src = src.src;
-        inherit overrideLockFile;
-      };
-      drv = calledCargoNix.rootCrate.build.override {
-        inherit features;
-        runTests = true;
-        testPreRun = ''
-          ${rustc}/bin/rustc -V
-          ${rustc}/bin/cargo -V
-          echo "Features: ${builtins.toJSON features}"
-        '';
-      };
+    in calledCargoNix.rootCrate.build.override {
+      inherit features;
+      runTests = true;
+      testPreRun = ''
+        ${rustc}/bin/rustc -V
+        ${rustc}/bin/cargo -V
+        echo "Features: ${builtins.toJSON features}"
+      '';
     };
   };
 in
 {
   checkPr = utils.checkPr checkData;
   checkHead = utils.checkPr (checkData // {
-    argsMatrix = checkData.argsMatrix // {
+    gitCommits = [{
       src = {
         src = builtins.fetchGit {
           url = jsonConfig.gitDir;
@@ -86,6 +102,6 @@ in
         name = builtins.toString prNum;
         shortId = builtins.toString prNum;
       };
-    };
+    }];
   });
 }
