@@ -196,7 +196,10 @@ rec {
   };
   in {
     name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
-    value = nixpkgs.callPackage generatedCargoNix {};
+    value = nixpkgs.callPackage generatedCargoNix {
+      # We have some should_panic tests in rust-bitcoin that fail in release mode
+      release = false;
+    };
   };
 }
 
