@@ -100,11 +100,10 @@ let
       }
     ];
   
-    callCargoNix = generatedCargoNix:
-      pkgs.callPackage "${generatedCargoNix}/default.nix" {
-        # We have some should_panic tests that fail in release mode
-        release = false;
-      };
+    callCargoNix = generatedCargoNix: pkgs.callPackage generatedCargoNix {
+      # We have some should_panic tests that fail in release mode
+      release = false;
+    };
 
     checkSingleCommit = {
       src,
@@ -112,18 +111,15 @@ let
       overrideLockFile,
       features ? [ "default" ],
       rustc ? pkgs.rust-bin.stable.latest.default,
-    } @ mtxEntry:
+    }:
     calledCargoNix:
     let
       pkgs = import <nixpkgs> {
         overlays = [ (self: super: { inherit rustc; }) ];
       };
-      # These are just used to give unique names to the generated derivations
-      strEntry = builtins.unsafeDiscardStringContext (builtins.toJSON mtxEntry);
-      hashEntry = builtins.hashString "sha256" strEntry;
     in {
       generatedCargoNix = tools-nix.generatedCargoNix {
-        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}-${hashEntry}";
+        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
         src = src.src;
         inherit overrideLockFile;
       };
