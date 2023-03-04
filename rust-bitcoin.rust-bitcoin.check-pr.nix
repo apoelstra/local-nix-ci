@@ -111,21 +111,6 @@ let
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
-
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName;
-
-        workspace = "bitcoin-hex";
-        features = [
-          []
-          [ "alloc" ]
-          [ "std" ]
-        ];
-        rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
-        src = gitCommits;
-      }
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
