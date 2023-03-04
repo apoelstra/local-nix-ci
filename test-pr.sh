@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -ex
+set -e
 
 GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
 JSON="$GIT_DIR/../../repo.json"
@@ -42,8 +42,8 @@ OUT_FILE=$(
 )
 
 # Add outputs to gc roots
-ln -sf "$DRV_FILE" "$OUT_DIR/"
-ln -sf "$OUT_FILE" "$OUT_DIR/"
+ln -s "$DRV_FILE" "$OUT_DIR/" || echo "WARNING: failed to create gcroot link for $DRV_FILE"
+ln -s "$OUT_FILE" "$OUT_DIR/" || echo "WARNING: failed to create gcroot link for $OUT_FILE"
 
 # Add git notes to every affected commit
 export GIT_NOTES_REF="refs/notes/check-pr"
