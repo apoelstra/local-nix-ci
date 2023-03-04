@@ -98,6 +98,18 @@ let
         overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
+
+      {
+        workspace = "bitcoin-hex";
+        features = [
+          []
+          [ "alloc" ]
+          [ "std" ]
+        ];
+        rustc = allRustcs;
+        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
     ];
   
     callCargoNix = generatedCargoNix: pkgs.callPackage generatedCargoNix {
