@@ -32,9 +32,13 @@ DRV_FILE=$(
 
 OUT_FILE=$(
   nix-build \
+	--builders-use-substitutes \
 	--no-build-output \
 	--no-out-link \
 	--keep-failed \
+	--keep-derivations \
+	--keep-outputs \
+	--log-lines 100 \
 	--arg jsonConfigFile "$JSON" \
 	--arg prNum "\"$PRNUM\"" \
 	-A "$TARGET" \
