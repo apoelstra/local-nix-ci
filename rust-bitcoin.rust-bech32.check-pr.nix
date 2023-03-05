@@ -78,13 +78,13 @@ let
       srcName,
       mtxName,
     }:
-    calledCargoNix:
+    nixes:
     with pkgs;
     let
       pkgs = import <nixpkgs> {
         overlays = [ (self: super: { inherit rustc; }) ];
       };
-    in calledCargoNix.rootCrate.build.override {
+    in nixes.called.rootCrate.build.override {
       inherit features;
       runTests = true;
       testPreRun = ''

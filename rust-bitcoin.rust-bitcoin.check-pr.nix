@@ -35,6 +35,7 @@ let
       {
         projectName = jsonConfig.repoName;
         inherit prNum srcName mtxName;
+        isTip = false;
 
         workspace = "bitcoin";
         features = [
@@ -53,6 +54,7 @@ let
       {
         projectName = jsonConfig.repoName;
         inherit prNum srcName mtxName;
+        isTip = false;
 
         workspace = "bitcoin";
         features = [
@@ -78,6 +80,7 @@ let
       {
         projectName = jsonConfig.repoName;
         inherit prNum srcName mtxName;
+        isTip = false;
 
         workspace = "bitcoin_hashes";
         features = [
@@ -94,12 +97,13 @@ let
         ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
-        src = gitCommits;
+        src = builtins.head gitCommits;
       }
 
       {
         projectName = jsonConfig.repoName;
         inherit prNum srcName mtxName;
+        isTip = false;
 
         workspace = "bitcoin-internals";
         features = [
@@ -111,6 +115,22 @@ let
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
+
+      # Only tip
+      {
+        projectName = jsonConfig.repoName;
+        inherit srcName prNum;
+
+        isTip = true;
+
+        workspace = [ "bitcoin" "bitcoin-internals" "bitcoin_hashes" ];
+        features = [ [ "default" ] ];
+        rustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
+        lockFile = /. + builtins.head jsonConfig.lockFiles;
+        src = builtins.head gitCommits;
+
+        mtxName = self: (mtxName self) + "-tip";
+      }
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
@@ -118,6 +138,7 @@ let
     singleCheckDrv = {
       projectName,
       prNum,
+      isTip,
       workspace,
       features,
       rustc,
@@ -126,19 +147,36 @@ let
       srcName,
       mtxName,
     }:
-    calledCargoNix:
+    nixes:
     let
       pkgs = import <nixpkgs> {
         overlays = [ (self: super: { inherit rustc; }) ];
       };
-    in calledCargoNix.workspaceMembers.${workspace}.build.override {
+    in nixes.called.workspaceMembers.${workspace}.build.override {
       inherit features;
       runTests = true;
       testPreRun = ''
         ${rustc}/bin/rustc -V
         ${rustc}/bin/cargo -V
-        echo "Features: ${builtins.toJSON features}"
+        echo "Tip: ${builtins.toString isTip}"
+        echo "PR: ${prNum}"
+        echo "Commit: ${src.commitId}"
+        echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
       '';
+      # cargo clippy runs on all workspaces at once, so rather than doing it
+      # repeatedly for every workspace, just choose one ("bitcoin") and only
+      # run it there..
+      testPostRun = if workspace == "bitcoin" && isTip
+      then ''
+        export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
+
+        export CARGO_TARGET_DIR=$PWD/target
+        cd ${nixes.generated}/crate
+        CARGO_HOME=../cargo cargo clippy --locked -- -D warnings
+        echo "Bailing to make this drv obvious"
+        exit 1
+      ''
+      else "";
     };
   };
 in
@@ -153,6 +191,7 @@ in
         };
         name = builtins.toString prNum;
         shortId = builtins.toString prNum;
+        commitId = builtins.toString prNum;
       };
     }) checkData.argsMatrices;
   });
