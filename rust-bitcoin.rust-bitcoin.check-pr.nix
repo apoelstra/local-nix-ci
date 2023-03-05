@@ -173,8 +173,6 @@ let
         export CARGO_TARGET_DIR=$PWD/target
         cd ${nixes.generated}/crate
         CARGO_HOME=../cargo cargo clippy --locked -- -D warnings
-        echo "Bailing to make this drv obvious"
-        exit 1
       ''
       else "";
     };
@@ -186,8 +184,9 @@ in
     argsMatrices = map (argsMtx: argsMtx // {
       src = {
         src = builtins.fetchGit {
+          allRefs = true;
           url = jsonConfig.gitDir;
-          ref = prNum;
+          rev = prNum;
         };
         name = builtins.toString prNum;
         shortId = builtins.toString prNum;

@@ -108,8 +108,9 @@ in
     argsMatrices = map (argsMtx: argsMtx // {
       src = rec {
         src = builtins.fetchGit {
+          allRefs = true;
           url = jsonConfig.gitDir;
-          ref = prNum;
+          rev = prNum;
         };
         name = builtins.toString prNum;
         shortId = name;

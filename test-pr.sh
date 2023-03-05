@@ -9,14 +9,18 @@ OUT_DIR=/nix/var/nix/gcroots/per-user/apoelstra/ci-output
 # Parse inputs
 PRNUM=$1
 ACK=$2
-if git rev-parse --verify --quiet "$1^{commit}"; then
-	COMMIT_ID="$PRNUM"  # no quotes
+if git rev-parse --verify --quiet "$PRNUM^{commit}"; then
+	COMMIT_NAME=$PRNUM
+	COMMIT_ID="$(git rev-parse "$COMMIT_NAME")"
+	NIX_PRNUM="\"$COMMIT_ID\""
 	TARGET=checkHead
 elif [ "$PRNUM" == "" ]; then
 	echo "Usage: $0 <prnum>"
 	exit 1
 else
-	COMMIT_ID="pr/$PRNUM/head"
+	COMMIT_NAME="pr/$PRNUM/head"
+	COMMIT_ID="$(git rev-parse "$COMMIT_NAME")"
+	NIX_PRNUM="\"$PRNUM\""
 	TARGET=checkPr
 fi
 
@@ -25,7 +29,7 @@ banner "Testing $PRNUM"
 DRV_FILE=$(
   nix-instantiate \
 	--arg jsonConfigFile "$JSON" \
-	--arg prNum "\"$PRNUM\"" \
+	--arg prNum "$NIX_PRNUM" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix"
 )
@@ -40,7 +44,7 @@ OUT_FILE=$(
 	--keep-outputs \
 	--log-lines 100 \
 	--arg jsonConfigFile "$JSON" \
-	--arg prNum "\"$PRNUM\"" \
+	--arg prNum "$NIX_PRNUM" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix"
 )
@@ -68,5 +72,5 @@ if [ "$TARGET" == "checkPr" ]; then
 	fi
 fi
 
-echo "Success. Added notes to $COMMIT_ID $(git rev-parse "$COMMIT_ID")"
+echo "Success. Added notes to $COMMIT_NAME $(git rev-parse "$COMMIT_ID")"
 
