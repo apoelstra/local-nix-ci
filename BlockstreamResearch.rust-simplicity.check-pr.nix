@@ -27,66 +27,77 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
+  srcName = self: self.src.commitId;
+  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
+  isTip = src: src == builtins.head gitCommits;
+  
   checkData = rec {
-    projectName = jsonConfig.repoName;
-    inherit prNum;
+    name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
+
     argsMatrices = [
       # Main project
       {
-        features = [
-          []
-          ["bitcoin"]
-          ["elements"]
-          ["bitcoin" "elements"]
-        ];
+        projectName = "simplicity";
+        inherit isTip srcName mtxName prNum;
+        features = [ [] ["bitcoin"] ["elements"] ["bitcoin" "elements"] ];
         rustc = allRustcs;
-        overrideLockFile = map (x: /. + x) jsonConfig.lockFiles;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
+
       # simplicity-sys
       {
-        features = [
-          []
-          ["test-utils"]
-        ];
+        projectName = "simplicity-sys";
+        inherit isTip srcName mtxName prNum;
+
+        features = [ [] ["test-utils"] ];
         rustc = allRustcs;
         src = map (commit: commit // {
           src = "${commit.src}/simplicity-sys";
           shortId = "simplicity-sys-${commit.shortId}";
         }) gitCommits;
         # FIXME avoid hardcoding this
-        overrideLockFile = /home/apoelstra/code/BlockstreamResearch/rust-simplicity/Cargo.simplicity-sys.lock;
+        lockFile = /home/apoelstra/code/BlockstreamResearch/rust-simplicity/Cargo.simplicity-sys.lock;
       }
     ];
   
-    checkSingleCommit =
-    { src
-    , overrideLockFile
-    , features ? [ "default" ]
-    , rustc ? pkgs.rust-bin.stable.latest.default
+    singleCheckMemo = utils.crate2nixSingleCheckMemo;
+
+    singleCheckDrv = {
+      projectName,
+      prNum,
+      features,
+      rustc,
+      lockFile,
+      src,
+      isTip,
+      srcName,
+      mtxName,
     }:
+    nixes:
     with pkgs;
     let
       pkgs = import <nixpkgs> {
         overlays = [ (self: super: { inherit rustc; }) ];
       };
-      generated = tools-nix.generatedCargoNix {
-        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
-        src = src.src;
-        inherit overrideLockFile;
-      };
-      called = pkgs.callPackage "${generated}/default.nix" {};
-    in
-      called.rootCrate.build.override {
-        inherit features;
-        runTests = true;
-        testPreRun = ''
-          ${rustc}/bin/rustc -V
-          ${rustc}/bin/cargo -V
-          echo "Features: ${builtins.toJSON features}"
-        '';
-      };
+    in nixes.called.rootCrate.build.override {
+      inherit features;
+      runTests = true;
+      testPreRun = ''
+        ${rustc}/bin/rustc -V
+        ${rustc}/bin/cargo -V
+        echo "Source: ${builtins.toJSON src}"
+        echo "Features: ${builtins.toJSON features}"
+      '';
+      testPostRun = if isTip src
+      then ''
+        export PATH=$PATH:${rustc}/bin
+        cargo fmt --check
+        cargo clippy
+      ''
+      else "";
+    };
   };
 in
 {

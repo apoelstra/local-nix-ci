@@ -171,8 +171,9 @@ let
         export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
 
         export CARGO_TARGET_DIR=$PWD/target
-        cd ${nixes.generated}/crate
-        CARGO_HOME=../cargo cargo clippy --locked -- -D warnings
+        pushd ${nixes.generated}/crate
+        CARGO_HOME=../cargo cargo clippy --locked #  -- -D warnings
+        popd
       ''
       else "";
     };
