@@ -81,23 +81,31 @@ let
       pkgs = import <nixpkgs> {
         overlays = [ (self: super: { inherit rustc; }) ];
       };
-    in nixes.called.rootCrate.build.override {
-      inherit features;
-      runTests = true;
-      testPreRun = ''
-        ${rustc}/bin/rustc -V
-        ${rustc}/bin/cargo -V
-        echo "Source: ${builtins.toJSON src}"
-        echo "Features: ${builtins.toJSON features}"
-      '';
-      testPostRun = if isTip src
-      then ''
-        export PATH=$PATH:${rustc}/bin
-        cargo fmt --check
-        cargo clippy
-      ''
-      else "";
-    };
+      drv = nixes.called.rootCrate.build.override {
+        inherit features;
+        runTests = true;
+        testPreRun = ''
+          ${rustc}/bin/rustc -V
+          ${rustc}/bin/cargo -V
+          echo "Source: ${builtins.toJSON src}"
+          echo "Features: ${builtins.toJSON features}"
+        '';
+        testPostRun = if isTip src
+        then ''
+          export PATH=$PATH:${rustc}/bin
+          cargo fmt --check
+          cargo clippy
+        ''
+        else "";
+      };
+    in drv.overrideDerivation (drv: {
+      # Add a bunch of stuff just to make the derivation easier to grok
+      checkPrProjectName = builtins.trace projectName projectName;
+      checkPrPrNum = prNum;
+      checkPrRustc = rustc;
+      checkPrFeatures = builtins.toJSON features;
+      checkPrSrc = builtins.toJSON src;
+    });
   };
 in
 {
