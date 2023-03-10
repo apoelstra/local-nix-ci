@@ -19,7 +19,12 @@
 , strictDeprecation ? true
 }:
 let
-  cargoNix = pkgs.callPackage ./crate2nix/Cargo.nix { inherit strictDeprecation; };
+  crate2nixRepo = fetchGit {
+    url = "https://github.com/kolloch/crate2nix";
+    ref = "master";
+    rev = "a00ef13cd769496bf937b16f16acad01fd004e1f";
+  };
+  cargoNix = pkgs.callPackage "${crate2nixRepo}/crate2nix/Cargo.nix" { inherit strictDeprecation; };
   crate2nix = cargoNix.rootCrate.build;
 in
 rec {
