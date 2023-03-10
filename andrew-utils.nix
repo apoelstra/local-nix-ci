@@ -4,7 +4,7 @@
 rec {
   # Re-export crate2nix tools.nix path so that I don't need to worry about its
   # exact vaule in more than one place.
-  tools-nix-path = ../nix-setup/crate2nix/currently-using/tools.nix;
+  tools-nix-path = ./crate2nix/tools.nix;
   # Laziness means this is only called when used
   tools-nix = nixpkgs.callPackage tools-nix-path { };
 
