@@ -27,6 +27,7 @@ Having said that, if you are interested in using this, read on.
         fetch = +refs/merge-requests/*:refs/remotes/pr/*
 ```
    The first line is for GIthub, the second for Gitlab.
+
 4. Link all the shell files into `..`, and the appropriate `check-pr.nix` file:
 ```
 ln -s "$PATH_TO_THIS_REPO/*.sh" ..
