@@ -1,5 +1,4 @@
-{
-  pkgs ? import <nixpkgs> {
+{ pkgs ? import <nixpkgs> {
     overlays = [
       (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
     ];
@@ -10,7 +9,7 @@
 , prNum
 }:
 let
-  utils = import ./andrew-utils.nix {};
+  utils = import ./andrew-utils.nix { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   allRustcs = [
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
@@ -69,9 +68,9 @@ let
         ];
         rustc = [
           (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
-           pkgs.rust-bin.stable.latest.default
-           pkgs.rust-bin.beta.latest.default
-           pkgs.rust-bin.stable."1.50.0".default
+          pkgs.rust-bin.stable.latest.default
+          pkgs.rust-bin.beta.latest.default
+          pkgs.rust-bin.stable."1.50.0".default
         ];
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
@@ -88,7 +87,7 @@ let
           [ "default" ]
           [ "alloc" ]
           [ "serde" ]
-          [ "std" "schemars" ]  # Note schemars does NOT work with nostd
+          [ "std" "schemars" ] # Note schemars does NOT work with nostd
           [ "std" "serde" ]
           [ "std" "serde-std" ]
           [ "serde-std" ]
@@ -107,7 +106,7 @@ let
 
         workspace = "bitcoin-internals";
         features = [
-          []
+          [ ]
           [ "alloc" ]
           [ "std" ]
         ];
@@ -135,64 +134,69 @@ let
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
 
-    singleCheckDrv = {
-      projectName,
-      prNum,
-      isTip,
-      workspace,
-      features,
-      rustc,
-      lockFile,
-      src,
-      srcName,
-      mtxName,
-    }:
-    nixes:
-    let
-      pkgs = import <nixpkgs> {
-        overlays = [ (self: super: { inherit rustc; }) ];
-      };
-    in nixes.called.workspaceMembers.${workspace}.build.override {
-      inherit features;
-      runTests = true;
-      testPreRun = ''
-        ${rustc}/bin/rustc -V
-        ${rustc}/bin/cargo -V
-        echo "Tip: ${builtins.toString isTip}"
-        echo "PR: ${prNum}"
-        echo "Commit: ${src.commitId}"
-        echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
-      '';
-      # cargo clippy runs on all workspaces at once, so rather than doing it
-      # repeatedly for every workspace, just choose one ("bitcoin") and only
-      # run it there..
-      testPostRun = if workspace == "bitcoin" && isTip
-      then ''
-        export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
+    singleCheckDrv =
+      { projectName
+      , prNum
+      , isTip
+      , workspace
+      , features
+      , rustc
+      , lockFile
+      , src
+      , srcName
+      , mtxName
+      ,
+      }:
+      nixes:
+      let
+        pkgs = import <nixpkgs> {
+          overlays = [ (self: super: { inherit rustc; }) ];
+        };
+      in
+      nixes.called.workspaceMembers.${workspace}.build.override {
+        inherit features;
+        runTests = true;
+        testPreRun = ''
+          ${rustc}/bin/rustc -V
+          ${rustc}/bin/cargo -V
+          echo "Tip: ${builtins.toString isTip}"
+          echo "PR: ${prNum}"
+          echo "Commit: ${src.commitId}"
+          echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
+        '';
+        # cargo clippy runs on all workspaces at once, so rather than doing it
+        # repeatedly for every workspace, just choose one ("bitcoin") and only
+        # run it there..
+        testPostRun =
+          if workspace == "bitcoin" && isTip
+          then ''
+            export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
 
-        export CARGO_TARGET_DIR=$PWD/target
-        pushd ${nixes.generated}/crate
-        CARGO_HOME=../cargo cargo clippy --locked #  -- -D warnings
-        popd
-      ''
-      else "";
-    };
+            export CARGO_TARGET_DIR=$PWD/target
+            pushd ${nixes.generated}/crate
+            CARGO_HOME=../cargo cargo clippy --locked #  -- -D warnings
+            popd
+          ''
+          else "";
+      };
   };
 in
 {
   checkPr = utils.checkPr checkData;
   checkHead = utils.checkPr (checkData // rec {
-    argsMatrices = map (argsMtx: argsMtx // {
-      src = {
-        src = builtins.fetchGit {
-          allRefs = true;
-          url = jsonConfig.gitDir;
-          rev = prNum;
+    argsMatrices = map
+      (argsMtx: argsMtx // {
+        src = {
+          src = builtins.fetchGit {
+            allRefs = true;
+            url = jsonConfig.gitDir;
+            rev = prNum;
+          };
+          name = builtins.toString prNum;
+          shortId = builtins.toString prNum;
+          commitId = builtins.toString prNum;
         };
-        name = builtins.toString prNum;
-        shortId = builtins.toString prNum;
-        commitId = builtins.toString prNum;
-      };
-    }) checkData.argsMatrices;
+      })
+      checkData.argsMatrices;
   });
 }

@@ -1,4 +1,4 @@
-{ nixpkgs ? import <nixpkgs> {}
+{ nixpkgs ? import <nixpkgs> { }
 , stdenv ? nixpkgs.stdenv
 }:
 rec {
@@ -6,7 +6,7 @@ rec {
   # exact vaule in more than one place.
   tools-nix-path = ../nix-setup/crate2nix/currently-using/tools.nix;
   # Laziness means this is only called when used
-  tools-nix = nixpkgs.callPackage tools-nix-path {};
+  tools-nix = nixpkgs.callPackage tools-nix-path { };
 
   # Given a set with a set of list-valued attributes, explode it into
   # a list of sets with every possible combination of attributes. If
@@ -19,24 +19,30 @@ rec {
   #   { a = 2; b = true; c = "Test" }
   #   ...
   #   { a = 3; b = false; c = "Test" } ]
-  matrix = let
-    pkgs = import <nixpkgs> {};
-    lib = pkgs.lib;
-    appendKeyVal = e: k: v: e // builtins.listToAttrs [ { name = k; value = v; } ];
-    addNames = currentSets: prevNames: origSet:
-      let
-        newSet = builtins.removeAttrs origSet prevNames;
-        newKeys = builtins.attrNames newSet;
-        in if newKeys == []
-          then currentSets
-          else let
+  matrix =
+    let
+      pkgs = import <nixpkgs> { };
+      lib = pkgs.lib;
+      appendKeyVal = e: k: v: e // builtins.listToAttrs [{ name = k; value = v; }];
+      addNames = currentSets: prevNames: origSet:
+        let
+          newSet = builtins.removeAttrs origSet prevNames;
+          newKeys = builtins.attrNames newSet;
+        in
+        if newKeys == [ ]
+        then currentSets
+        else
+          let
             nextKey = builtins.head newKeys;
             nextVal = builtins.getAttr nextKey origSet;
-            newSets = if builtins.isList nextVal
+            newSets =
+              if builtins.isList nextVal
               then builtins.concatLists (map (v: map (s: appendKeyVal s nextKey v) currentSets) nextVal)
               else map (s: appendKeyVal s nextKey nextVal) currentSets;
-            in addNames newSets (prevNames ++ [nextKey]) origSet;
-    in addNames [{}] [];
+          in
+          addNames newSets (prevNames ++ [ nextKey ]) origSet;
+    in
+    addNames [{ }] [ ];
 
   # Given a git directory (the .git directory) and a PR number, obtain a list of
   # commits corresponding to that PR. Assumes that the refs pr/${prNum}/head and
@@ -52,43 +58,43 @@ rec {
   #   pr1207.gitCommits
   #
   githubPrCommits =
-  { gitDir
-  , prNum
-  }:
-  stdenv.mkDerivation {
-    name = "get-git-commits";
-    buildInputs = [ nixpkgs.git ];
+    { gitDir
+    , prNum
+    }:
+    stdenv.mkDerivation {
+      name = "get-git-commits";
+      buildInputs = [ nixpkgs.git ];
 
-    preferLocalBuild = true;
-    phases = [ "buildPhase" ];
+      preferLocalBuild = true;
+      phases = [ "buildPhase" ];
 
-    buildPhase = ''
-      set -e
-      export GIT_DIR="${gitDir}"
+      buildPhase = ''
+        set -e
+        export GIT_DIR="${gitDir}"
 
-      MERGE_COMMIT="pr/${builtins.toString prNum}/merge"
-      if ! git rev-parse --verify --quiet "$MERGE_COMMIT^{commit}"; then
-        echo "Merge commit $MERGE_COMMIT not found in git dir $GIT_DIR."
-        exit 1
-      fi
+        MERGE_COMMIT="pr/${builtins.toString prNum}/merge"
+        if ! git rev-parse --verify --quiet "$MERGE_COMMIT^{commit}"; then
+          echo "Merge commit $MERGE_COMMIT not found in git dir $GIT_DIR."
+          exit 1
+        fi
 
-      HEAD_COMMIT="pr/${builtins.toString prNum}/head"
-      if ! git rev-parse --verify --quiet "$HEAD_COMMIT^{commit}"; then
-        echo "Merge commit $HEAD_COMMIT not found in git dir $GIT_DIR."
-        exit 1
-      fi
+        HEAD_COMMIT="pr/${builtins.toString prNum}/head"
+        if ! git rev-parse --verify --quiet "$HEAD_COMMIT^{commit}"; then
+          echo "Merge commit $HEAD_COMMIT not found in git dir $GIT_DIR."
+          exit 1
+        fi
 
-      mkdir -p "$out"
+        mkdir -p "$out"
 
-      echo 'pkgs: { gitCommits = [' >> "$out/default.nix"
-      REVS=$(git rev-list "$HEAD_COMMIT" --not "$MERGE_COMMIT~")
-      for rev in $REVS;
-        do echo " \"$rev\"" >> "$out/default.nix"
-      done
+        echo 'pkgs: { gitCommits = [' >> "$out/default.nix"
+        REVS=$(git rev-list "$HEAD_COMMIT" --not "$MERGE_COMMIT~")
+        for rev in $REVS;
+          do echo " \"$rev\"" >> "$out/default.nix"
+        done
 
-      echo ']; }' >> "$out/default.nix"
-    '';
-  };
+        echo ']; }' >> "$out/default.nix"
+      '';
+    };
 
   # Wrapper of githubPrCommits that actually calls the derivation to obtain the list of
   # git commits, then calls fetchGit on everything in the list
@@ -100,21 +106,24 @@ rec {
   # it may be faster to provide a github URL (so the remote machine can directly
   # connect to github rather than copying over the local derivation)
   githubPrSrcs =
-  { gitDir
-  , prNum
-  , gitUrl ? gitDir
-  }:
-  let
-    bareCommits = (import (githubPrCommits { inherit gitDir prNum; }) {}).gitCommits;
-  in map (commit: {
-    src = builtins.fetchGit {
-      url = gitUrl;
-      ref = "refs/pull/${builtins.toString prNum}/head";
-      rev = commit;
-    };
-    commitId = commit;
-    shortId = builtins.substring 0 8 commit;
-  }) bareCommits;
+    { gitDir
+    , prNum
+    , gitUrl ? gitDir
+    }:
+    let
+      bareCommits = (import (githubPrCommits { inherit gitDir prNum; }) { }).gitCommits;
+    in
+    map
+      (commit: {
+        src = builtins.fetchGit {
+          url = gitUrl;
+          ref = "refs/pull/${builtins.toString prNum}/head";
+          rev = commit;
+        };
+        commitId = commit;
+        shortId = builtins.substring 0 8 commit;
+      })
+      bareCommits;
 
   derivationName = drv:
     builtins.unsafeDiscardStringContext (builtins.baseNameOf (builtins.toString drv));
@@ -153,57 +162,63 @@ rec {
   # This has the same complexity as "lookup the value if it exists, otherwise do
   # an expensive computation and cache it", though the actual mechanics are quite
   # different.
-  checkPr = {
-    name,
-    argsMatrices,
-    singleCheckDrv,
-    singleCheckMemo ? x: { name = ""; value = null; },
-  }:
-  let
-    mtxs = builtins.concatMap matrix argsMatrices;
-    # This twisty memoAndLinks logic is due to roconnor. It avoids computing
-    # memo.name (which is potentially expensive) twice, which would be needed
-    # if we first computing memoTable "normally" and then later indexed into
-    # it when producing a list of links.
-    memoTable = builtins.listToAttrs (map (x: x.memo) memoAndLinks);
-    memoAndLinks = map (mtx:
-      let memo = singleCheckMemo mtx;
-      in {
-        inherit memo;
-        link = rec {
-          path = singleCheckDrv mtx memoTable.${memo.name};
-          name = "${mtx.srcName mtx}/${mtx.mtxName mtx}--${derivationName path}";
-        };
-      }
-    ) mtxs;
-  in nixpkgs.linkFarm name (map (x: x.link) memoAndLinks);
+  checkPr =
+    { name
+    , argsMatrices
+    , singleCheckDrv
+    , singleCheckMemo ? x: { name = ""; value = null; }
+    ,
+    }:
+    let
+      mtxs = builtins.concatMap matrix argsMatrices;
+      # This twisty memoAndLinks logic is due to roconnor. It avoids computing
+      # memo.name (which is potentially expensive) twice, which would be needed
+      # if we first computing memoTable "normally" and then later indexed into
+      # it when producing a list of links.
+      memoTable = builtins.listToAttrs (map (x: x.memo) memoAndLinks);
+      memoAndLinks = map
+        (mtx:
+          let memo = singleCheckMemo mtx;
+          in {
+            inherit memo;
+            link = rec {
+              path = singleCheckDrv mtx memoTable.${memo.name};
+              name = "${mtx.srcName mtx}/${mtx.mtxName mtx}--${derivationName path}";
+            };
+          }
+        )
+        mtxs;
+    in
+    nixpkgs.linkFarm name (map (x: x.link) memoAndLinks);
 
   # A value of singleCheckMemo useful for Rust projects, which uses a crate2nix generated
   # Cargo.nix as the key, and the result of calling it as the value.
   #
   # Assumes that your matrix has entries projectName, prNum, lockFile, src.
-  crate2nixSingleCheckMemo = {
-    projectName,
-    prNum,
-    lockFile,
-    src,
-    ...
-  }:
-  let generatedCargoNix = tools-nix.generatedCargoNix {
-    name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
-    src = src.src;
-    overrideLockFile = lockFile;
-  };
-  in {
-    name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
-    value = {
-      generated = generatedCargoNix;
-      called = nixpkgs.callPackage generatedCargoNix {
-        # We have some should_panic tests in rust-bitcoin that fail in release mode
-        release = false;
+  crate2nixSingleCheckMemo =
+    { projectName
+    , prNum
+    , lockFile
+    , src
+    , ...
+    }:
+    let
+      generatedCargoNix = tools-nix.generatedCargoNix {
+        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
+        src = src.src;
+        overrideLockFile = lockFile;
+      };
+    in
+    {
+      name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
+      value = {
+        generated = generatedCargoNix;
+        called = nixpkgs.callPackage generatedCargoNix {
+          # We have some should_panic tests in rust-bitcoin that fail in release mode
+          release = false;
+        };
       };
     };
-  };
 }
 
 

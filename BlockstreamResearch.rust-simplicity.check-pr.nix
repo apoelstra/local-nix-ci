@@ -1,5 +1,4 @@
-{
-  pkgs ? import <nixpkgs> {
+{ pkgs ? import <nixpkgs> {
     overlays = [
       (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
     ];
@@ -7,11 +6,11 @@
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
-, prNum 
+, prNum
 }:
 let
-  utils = import ./andrew-utils.nix {};
-  tools-nix = pkgs.callPackage utils.tools-nix-path {};
+  utils = import ./andrew-utils.nix { };
+  tools-nix = pkgs.callPackage utils.tools-nix-path { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   allRustcs = [
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
@@ -30,7 +29,7 @@ let
   srcName = self: self.src.commitId;
   mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
   isTip = src: src == builtins.head gitCommits;
-  
+
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
@@ -39,7 +38,7 @@ let
       {
         projectName = "simplicity";
         inherit isTip srcName mtxName prNum;
-        features = [ [] ["bitcoin"] ["elements"] ["bitcoin" "elements"] ];
+        features = [ [ ] [ "bitcoin" ] [ "elements" ] [ "bitcoin" "elements" ] ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
@@ -51,74 +50,81 @@ let
         projectName = "simplicity-sys";
         inherit isTip srcName mtxName prNum;
 
-        features = [ [] ["test-utils"] ];
+        features = [ [ ] [ "test-utils" ] ];
         rustc = allRustcs;
-        src = map (commit: commit // {
-          src = "${commit.src}/simplicity-sys";
-          shortId = "simplicity-sys-${commit.shortId}";
-        }) gitCommits;
+        src = map
+          (commit: commit // {
+            src = "${commit.src}/simplicity-sys";
+            shortId = "simplicity-sys-${commit.shortId}";
+          })
+          gitCommits;
         # FIXME avoid hardcoding this
         lockFile = /home/apoelstra/code/BlockstreamResearch/rust-simplicity/Cargo.simplicity-sys.lock;
       }
     ];
-  
+
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
 
-    singleCheckDrv = {
-      projectName,
-      prNum,
-      features,
-      rustc,
-      lockFile,
-      src,
-      isTip,
-      srcName,
-      mtxName,
-    }:
-    nixes:
-    with pkgs;
-    let
-      pkgs = import <nixpkgs> {
-        overlays = [ (self: super: { inherit rustc; }) ];
-      };
-      drv = nixes.called.rootCrate.build.override {
-        inherit features;
-        runTests = true;
-        testPreRun = ''
-          ${rustc}/bin/rustc -V
-          ${rustc}/bin/cargo -V
-          echo "Source: ${builtins.toJSON src}"
-          echo "Features: ${builtins.toJSON features}"
-        '';
-        testPostRun = if isTip src
-        then ''
-          export PATH=$PATH:${rustc}/bin
-          cargo fmt --check
-          cargo clippy
-        ''
-        else "";
-      };
-    in drv.overrideDerivation (drv: {
-      # Add a bunch of stuff just to make the derivation easier to grok
-      checkPrProjectName = builtins.trace projectName projectName;
-      checkPrPrNum = prNum;
-      checkPrRustc = rustc;
-      checkPrFeatures = builtins.toJSON features;
-      checkPrSrc = builtins.toJSON src;
-    });
+    singleCheckDrv =
+      { projectName
+      , prNum
+      , features
+      , rustc
+      , lockFile
+      , src
+      , isTip
+      , srcName
+      , mtxName
+      ,
+      }:
+      nixes:
+        with pkgs;
+        let
+          pkgs = import <nixpkgs> {
+            overlays = [ (self: super: { inherit rustc; }) ];
+          };
+          drv = nixes.called.rootCrate.build.override {
+            inherit features;
+            runTests = true;
+            testPreRun = ''
+              ${rustc}/bin/rustc -V
+              ${rustc}/bin/cargo -V
+              echo "Source: ${builtins.toJSON src}"
+              echo "Features: ${builtins.toJSON features}"
+            '';
+            testPostRun =
+              if isTip src
+              then ''
+                export PATH=$PATH:${rustc}/bin
+                cargo fmt --check
+                cargo clippy
+              ''
+              else "";
+          };
+        in
+        drv.overrideDerivation (drv: {
+          # Add a bunch of stuff just to make the derivation easier to grok
+          checkPrProjectName = builtins.trace projectName projectName;
+          checkPrPrNum = prNum;
+          checkPrRustc = rustc;
+          checkPrFeatures = builtins.toJSON features;
+          checkPrSrc = builtins.toJSON src;
+        });
   };
 in
 {
   checkPr = utils.checkPr checkData;
   checkHead = utils.checkPr (checkData // rec {
-    argsMatrices = map (argsMtx: argsMtx // {
-      src = {
-        src = builtins.fetchGit {
-          url = jsonConfig.gitDir;
-          ref = prNum;
+    argsMatrices = map
+      (argsMtx: argsMtx // {
+        src = {
+          src = builtins.fetchGit {
+            url = jsonConfig.gitDir;
+            ref = prNum;
+          };
+          name = builtins.toString prNum;
         };
-        name = builtins.toString prNum;
-      };
-    }) checkData.argsMatrices;
+      })
+      checkData.argsMatrices;
   });
 }

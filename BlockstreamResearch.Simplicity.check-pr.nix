@@ -1,5 +1,4 @@
-{
-  pkgs ? import <nixpkgs> {
+{ pkgs ? import <nixpkgs> {
     overlays = [
       (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
     ];
@@ -10,7 +9,7 @@
 , prNum
 }:
 let
-  utils = import ./andrew-utils.nix {};
+  utils = import ./andrew-utils.nix { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
@@ -30,52 +29,58 @@ let
       attr = [ "c" "coq" "haskell" "compcert" "vst" ];
       src = gitCommits;
     }];
- 
+
     singleCheckDrv = { src, attr, srcName, mtxName }: dummy:
       let
         sourceDir = src.src;
-        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" {});
-      in if attr == "haskell"
-        then drv.overrideAttrs (self: super: {
-          postBuild = ''
-            set -ex
-            echo "Running all code-generation steps and checking output against checked-in files."
-            ./dist/build/GenPrecomputed/GenPrecomputed
-            diff "precomputed.h" ${sourceDir}/C/precomputed.h
-            rm "precomputed.h"
+        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" { });
+      in
+      if attr == "haskell"
+      then
+        drv.overrideAttrs
+          (self: super: {
+            postBuild = ''
+              set -ex
+              echo "Running all code-generation steps and checking output against checked-in files."
+              ./dist/build/GenPrecomputed/GenPrecomputed
+              diff "precomputed.h" ${sourceDir}/C/precomputed.h
+              rm "precomputed.h"
 
-            ./dist/build/GenPrimitive/GenPrimitive
-            for inc in *.inc; do
-                diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
-            done
-            rm ./*.inc
+              ./dist/build/GenPrimitive/GenPrimitive
+              for inc in *.inc; do
+                  diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
+              done
+              rm ./*.inc
 
-            #./dist/build/GenRustJets/GenRustJets # Output not committed anywhere
-            ./dist/build/GenTests/GenTests
-            for inc in checkSigHashAllTx1.[ch]; do
-                diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
-            done
-            rm checkSigHashAllTx1.[ch]
+              #./dist/build/GenRustJets/GenRustJets # Output not committed anywhere
+              ./dist/build/GenTests/GenTests
+              for inc in checkSigHashAllTx1.[ch]; do
+                  diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
+              done
+              rm checkSigHashAllTx1.[ch]
 
-            for inc in *.[ch]; do
-                diff "$inc" "${sourceDir}/C/$inc"
-            done
-            rm ./*.[ch]
-          ''; })
-        else drv;
+              for inc in *.[ch]; do
+                  diff "$inc" "${sourceDir}/C/$inc"
+              done
+              rm ./*.[ch]
+            '';
+          })
+      else drv;
   };
 in
 {
   checkPr = utils.checkPr checkData;
   checkHead = utils.checkPr (checkData // {
-    argsMatrices = map (argsMtx: argsMtx // {
-      src = {
-        src = builtins.fetchGit {
-          url = jsonConfig.gitDir;
-          ref = prNum;
+    argsMatrices = map
+      (argsMtx: argsMtx // {
+        src = {
+          src = builtins.fetchGit {
+            url = jsonConfig.gitDir;
+            ref = prNum;
+          };
+          name = builtins.toString prNum;
         };
-        name = builtins.toString prNum;
-      };
-    }) checkData.argsMatrices;
+      })
+      checkData.argsMatrices;
   });
 }

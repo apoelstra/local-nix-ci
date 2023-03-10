@@ -1,5 +1,4 @@
-{
-  pkgs ? import <nixpkgs> {
+{ pkgs ? import <nixpkgs> {
     overlays = [
       (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
     ];
@@ -7,10 +6,10 @@
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
-, prNum 
+, prNum
 }:
 let
-  utils = import ./andrew-utils.nix {};
+  utils = import ./andrew-utils.nix { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   allRustcs = [
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
@@ -39,10 +38,10 @@ let
         isTip = false;
 
         features = [
-          []
-          ["default"]
-          ["strict"]
-          ["default" "strict"]
+          [ ]
+          [ "default" ]
+          [ "strict" ]
+          [ "default" "strict" ]
         ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
@@ -67,55 +66,60 @@ let
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
 
-    singleCheckDrv = {
-      projectName,
-      prNum,
-      isTip,
-      features,
-      rustc,
-      lockFile,
-      src,
-      srcName,
-      mtxName,
-    }:
-    nixes:
-    with pkgs;
-    let
-      pkgs = import <nixpkgs> {
-        overlays = [ (self: super: { inherit rustc; }) ];
-      };
-    in nixes.called.rootCrate.build.override {
-      inherit features;
-      runTests = true;
-      testPreRun = ''
-        ${rustc}/bin/rustc -V
-        ${rustc}/bin/cargo -V
-        echo "Features: ${builtins.toJSON features}"
-      '';
-      testPostRun = if isTip
-      then ''
-        export PATH=$PATH:${rustc}/bin
-        cargo fmt --check
-        cargo clippy
-      ''
-      else "";
-    };
+    singleCheckDrv =
+      { projectName
+      , prNum
+      , isTip
+      , features
+      , rustc
+      , lockFile
+      , src
+      , srcName
+      , mtxName
+      ,
+      }:
+      nixes:
+        with pkgs;
+        let
+          pkgs = import <nixpkgs> {
+            overlays = [ (self: super: { inherit rustc; }) ];
+          };
+        in
+        nixes.called.rootCrate.build.override {
+          inherit features;
+          runTests = true;
+          testPreRun = ''
+            ${rustc}/bin/rustc -V
+            ${rustc}/bin/cargo -V
+            echo "Features: ${builtins.toJSON features}"
+          '';
+          testPostRun =
+            if isTip
+            then ''
+              export PATH=$PATH:${rustc}/bin
+              cargo fmt --check
+              cargo clippy
+            ''
+            else "";
+        };
   };
 in
 {
   checkPr = utils.checkPr checkData;
   checkHead = utils.checkPr (checkData // {
-    argsMatrices = map (argsMtx: argsMtx // {
-      src = rec {
-        src = builtins.fetchGit {
-          allRefs = true;
-          url = jsonConfig.gitDir;
-          rev = prNum;
+    argsMatrices = map
+      (argsMtx: argsMtx // {
+        src = rec {
+          src = builtins.fetchGit {
+            allRefs = true;
+            url = jsonConfig.gitDir;
+            rev = prNum;
+          };
+          name = builtins.toString prNum;
+          shortId = name;
+          commitId = shortId;
         };
-        name = builtins.toString prNum;
-        shortId = name;
-        commitId = shortId;
-      };
-    }) checkData.argsMatrices;
+      })
+      checkData.argsMatrices;
   });
 }
