@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set -ex
 
 GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
 JSON="$GIT_DIR/../../repo.json"
@@ -9,19 +9,19 @@ OUT_DIR=/nix/var/nix/gcroots/per-user/apoelstra/ci-output
 # Parse inputs
 PRNUM=$1
 ACK=$2
-if git rev-parse --verify --quiet "$PRNUM^{commit}"; then
-	COMMIT_NAME=$PRNUM
-	COMMIT_ID="$(git rev-parse "$COMMIT_NAME")"
-	NIX_PRNUM="\"$COMMIT_ID\""
-	TARGET=checkHead
-elif [ "$PRNUM" == "" ]; then
+if [ "$PRNUM" == "" ]; then
 	echo "Usage: $0 <prnum>"
 	exit 1
-else
+elif git rev-parse --verify --quiet "pr/$PRNUM/head^{commit}"; then
 	COMMIT_NAME="pr/$PRNUM/head"
 	COMMIT_ID="$(git rev-parse "$COMMIT_NAME")"
-	NIX_PRNUM="\"$PRNUM\""
+	NIX_PRNUM="$PRNUM"
 	TARGET=checkPr
+else
+	COMMIT_NAME=$PRNUM
+	COMMIT_ID="$(git rev-parse "$COMMIT_NAME")"
+	NIX_PRNUM="$COMMIT_ID"
+	TARGET=checkHead
 fi
 
 # Do actual build
@@ -29,7 +29,7 @@ banner "Testing $PRNUM"
 DRV_FILE=$(
   nix-instantiate \
 	--arg jsonConfigFile "$JSON" \
-	--arg prNum "$NIX_PRNUM" \
+	--argstr prNum "$NIX_PRNUM" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix"
 )
@@ -44,7 +44,7 @@ OUT_FILE=$(
 	--keep-outputs \
 	--log-lines 100 \
 	--arg jsonConfigFile "$JSON" \
-	--arg prNum "$NIX_PRNUM" \
+	--argstr prNum "$NIX_PRNUM" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix"
 )

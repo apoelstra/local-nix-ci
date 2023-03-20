@@ -104,7 +104,7 @@ let
         inherit prNum srcName mtxName;
         isTip = false;
 
-        workspace = "bitcoin-internals";
+        workspace = "bitcoin-private";
         features = [
           [ ]
           [ "alloc" ]
@@ -122,7 +122,7 @@ let
 
         isTip = true;
 
-        workspace = [ "bitcoin" "bitcoin-internals" "bitcoin_hashes" ];
+        workspace = [ "bitcoin" "bitcoin-private" "bitcoin_hashes" ];
         features = [ [ "default" ] ];
         rustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
         lockFile = /. + builtins.head jsonConfig.lockFiles;
