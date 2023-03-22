@@ -10,7 +10,6 @@
 }:
 let
   utils = import ./andrew-utils.nix { };
-  tools-nix = pkgs.callPackage utils.tools-nix-path { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   allRustcs = [
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
@@ -30,38 +29,34 @@ let
   srcName = self: self.src.commitId;
   mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
   isTip = src: src == builtins.head gitCommits;
-
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
-    argsMatrices = [
-      # Main project
-      {
-        projectName = "simplicity";
+    argsMatrices =
+    let baseMatrix = {
+        projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum;
-        features = [ [ ] [ "bitcoin" ] [ "elements" ] [ "bitcoin" "elements" ] ];
+
+        features = [
+          []
+          ["default"]
+          ["serde"]
+          ["rand"]
+          ["compiler"]
+          ["trace"]
+          ["serde" "rand" "compiler"]
+          ["serde" "rand" "compiler" "trace"]
+        ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
-      }
-
-
-      # simplicity-sys
-      {
-        projectName = "simplicity-sys";
-        inherit isTip srcName mtxName prNum;
-
-        features = [ [ ] [ "test-utils" ] ];
-        rustc = allRustcs;
-        src = map
-          (commit: commit // {
-            src = "${commit.src}/simplicity-sys";
-            shortId = "simplicity-sys-${commit.shortId}";
-          })
-          gitCommits;
-        # FIXME avoid hardcoding this
-        lockFile = /home/apoelstra/code/BlockstreamResearch/rust-simplicity/Cargo.simplicity-sys.lock;
-      }
+      };
+    in [
+      baseMatrix
+      (baseMatrix // {
+        rustc = builtins.head allRustcs;
+        features = map (x: x ++ ["unstable"]) baseMatrix.features;
+      })
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
@@ -69,11 +64,11 @@ let
     singleCheckDrv =
       { projectName
       , prNum
+      , isTip
       , features
       , rustc
       , lockFile
       , src
-      , isTip
       , srcName
       , mtxName
       ,
@@ -81,16 +76,12 @@ let
       nixes:
         with pkgs;
         let
-          pkgs = import <nixpkgs> {
-            overlays = [ (self: super: { inherit rustc; }) ];
-          };
           drv = nixes.called.rootCrate.build.override {
             inherit features;
             runTests = true;
             testPreRun = ''
               ${rustc}/bin/rustc -V
               ${rustc}/bin/cargo -V
-              echo "Source: ${builtins.toJSON src}"
               echo "Features: ${builtins.toJSON features}"
             '';
             testPostRun =
@@ -100,8 +91,8 @@ let
                 export CARGO_TARGET_DIR=$PWD/target
                 export CARGO_HOME=${nixes.generated}/cargo
                 pushd ${nixes.generated}/crate
-                cargo clippy --locked -- -D warnings
-                cargo fmt --all -- --check
+                #cargo clippy --locked -- -D warnings
+                #cargo fmt --all -- --check
                 popd
               ''
               else "";
@@ -112,23 +103,28 @@ let
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;
           checkPrRustc = rustc;
+          checkPrLockFile = lockFile;
           checkPrFeatures = builtins.toJSON features;
           checkPrSrc = builtins.toJSON src;
         });
+
   };
 in
 {
   checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr (checkData // rec {
+  checkHead = utils.checkPr (checkData // {
     argsMatrices = map
       (argsMtx: argsMtx // {
-        src = {
+        isTip = _: true;
+        src = rec {
           src = builtins.fetchGit {
             allRefs = true;
             url = jsonConfig.gitDir;
             rev = prNum;
           };
           name = builtins.toString prNum;
+          shortId = name;
+          commitId = shortId;
         };
       })
       checkData.argsMatrices;

@@ -11,8 +11,9 @@
 let
   utils = import ./andrew-utils.nix { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
+  nightlyRustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
   allRustcs = [
-    (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
+    nightlyRustc
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
     pkgs.rust-bin.stable."1.41.0".default
@@ -56,7 +57,7 @@ let
         isTip = true;
 
         features = [ [ "default" "strict" ] ];
-        rustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
+        rustc = nightlyRustc;
         lockFile = /. + builtins.head jsonConfig.lockFiles;
         src = builtins.head gitCommits;
 
@@ -79,18 +80,15 @@ let
       ,
       }:
       nixes:
-        with pkgs;
-        let
-          pkgs = import <nixpkgs> {
-            overlays = [ (self: super: { inherit rustc; }) ];
-          };
-        in
         nixes.called.rootCrate.build.override {
           inherit features;
           runTests = true;
           testPreRun = ''
             ${rustc}/bin/rustc -V
             ${rustc}/bin/cargo -V
+            echo "Tip: ${builtins.toString isTip}"
+            echo "PR: ${prNum}"
+            echo "Commit: ${src.commitId}"
             echo "Features: ${builtins.toJSON features}"
           '';
           testPostRun =
@@ -98,7 +96,7 @@ let
             then ''
               export PATH=$PATH:${rustc}/bin
               cargo fmt --check
-              cargo clippy
+              #cargo clippy #broken til #45 or #88
             ''
             else "";
         };

@@ -194,15 +194,21 @@ rec {
   # A value of singleCheckMemo useful for Rust projects, which uses a crate2nix generated
   # Cargo.nix as the key, and the result of calling it as the value.
   #
-  # Assumes that your matrix has entries projectName, prNum, lockFile, src.
+  # Assumes that your matrix has entries projectName, prNum, rustc, lockFile, src.
   crate2nixSingleCheckMemo =
     { projectName
     , prNum
+    , rustc
     , lockFile
     , src
     , ...
     }:
     let
+      overlaidPkgs = import <nixpkgs> {
+        overlays = [ (self: super: {
+          inherit rustc;
+        }) ];
+      };
       generatedCargoNix = tools-nix.generatedCargoNix {
         name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
         src = src.src;
@@ -213,7 +219,7 @@ rec {
       name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
       value = {
         generated = generatedCargoNix;
-        called = nixpkgs.callPackage generatedCargoNix {
+        called = overlaidPkgs.callPackage generatedCargoNix {
           # We have some should_panic tests in rust-bitcoin that fail in release mode
           release = false;
         };
