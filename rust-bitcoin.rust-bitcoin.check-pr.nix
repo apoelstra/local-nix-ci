@@ -15,7 +15,7 @@ let
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.41.0".default
+    pkgs.rust-bin.stable."1.48.0".default
   ];
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
@@ -49,7 +49,7 @@ let
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
-      # bitcoin, no-std (does not work on 1.41)
+      # bitcoin, no-std (does not work on 1.48)
       {
         projectName = jsonConfig.repoName;
         inherit prNum srcName mtxName;

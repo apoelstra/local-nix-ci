@@ -28,6 +28,7 @@ fi
 banner "Testing $PRNUM"
 DRV_FILE=$(
   nix-instantiate \
+	  --show-trace \
 	--arg jsonConfigFile "$JSON" \
 	--argstr prNum "$NIX_PRNUM" \
 	-A "$TARGET" \

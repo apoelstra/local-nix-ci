@@ -22,18 +22,30 @@ let
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
-    argsMatrices = [{
-      srcName = self: self.src.commitId;
-      mtxName = self: "${self.src.shortId}-${self.attr}";
+    argsMatrices = [
+      {
+        srcName = self: self.src.commitId;
+        mtxName = self: "${self.src.shortId}-${self.attr}";
 
-      attr = [ "c" "coq" "haskell" "compcert" "vst" ];
-      src = gitCommits;
-    }];
+        attr = [ "coq" "haskell" "compcert" "vst" ];
+        wideMultiply = null;
+        src = gitCommits;
+      }
 
-    singleCheckDrv = { src, attr, srcName, mtxName }: dummy:
+      {
+        srcName = self: self.src.commitId;
+        mtxName = self: "${self.src.shortId}-${self.attr}";
+
+        attr = "c";
+        wideMultiply = [ null "int64" "int128" "int128_struct" ];
+        src = gitCommits;
+      }
+    ];
+
+    singleCheckDrv = { src, attr, wideMultiply, srcName, mtxName }: dummy:
       let
         sourceDir = src.src;
-        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" { });
+        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" { inherit wideMultiply; });
       in
       if attr == "haskell"
       then
