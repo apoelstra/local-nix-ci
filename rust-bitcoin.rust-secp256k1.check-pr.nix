@@ -27,8 +27,9 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
+  lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
-  mtxName = self: "${self.src.shortId}-${self.workspace}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," (map (name: builtins.substring 0 8 name) self.features)}";
+  mtxName = self: "${self.src.shortId}-${self.workspace}-${self.rustc.name}-${lockFileName self}-${builtins.concatStringsSep "," (map (name: builtins.substring 0 8 name) self.features)}";
   isTip = src: src == builtins.head gitCommits;
 
   libsecpSrc = fetchGit {
@@ -41,7 +42,7 @@ let
 
     argsMatrices = [
       # Main project
-      {
+      rec {
         projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum;
 
@@ -64,13 +65,17 @@ let
           [ "bitcoin-hashes" "rand" "recovery" "lowmemory" "global-context" "global-context-less-secure" "serde" ]
         ];
         rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+#        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        lockFileFn = [
+            (src: "${src.src}/contrib/Cargo.minimal.lock")
+            (src: "${src.src}/contrib/Cargo.latest.lock")
+        ];
         src = gitCommits;
       }
 
 
       # secp256k1-sys
-      {
+      rec {
         projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum;
 
@@ -84,12 +89,32 @@ let
           [ "std" "lowmemory" "recovery" ]
         ];
         rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+#        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        lockFileFn = [
+            (src: "${src.src}/contrib/Cargo.minimal.lock")
+            (src: "${src.src}/contrib/Cargo.latest.lock")
+        ];
         src = gitCommits;
       }
+
+/*
+      # single checks
+      {
+        projectName = "final-checks";
+        inherit isTip srcName mtxName prNum;
+
+        workspace = "secp256k1";
+        features = [ [] ];
+        rustc = builtins.head allRustcs;
+        lockFile =  /. + builtins.head jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+*/
     ];
 
-    singleCheckMemo = utils.crate2nixSingleCheckMemo;
+    singleCheckMemo = attrs:
+      let tweakAttrs = attrs // { lockFile = attrs.lockFileFn attrs.src; };
+      in utils.crate2nixSingleCheckMemo tweakAttrs;
 
     singleCheckDrv =
       { projectName
@@ -98,7 +123,7 @@ let
       , workspace
       , features
       , rustc
-      , lockFile
+      , lockFileFn
       , src
       , srcName
       , mtxName
@@ -110,6 +135,12 @@ let
           pkgs = import <nixpkgs> {
             overlays = [ (self: super: { inherit rustc; }) ];
           };
+          libsecpRevFile = builtins.readFile "${src.src}/secp256k1-sys/depend/secp256k1-HEAD-revision.txt";
+          libsecpSrc = builtins.fetchGit {
+            allRefs = true;
+            url = "https://github.com/bitcoin-core/secp256k1/";
+            rev = builtins.elemAt (builtins.split "\n" libsecpRevFile) 2;
+          };
           drv = nixes.called.workspaceMembers.${workspace}.build.override {
             inherit features;
             runTests = true;
@@ -119,21 +150,47 @@ let
               echo "Source: ${builtins.toJSON src}"
               echo "Features: ${builtins.toJSON features}"
             '';
-            testPostRun =
-              if isTip src && isNightly rustc
-              then ''
-                export PATH=$PATH:${rustc}/bin:${gcc}/bin
-                export CARGO_TARGET_DIR=$PWD/target
-                export CARGO_HOME=${nixes.generated}/cargo
-                pushd ${nixes.generated}/crate
-                cargo clippy --locked -- -D warnings
-                #cargo fmt --all -- --check
-                popd
-              ''
-              else "";
+          };
+          finalDrv = stdenv.mkDerivation {
+            name = projectName;
+            src = src.src;
+            buildInputs = [ rustc ];
+            phases = [ "unpackPhase" "buildPhase" ];
+
+            buildPhase = ''
+              cargo -V
+              echo "Source: ${builtins.toJSON src}"
+
+              # Run clippy/fmt checks
+              export CARGO_TARGET_DIR=$PWD/target
+              export CARGO_HOME=${nixes.generated}/cargo
+              pushd ${nixes.generated}/crate
+              cargo clippy --locked -- -D warnings
+              #cargo fmt --all -- --check
+              popd
+
+              # Check whether C code is consistent with upstream
+              pushd secp256k1-sys
+              patchShebangs ./vendor-libsecp.sh
+              mkdir depend2/
+              cp depend/*.patch depend/check_uint128_t.c depend2/
+              SECP_VENDOR_CP_NOT_CLONE=yes \
+                  SECP_VENDOR_GIT_ROOT=".." \
+                  SECP_VENDOR_SECP_REPO=${libsecpSrc} \
+                  SECP_VENDOR_DEPEND_DIR=./depend2/ \
+                  ./vendor-libsecp.sh -f  # use -f to avoid calling git in a non-git repo
+
+              cp depend/secp256k1-HEAD-revision.txt depend2/
+              diff -r depend/ depend2
+              popd
+
+              touch $out
+            '';
           };
         in
-        drv.overrideDerivation (drv: {
+        if projectName == "final-checks"
+        then finalDrv
+        else drv.overrideDerivation (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;
@@ -148,7 +205,7 @@ in
   checkPr = utils.checkPr checkData;
   checkHead = utils.checkPr (checkData // rec {
     argsMatrices = map
-      (argsMtx: argsMtx // {
+      (argsMtx: argsMtx // rec {
         isTip = _: true;
         src = rec {
           src = builtins.fetchGit {
