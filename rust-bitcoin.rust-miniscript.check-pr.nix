@@ -27,7 +27,7 @@ let
     inherit prNum;
   };
   srcName = self: self.src.commitId;
-  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
+  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${self.workspace}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
   isTip = src: src == builtins.head gitCommits;
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
@@ -37,6 +37,7 @@ let
         projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum;
 
+        workspace = "miniscript";
         features = [
           ["no-std"]
           ["no-std" "serde"]
@@ -67,6 +68,40 @@ let
         rustc = builtins.head allRustcs;
         features = map (x: x ++ ["unstable"]) baseMatrix.features;
       })
+
+      {
+        projectName = jsonConfig.repoName;
+        inherit isTip srcName mtxName prNum;
+
+        workspace = "descriptor-fuzz";
+        features = [ [] ];
+        rustc = pkgs.rust-bin.stable."1.58.0".default;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+
+      {
+        projectName = jsonConfig.repoName;
+        inherit isTip srcName mtxName prNum;
+
+        workspace = "bitcoind-tests";
+        features = [ [] ];
+        rustc = pkgs.rust-bin.stable.latest.default;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+
+      # single checks
+      {
+        projectName = "final-checks";
+        inherit isTip srcName mtxName prNum;
+
+        workspace = "miniscript";
+        features = [ [] ];
+        rustc = builtins.head allRustcs;
+        lockFile = /. + (builtins.head jsonConfig.lockFiles);
+        src = builtins.head gitCommits;
+      }
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
@@ -75,6 +110,7 @@ let
       { projectName
       , prNum
       , isTip
+      , workspace
       , features
       , rustc
       , lockFile
@@ -86,35 +122,111 @@ let
       nixes:
         with pkgs;
         let
-          drv = nixes.called.rootCrate.build.override {
+          bitcoinSrc = (callPackage /home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
+          drv = nixes.called.workspaceMembers.${workspace}.build.override {
             inherit features;
             runTests = true;
             testPreRun = ''
               ${rustc}/bin/rustc -V
               ${rustc}/bin/cargo -V
-              echo "Features: ${builtins.toJSON features}"
+              echo "Tip: ${builtins.toString (isTip src)}"
+              echo "PR: ${prNum}"
+              echo "Commit: ${src.commitId}"
+              echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
+            '' + lib.optionalString (workspace == "bitcoind-tests") ''
+              export BITCOIND_EXE="${bitcoinSrc}/bin/bitcoind"
+              echo "Bitcoind exe: $BITCOIND_EXE"
             '';
-            testPostRun =
-              if isTip src && isNightly rustc
-              then ''
-                export PATH=$PATH:${rustc}/bin:${gcc}/bin
-                export CARGO_TARGET_DIR=$PWD/target
-                export CARGO_HOME=${nixes.generated}/cargo
-                pushd ${nixes.generated}/crate
-                #cargo clippy --locked -- -D warnings
-                #cargo fmt --all -- --check
-                popd
-              ''
-              else "";
+          };
+          fuzzDrv = stdenv.mkDerivation {
+            name = projectName;
+            src = src.src;
+            buildInputs = [
+              rustc
+              # Pinned version because of breaking change in args to init_disassemble_info
+              libopcodes_2_38 # for dis-asm.h and bfd.h
+              libunwind       # for libunwind-ptrace.h
+            ];
+            phases = [ "unpackPhase" "buildPhase" ];
+
+            buildPhase = ''
+              cargo -V
+              echo "Source: ${builtins.toJSON src}"
+
+              cp -r ${nixes.generated}/cargo ${nixes.generated}/crate .
+              chmod -R +w cargo crate
+
+              # nb cargo-hfuzz cannot handle this being an absolute path; FIXME should file bug
+              export CARGO_TARGET_DIR=target
+              export CARGO_HOME=$PWD/cargo
+              export HFUZZ_BUILD_ARGS="--features honggfuzz_fuzz"
+              export HFUZZ_RUN_ARGS="--run_time 300 --exit_upon_crash"
+
+              # honggfuzz rebuilds the world, and expects to be able to build itself
+              # in-place, meaning that we can't build it from the read-only source
+              # directory. So just copy everything here.
+              set -x
+              DEP_DIR=$(grep 'directory =' $CARGO_HOME/config | sed 's/directory = "\(.*\)"/\1/')
+              cp -r "$DEP_DIR" vendor-copy/
+              chmod +w vendor-copy/
+              rm vendor-copy/*honggfuzz*
+              cp -rL "$DEP_DIR/"*honggfuzz* vendor-copy/ # -L means copy soft-links as real files
+              chmod -R +w vendor-copy/
+              # These two lines are just a search-and-replace ... but trying to get sed to replace
+              # one string full of slashes with another is an unreadable mess, so easier to just
+              # erase the line completely then recreate it with echo.
+              sed -i "s/directory = \".*\"//" "$CARGO_HOME/config"
+              echo "directory = \"$PWD/vendor-copy\"" >> "$CARGO_HOME/config"
+              cat "$CARGO_HOME/config"
+              # Done crazy honggfuzz shit
+
+              pushd crate/fuzz
+              cargo test --locked
+
+              cargo install honggfuzz --no-default-features
+              for target in $(grep 'name =' Cargo.toml | grep -v "${workspace}" | sed 's/name = "\(.*\)"/\1/'); do
+                  time cargo hfuzz run "$target"
+              done
+              cargo fmt --all -- --check
+              popd
+
+              touch $out
+            '';
+          };
+          finalDrv = stdenv.mkDerivation {
+            name = projectName;
+            src = src.src;
+            buildInputs = [ rustc ];
+            phases = [ "unpackPhase" "buildPhase" ];
+
+            buildPhase = ''
+              cargo -V
+              echo "Source: ${builtins.toJSON src}"
+
+              # Run clippy/fmt checks
+              export CARGO_TARGET_DIR=$PWD/target
+              export CARGO_HOME=${nixes.generated}/cargo
+              pushd ${nixes.generated}/crate
+              cargo clippy --locked -- -D warnings
+              cargo fmt --all -- --check
+              popd
+
+              touch $out
+            '';
           };
         in
-        drv.overrideDerivation (drv: {
+        if projectName == "final-checks"
+        then finalDrv
+        else if workspace == "descriptor-fuzz"
+        then fuzzDrv
+        else drv.overrideDerivation (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;
           checkPrRustc = rustc;
           checkPrLockFile = lockFile;
           checkPrFeatures = builtins.toJSON features;
+          checkPrWorkspace = workspace;
           checkPrSrc = builtins.toJSON src;
         });
 

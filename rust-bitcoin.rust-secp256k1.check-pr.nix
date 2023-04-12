@@ -30,6 +30,10 @@ let
   lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
   mtxName = self: "${self.src.shortId}-${self.workspace}-${self.rustc.name}-${lockFileName self}-${builtins.concatStringsSep "," (map (name: builtins.substring 0 8 name) self.features)}";
+  lockFileFn = [
+    (src: "${src.src}/contrib/Cargo.minimal.lock")
+    (src: "${src.src}/contrib/Cargo.latest.lock")
+  ];
   isTip = src: src == builtins.head gitCommits;
 
   libsecpSrc = fetchGit {
@@ -44,7 +48,7 @@ let
       # Main project
       rec {
         projectName = jsonConfig.repoName;
-        inherit isTip srcName mtxName prNum;
+        inherit isTip srcName mtxName prNum lockFileFn;
 
         workspace = "secp256k1";
         features = [
@@ -65,11 +69,6 @@ let
           [ "bitcoin-hashes" "rand" "recovery" "lowmemory" "global-context" "global-context-less-secure" "serde" ]
         ];
         rustc = allRustcs;
-#        lockFile = map (x: /. + x) jsonConfig.lockFiles;
-        lockFileFn = [
-            (src: "${src.src}/contrib/Cargo.minimal.lock")
-            (src: "${src.src}/contrib/Cargo.latest.lock")
-        ];
         src = gitCommits;
       }
 
@@ -77,7 +76,7 @@ let
       # secp256k1-sys
       rec {
         projectName = jsonConfig.repoName;
-        inherit isTip srcName mtxName prNum;
+        inherit isTip srcName mtxName prNum lockFileFn;
 
         workspace = "secp256k1-sys";
         features = [
@@ -89,27 +88,19 @@ let
           [ "std" "lowmemory" "recovery" ]
         ];
         rustc = allRustcs;
-#        lockFile = map (x: /. + x) jsonConfig.lockFiles;
-        lockFileFn = [
-            (src: "${src.src}/contrib/Cargo.minimal.lock")
-            (src: "${src.src}/contrib/Cargo.latest.lock")
-        ];
         src = gitCommits;
       }
 
-/*
       # single checks
       {
         projectName = "final-checks";
-        inherit isTip srcName mtxName prNum;
+        inherit isTip srcName mtxName prNum lockFileFn;
 
         workspace = "secp256k1";
         features = [ [] ];
         rustc = builtins.head allRustcs;
-        lockFile =  /. + builtins.head jsonConfig.lockFiles;
         src = gitCommits;
       }
-*/
     ];
 
     singleCheckMemo = attrs:

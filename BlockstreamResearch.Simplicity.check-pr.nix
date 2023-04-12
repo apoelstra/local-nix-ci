@@ -19,6 +19,10 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
+  benchmarkSrc = builtins.fetchurl {
+    url = "https://gist.githubusercontent.com/sanket1729/0bf92ab9b2d17895d4afdfe3a85bdf70/raw/a0c8cf0f08e07945d8fcc04640bf567a9ba9f368/jet_benches.json";
+    sha256 = "1f2gdgvr5lfj3anzrs13hhcvdyfcz6dy2vy5p136hn5z3kzidnhk";
+  };
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
@@ -75,6 +79,22 @@ let
                   diff "$inc" "${sourceDir}/C/$inc"
               done
               rm ./*.[ch]
+
+              echo "Checking benchmarks. WARNING whitelisting GeNegate which has made-up value"
+              if grep -q rawBenchmark Haskell-Generate/GenPrimitive.hs; then
+                  # head -c -1 is trick to eat the trailing newline from the heredoc
+                  head -c -1 <<EOT | diff ${benchmarkSrc} - || true
+              {
+              $(
+                  grep 'rawBenchmark.*=' Haskell-Generate/GenPrimitive.hs \
+                      | grep -v '^rawBenchmark str = error' \
+                      | sed 's/rawBenchmark \(".*"\) = \(.*\)/  \1: \2,/' \
+                      | sed 's/\(  "Version":.*\),/\1/' \
+                      | grep -v 'GeNegate'
+              )
+              }
+              EOT
+              fi
             '';
           })
       else drv;
@@ -85,12 +105,15 @@ in
   checkHead = utils.checkPr (checkData // {
     argsMatrices = map
       (argsMtx: argsMtx // {
-        src = {
+        src = rec {
           src = builtins.fetchGit {
+            allRefs = true;
             url = jsonConfig.gitDir;
-            ref = prNum;
+            rev = prNum;
           };
           name = builtins.toString prNum;
+          shortId = name;
+          commitId = shortId;
         };
       })
       checkData.argsMatrices;
