@@ -32,9 +32,8 @@ let
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
-    argsMatrices = [
-      {
-        workspace = "elements";
+    argsMatrices =
+    let baseMatrix = {
         projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum;
 
@@ -42,24 +41,22 @@ let
           []
           ["default"]
           ["serde"]
-          ["json-contract"]
-          ["serde" "json-contract"]
+          ["rand"]
+          ["compiler"]
+          ["trace"]
+          ["serde" "rand" "compiler"]
+          ["serde" "rand" "compiler" "trace"]
         ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
-      }
-
-      {
-        workspace = "elementsd-tests";
-        projectName = jsonConfig.repoName;
-        inherit isTip srcName mtxName prNum;
-
-        features = [ [] ];
-        rustc = pkgs.rust-bin.stable.latest.default;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
-        src = gitCommits;
-      }
+      };
+    in [
+      baseMatrix
+      (baseMatrix // {
+        rustc = builtins.head allRustcs;
+        features = map (x: x ++ ["unstable"]) baseMatrix.features;
+      })
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
@@ -68,7 +65,6 @@ let
       { projectName
       , prNum
       , isTip
-      , workspace
       , features
       , rustc
       , lockFile
@@ -80,23 +76,13 @@ let
       nixes:
         with pkgs;
         let
-          bitcoinSrc = (callPackage /home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
-          elementsSrc = (callPackage /home/apoelstra/code/ElementsProject/elements/default.nix {}).elements21;
-          drv = nixes.called.workspaceMembers.${workspace}.build.override {
+          drv = nixes.called.rootCrate.build.override {
             inherit features;
             runTests = true;
             testPreRun = ''
               ${rustc}/bin/rustc -V
               ${rustc}/bin/cargo -V
-              echo "Tip: ${builtins.toString (isTip src)}"
-              echo "PR: ${prNum}"
-              echo "Commit: ${src.commitId}"
-              echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
-            '' + lib.optionalString (workspace == "elementsd-tests") ''
-              export BITCOIND_EXE="${bitcoinSrc}/bin/bitcoind"
-              export ELEMENTSD_EXE="${elementsSrc}/bin/elementsd"
-              echo "Bitcoind exe: $BITCOIND_EXE"
-              echo "Elementsd exe: $ELEMENTSD_EXE"
+              echo "Features: ${builtins.toJSON features}"
             '';
             testPostRun =
               if isTip src && isNightly rustc
