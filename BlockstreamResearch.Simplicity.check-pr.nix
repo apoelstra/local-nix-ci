@@ -33,71 +33,84 @@ let
 
         attr = [ "coq" "haskell" "compcert" "vst" ];
         wideMultiply = null;
+        withCoverage = null;
+        env = null;
         src = gitCommits;
       }
 
       {
         srcName = self: self.src.commitId;
-        mtxName = self: "${self.src.shortId}-${self.attr}";
+        mtxName = self: "${self.src.shortId}-${self.attr}-${builtins.toString self.wideMultiply}-${self.env}-cov-${builtins.toString self.withCoverage}";
 
         attr = "c";
         wideMultiply = [ null "int64" "int128" "int128_struct" ];
+        withCoverage = [ false true ];
+        env = [ "stdenv" "clangStdenv" ];
         src = gitCommits;
       }
     ];
 
-    singleCheckDrv = { src, attr, wideMultiply, srcName, mtxName }: dummy:
+    singleCheckDrv = { src, attr, wideMultiply, withCoverage, env, srcName, mtxName }: dummy:
       let
         sourceDir = src.src;
-        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" { inherit wideMultiply; });
-      in
-      if attr == "haskell"
-      then
-        drv.overrideAttrs
-          (self: super: {
-            postBuild = ''
-              set -ex
-              echo "Running all code-generation steps and checking output against checked-in files."
-              ./dist/build/GenPrecomputed/GenPrecomputed
-              diff "precomputed.h" ${sourceDir}/C/precomputed.h
-              rm "precomputed.h"
+        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" { inherit wideMultiply withCoverage; });
+        diffDrv = if attr == "haskell"
+        then
+          drv.overrideAttrs
+            (self: super: {
+              postBuild = ''
+                set -ex
+                echo "Running all code-generation steps and checking output against checked-in files."
+                ./dist/build/GenPrecomputed/GenPrecomputed
+                diff "precomputed.h" ${sourceDir}/C/precomputed.h
+                rm "precomputed.h"
 
-              ./dist/build/GenPrimitive/GenPrimitive
-              for inc in *.inc; do
-                  diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
-              done
-              rm ./*.inc
+                ./dist/build/GenPrimitive/GenPrimitive
+                for inc in *.inc; do
+                    diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
+                done
+                rm ./*.inc
 
-              #./dist/build/GenRustJets/GenRustJets # Output not committed anywhere
-              ./dist/build/GenTests/GenTests
-              for inc in checkSigHashAllTx1.[ch]; do
-                  diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
-              done
-              rm checkSigHashAllTx1.[ch]
+                #./dist/build/GenRustJets/GenRustJets # Output not committed anywhere
+                ./dist/build/GenTests/GenTests
+                for inc in checkSigHashAllTx1.[ch]; do
+                    diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
+                done
+                rm checkSigHashAllTx1.[ch]
 
-              for inc in *.[ch]; do
-                  diff "$inc" "${sourceDir}/C/$inc"
-              done
-              rm ./*.[ch]
+                for inc in *.[ch]; do
+                    diff "$inc" "${sourceDir}/C/$inc"
+                done
+                rm ./*.[ch]
 
-              echo "Checking benchmarks. WARNING whitelisting GeNegate which has made-up value"
-              if grep -q rawBenchmark Haskell-Generate/GenPrimitive.hs; then
-                  # head -c -1 is trick to eat the trailing newline from the heredoc
-                  head -c -1 <<EOT | diff ${benchmarkSrc} - || true
-              {
-              $(
-                  grep 'rawBenchmark.*=' Haskell-Generate/GenPrimitive.hs \
-                      | grep -v '^rawBenchmark str = error' \
-                      | sed 's/rawBenchmark \(".*"\) = \(.*\)/  \1: \2,/' \
-                      | sed 's/\(  "Version":.*\),/\1/' \
-                      | grep -v 'GeNegate'
-              )
-              }
-              EOT
-              fi
-            '';
-          })
-      else drv;
+                echo "Checking benchmarks. WARNING whitelisting GeNegate which has made-up value"
+                if grep -q rawBenchmark Haskell-Generate/GenPrimitive.hs; then
+                    # head -c -1 is trick to eat the trailing newline from the heredoc
+                    head -c -1 <<EOT | diff ${benchmarkSrc} - || true
+                {
+                $(
+                    grep 'rawBenchmark.*=' Haskell-Generate/GenPrimitive.hs \
+                        | grep -v '^rawBenchmark str = error' \
+                        | sed 's/rawBenchmark \(".*"\) = \(.*\)/  \1: \2,/' \
+                        | sed 's/\(  "Version":.*\),/\1/' \
+                        | grep -v 'GeNegate'
+                )
+                }
+                EOT
+                fi
+              '';
+            })
+        else drv;
+        taggedDrv = diffDrv.overrideDerivation (drv: {
+          # Add a bunch of stuff just to make the derivation easier to grok
+          checkPrProjectName = "Simplicity";
+          checkPrAttr = attr;
+          checkPrPrNum = prNum;
+          checkPrWideMultiply = wideMultiply;
+          checkPrEnv = builtins.toJSON env;
+          checkPrSrc = builtins.toJSON src;
+        });
+      in taggedDrv;
   };
 in
 {

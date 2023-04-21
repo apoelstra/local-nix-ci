@@ -25,15 +25,21 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
+  lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
-  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${self.workspace}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
+  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${self.workspace}-${lockFileName self}-${builtins.concatStringsSep "," self.features}";
+  lockFileFn = [
+    (src: "${src.src}/Cargo-minimal.lock")
+    (src: "${src.src}/Cargo-recent.lock")
+  ];
+  #lockFileFn = map (x: (src: /. + x)) jsonConfig.lockFiles;
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
     argsMatrices = [
       {
         projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName;
+        inherit prNum srcName mtxName lockFileFn;
         isTip = false;
 
         workspace = "bitcoin";
@@ -44,19 +50,7 @@ let
           [ "std" "rand-std" "bitcoinconsenus-std" ]
           [ "default" "serde" "rand" ]
           [ "default" "base64" "serde" "rand" "rand-std" "secp-lowmemory" "bitcoinconsensus-std" ]
-        ];
-        rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
-        src = gitCommits;
-      }
-      # bitcoin, no-std (does not work on 1.48)
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName;
-        isTip = false;
 
-        workspace = "bitcoin";
-        features = [
           [ "no-std" ]
           [ "no-std" "base64" ]
           [ "no-std" "rand" ]
@@ -66,19 +60,30 @@ let
           [ "no-std" "bitcoinconsenus" ]
           [ "no-std" "secp-recovery" "secp-lowmemory" ]
         ];
+        rustc = allRustcs;
+        src = gitCommits;
+      }
+      # bitcoin, no-std (does not work on 1.48)
+      {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName lockFileFn;
+        isTip = false;
+
+        workspace = "bitcoin";
+        features = [
+        ];
         rustc = [
           (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
           pkgs.rust-bin.stable.latest.default
           pkgs.rust-bin.beta.latest.default
           pkgs.rust-bin.stable."1.50.0".default
         ];
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
       {
         projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName;
+        inherit prNum srcName mtxName lockFileFn;
         isTip = false;
 
         workspace = "bitcoin_hashes";
@@ -95,13 +100,13 @@ let
           [ "std" "serde" "serde-std" "alloc" "schemars" ]
         ];
         rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = builtins.head gitCommits;
       }
 
+/*
       {
         projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName;
+        inherit prNum srcName mtxName lockFileFn;
         isTip = false;
 
         workspace = "bitcoin-private";
@@ -111,28 +116,30 @@ let
           [ "std" ]
         ];
         rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
+*/
 
       # Only tip
       {
         projectName = jsonConfig.repoName;
-        inherit srcName prNum;
+        inherit srcName prNum lockFileFn;
 
         isTip = true;
 
-        workspace = [ "bitcoin" "bitcoin-private" "bitcoin_hashes" ];
+#        workspace = [ "bitcoin" "bitcoin-private" "bitcoin_hashes" ];
+        workspace = [ "bitcoin" "bitcoin_hashes" ];
         features = [ [ "default" ] ];
         rustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
-        lockFile = /. + builtins.head jsonConfig.lockFiles;
         src = builtins.head gitCommits;
 
         mtxName = self: (mtxName self) + "-tip";
       }
     ];
 
-    singleCheckMemo = utils.crate2nixSingleCheckMemo;
+    singleCheckMemo = attrs:
+      let tweakAttrs = attrs // { lockFile = attrs.lockFileFn attrs.src; };
+      in utils.crate2nixSingleCheckMemo tweakAttrs;
 
     singleCheckDrv =
       { projectName
@@ -141,7 +148,7 @@ let
       , workspace
       , features
       , rustc
-      , lockFile
+      , lockFileFn
       , src
       , srcName
       , mtxName
