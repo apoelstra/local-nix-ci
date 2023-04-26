@@ -75,7 +75,7 @@ The way I have all my git repos setup for all my projects is to create a directo
 for it, e.g. `~/code/BlockstreaResearch/Simplicity`, then to clone the directory
 into `master/` (or whatever the default branch is called) inside that.
 
-I am then typically cd'd into ``~/code/BlockstreamResearch/Simplicity/master/`.
+I am then typically cd'd into `~/code/BlockstreamResearch/Simplicity/master/`.
 To create PRs I add new worktrees parallel to `master`, like `git worktree add
 ../2023-03--example-pr`. I also have a dedicated `pr-review` worktree which is
 usually checked-out to random detached-HEAD commits etc when I'm investigating

@@ -3,7 +3,7 @@
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
-, prNum 
+, prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
@@ -22,16 +22,21 @@ let
     argsMatrices = [{
       projectName = "libsecp256k1-zkp";
       srcName = self: self.src.commitId;
-      mtxName = self: "${self.projectName}-PR-${prNum}-${self.src.shortId}-${self.withAsm}-${self.withBigNum}-${builtins.toString self.extraModules}";
+      mtxName = self: "${self.projectName}-PR-${prNum}-${self.src.shortId}-${self.withAsm}-${builtins.toString self.extraModules}";
 
       extraModules = [
         []
         ["recovery"]
+        ["ecdh"]
+        ["musig" "extrakeys" "schnorrsig"]
+        ["generator"]
+        ["generator" "rangeproof" "surjectionproof" "whitelist"]
+        ["recovery" "ecdh" "musig" "extrakeys" "schnorrsig" "generator" "rangeproof" "surjectionproof" "whitelist"]
       ];
       ecmultGenPrecision = [ 2 4 8 ];
-      ecmultWindow = [ 2 15 24 ];
+#      ecmultWindow = [ 2 15 24 ]; # can use 24 when we get more RAM
+      ecmultWindow = [ 2 15 20 ];
       withAsm = [ "no" "x86_64" ];
-      withBigNum = [ "no" "gmp" ];
       withMsan = [ true false ];
       doValgrindCheck = true;
       src = gitCommits;
@@ -45,7 +50,6 @@ let
       ecmultGenPrecision,
       ecmultWindow,
       withAsm,
-      withBigNum,
       withMsan,
       doValgrindCheck,
       src
@@ -71,13 +75,12 @@ let
       drv = stdenv.mkDerivation {
         name = "${projectName}-${src.shortId}";
         src = src.src;
-    
+
         nativeBuildInputs = [ pkgs.pkgconfig pkgs.autoreconfHook pkgs.valgrind ]
           ++ lib.optionals withMsan [ pkgs.clang_15 ];
         buildInputs = [];
-    
+
         configureFlags = [
-          "--with-bignum=${withBigNum}"
           "--with-ecmult-gen-precision=${builtins.toString ecmultGenPrecision}"
           "--with-ecmult-window=${builtins.toString ecmultWindow}"
         ] ++ (if withMsan
@@ -87,12 +90,20 @@ let
           then [ "--enable-experimental" ] ++ (map (x: "--enable-module-${x}") extraModules)
           else []
         );
-    
+
+        postUnpack = ''
+          # See comment in this file; for ecmult windows > 15 we need to delete
+          # it so that it can be regenerated.
+          if [ ${builtins.toString ecmultWindow} -gt 15 ]; then
+            rm ./source/src/precomputed_ecmult.c
+          fi
+        '';
         postCheck = ctimeCheckCmd + valgrindCheckCmd;
         makeFlags = [ "VERBOSE=true" ];
-    
-        enableParallelBuilding = true;
-    
+
+        # TODO turn this off when the new RAM arrives
+        enableParallelBuilding = false;
+
         meta = {
           homepage = http://www.github.com/bitcoin-core/secp256k1;
           license = lib.licenses.mit;
@@ -106,7 +117,6 @@ let
         checkPrEcmultGenPrecision = ecmultGenPrecision;
         checkPrEcmultWindow = ecmultWindow;
         checkPrWithAsm = withAsm;
-        checkPrWithBigNum = withBigNum;
         checkPrSrc = builtins.toJSON src;
       });
     in taggedDrv;
