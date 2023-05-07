@@ -32,8 +32,10 @@ let
         mtxName = self: "${self.src.shortId}-${self.attr}";
 
         attr = [ "coq" "haskell" "compcert" "vst" ];
+        doCheck = null;
         wideMultiply = null;
         withCoverage = null;
+        production = null;
         env = null;
         src = gitCommits;
       }
@@ -43,17 +45,19 @@ let
         mtxName = self: "${self.src.shortId}-${self.attr}-${builtins.toString self.wideMultiply}-${self.env}-cov-${builtins.toString self.withCoverage}";
 
         attr = "c";
+        doCheck = [ false true ];
         wideMultiply = [ null "int64" "int128" "int128_struct" ];
         withCoverage = [ false true ];
+        production = [ false true ];
         env = [ "stdenv" "clangStdenv" ];
         src = gitCommits;
       }
     ];
 
-    singleCheckDrv = { src, attr, wideMultiply, withCoverage, env, srcName, mtxName }: dummy:
+    singleCheckDrv = { src, attr, doCheck, wideMultiply, withCoverage, production, env, srcName, mtxName }: dummy:
       let
         sourceDir = src.src;
-        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" { inherit wideMultiply withCoverage; });
+        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" { inherit doCheck wideMultiply withCoverage production; });
         diffDrv = if attr == "haskell"
         then
           drv.overrideAttrs
@@ -107,6 +111,7 @@ let
           checkPrAttr = attr;
           checkPrPrNum = prNum;
           checkPrWideMultiply = wideMultiply;
+          checkPrProduction = production;
           checkPrEnv = builtins.toJSON env;
           checkPrSrc = builtins.toJSON src;
         });

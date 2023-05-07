@@ -200,6 +200,7 @@ rec {
     , prNum
     , rustc
     , lockFile
+    , features ? []
     , src
     , ...
     }:
@@ -214,15 +215,47 @@ rec {
         src = src.src;
         overrideLockFile = lockFile;
       };
+      calledCargoNix = overlaidPkgs.callPackage generatedCargoNix {
+        # For dependencies we want to simply use the stock `pkgs.buildRustCrate`. But for
+        # the actual crates we're testing, it is nice to modify the derivation to include
+        # A bunch of metadata about the run. Annoyingly, there isn't any way to tell what
+        # a "root crate" exposed by crate2nix, so we have to sorta hack it by assembling
+        # a `rootCrateIds` list and checking membership.
+        #
+        # Ideally we could at least check whether `crate.crateName` matches the specific
+        # workspace under test, but that is yet-undetermined and right now we're in a
+        # `callPackage` call so we can't even use laziness to refer to yet-undetermined
+        # values.
+        buildRustCrateForPkgs = pkgs: crate:
+          if builtins.elem crate.crateName rootCrateIds
+          then (pkgs.buildRustCrate crate).override {
+            preUnpack = ''
+              echo "Project name: ${projectName}"
+              echo "PR number: ${builtins.toString prNum}"
+              echo "rustc: ${builtins.toString rustc}"
+              echo "lockFile: ${lockFile}"
+              echo "Source: ${builtins.toJSON src}"
+              echo "Features: ${builtins.toJSON features}"
+            '';
+          }
+          else pkgs.buildRustCrate crate;
+        # We have some should_panic tests in rust-bitcoin that fail in release mode
+        release = false;
+      };
+      rootCrateIds =
+        (if calledCargoNix ? rootCrate
+         then [ calledCargoNix.rootCrate.packageId ]
+         else []) ++
+        (if calledCargoNix ? workspaceMembers
+         then map (p: p.packageId) (builtins.attrValues calledCargoNix.workspaceMembers)
+         else []);
+        
     in
     {
       name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
       value = {
         generated = generatedCargoNix;
-        called = overlaidPkgs.callPackage generatedCargoNix {
-          # We have some should_panic tests in rust-bitcoin that fail in release mode
-          release = false;
-        };
+        called = calledCargoNix;
       };
     };
 }

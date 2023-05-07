@@ -28,11 +28,11 @@ let
   lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
   mtxName = self: "${self.src.shortId}-${self.rustc.name}-${self.workspace}-${lockFileName self}-${builtins.concatStringsSep "," self.features}";
-  lockFileFn1 = [
+  lockFileFn = [
     (src: "${src.src}/Cargo-minimal.lock")
     (src: "${src.src}/Cargo-recent.lock")
   ];
-  lockFileFn = map (x: (src: /. + x)) jsonConfig.lockFiles;
+  lockFileFn1 = map (x: (src: /. + x)) jsonConfig.lockFiles;
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
