@@ -46,8 +46,8 @@ OUT_FILE=$(
 	--arg jsonConfigFile "$JSON" \
 	--argstr prNum "$NIX_PRNUM" \
 	-A "$TARGET" \
-	--log-format internal-json -v \
 	"$GIT_DIR/../../check-pr.nix" \
+	--log-format internal-json -v \
 	2> >(nom --json)
 )
 
