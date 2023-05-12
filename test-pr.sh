@@ -15,21 +15,21 @@ if [ "$PRNUM" == "" ]; then
 elif git rev-parse --verify --quiet "pr/$PRNUM/head^{commit}"; then
 	COMMIT_NAME="pr/$PRNUM/head"
 	COMMIT_ID="$(git rev-parse "$COMMIT_NAME")"
-	NIX_PRNUM="$PRNUM"
 	TARGET=checkPr
 else
 	COMMIT_NAME=$PRNUM
 	COMMIT_ID="$(git rev-parse "$COMMIT_NAME")"
-	NIX_PRNUM="$COMMIT_ID"
 	TARGET=checkHead
 fi
 
 # Do actual build
 banner "Testing $PRNUM"
+banner "$COMMIT_ID"
 DRV_FILE=$(
   nix-instantiate \
 	--arg jsonConfigFile "$JSON" \
-	--argstr prNum "$NIX_PRNUM" \
+	--argstr prNum "$PRNUM" \
+	--argstr singleRev "$COMMIT_ID" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix"
 )
@@ -44,7 +44,8 @@ OUT_FILE=$(
 	--keep-outputs \
 	--log-lines 100 \
 	--arg jsonConfigFile "$JSON" \
-	--argstr prNum "$NIX_PRNUM" \
+	--argstr prNum "$PRNUM" \
+	--argstr singleRev "$COMMIT_ID" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix" \
 	--log-format internal-json -v \

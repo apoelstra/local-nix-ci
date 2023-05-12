@@ -7,6 +7,8 @@
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
+# used only by checkHead, not checkPr
+, singleRev ? builtins.toString prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
@@ -45,8 +47,8 @@ let
           ["default" "proxy"]
           ["default" "simple_http" "simple_tcp" "simple_uds" "proxy"]
         ];
-        rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        rustc = builtins.head allRustcs;
+        lockFile = builtins.head (map (x: /. + x) jsonConfig.lockFiles);
         src = gitCommits;
       }
     ];
@@ -105,7 +107,7 @@ in
           src = builtins.fetchGit {
             allRefs = true;
             url = jsonConfig.gitDir;
-            rev = prNum;
+            rev = singleRev;
           };
           name = builtins.toString prNum;
           shortId = name;
