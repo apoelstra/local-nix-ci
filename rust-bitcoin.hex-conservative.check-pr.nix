@@ -7,6 +7,8 @@
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
+# Only used by checkHEad, not checkPr
+, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
@@ -16,7 +18,7 @@ let
     nightlyRustc
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.41.0".default
+    pkgs.rust-bin.stable."1.48.0".default
   ];
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
@@ -38,6 +40,7 @@ let
 
         isTip = false;
 
+        workspace = "hex-conservative";
         features = [
           [ ]
           [ "alloc" ]
@@ -51,6 +54,19 @@ let
         src = gitCommits;
       }
 
+      {
+        projectName = jsonConfig.repoName;
+        inherit srcName mtxName prNum;
+
+        isTip = false;
+
+        workspace = "hex-fuzz";
+        features = [ [] ];
+        rustc = pkgs.rust-bin.stable."1.58.0".default;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+
       # Only tip
       {
         projectName = jsonConfig.repoName;
@@ -58,6 +74,7 @@ let
 
         isTip = true;
 
+        workspace = "hex-conservative";
         features = [ [ "default" "strict" ] ];
         rustc = nightlyRustc;
         lockFile = /. + builtins.head jsonConfig.lockFiles;
@@ -73,6 +90,7 @@ let
       { projectName
       , prNum
       , isTip
+      , workspace
       , features
       , rustc
       , lockFile
@@ -82,31 +100,52 @@ let
       ,
       }:
       nixes:
-        nixes.called.rootCrate.build.override {
-          inherit features;
-          runTests = true;
-          testPreRun = ''
-            ${rustc}/bin/rustc -V
-            ${rustc}/bin/cargo -V
-            echo "Tip: ${builtins.toString isTip}"
-            echo "PR: ${prNum}"
-            echo "Commit: ${src.commitId}"
-            echo "Features: ${builtins.toJSON features}"
-          '';
-          testPostRun =
-            if isTip
-            then ''
-              export PATH=$PATH:${rustc}/bin:${pkgs.gcc}/bin
-              export CARGO_TARGET_DIR=$PWD/target
-              export CARGO_HOME=${nixes.generated}/cargo
-              pushd ${nixes.generated}/crate
-              cargo run --example hexy
-              cargo clippy --locked -- -D warnings
-              cargo fmt --all -- --check
-              popd
-            ''
-            else "";
-        };
+        let
+          drv = nixes.called.workspaceMembers.${workspace}.build.override {
+            inherit features;
+            runTests = true;
+            testPreRun = ''
+              ${rustc}/bin/rustc -V
+              ${rustc}/bin/cargo -V
+              echo "Tip: ${builtins.toString isTip}"
+              echo "PR: ${prNum}"
+              echo "Commit: ${src.commitId}"
+              echo "Features: ${builtins.toJSON features}"
+            '';
+            testPostRun =
+              if isTip
+              then ''
+                export PATH=$PATH:${rustc}/bin:${pkgs.gcc}/bin
+                export CARGO_TARGET_DIR=$PWD/target
+                export CARGO_HOME=${nixes.generated}/cargo
+                pushd ${nixes.generated}/crate
+                cargo run --example hexy
+                cargo clippy --locked -- -D warnings
+                cargo fmt --all -- --check
+                popd
+              ''
+              else "";
+          };
+          fuzzTargets = map
+            (bin: bin.name)
+            (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
+          fuzzDrv = utils.cargoFuzzDrv {
+            normalDrv = drv;
+            inherit projectName src nixes fuzzTargets;
+          };
+        in
+        if workspace == "hex-fuzz"
+        then fuzzDrv
+        else drv.overrideDerivation (drv: {
+          # Add a bunch of stuff just to make the derivation easier to grok
+          checkPrProjectName = projectName;
+          checkPrPrNum = prNum;
+          checkPrRustc = rustc;
+          checkPrLockFile = lockFile;
+          checkPrFeatures = builtins.toJSON features;
+          checkPrWorkspace = workspace;
+          checkPrSrc = builtins.toJSON src;
+        });
   };
 in
 {
@@ -118,7 +157,7 @@ in
           src = builtins.fetchGit {
             allRefs = true;
             url = jsonConfig.gitDir;
-            rev = prNum;
+            rev = singleRev;
           };
           name = builtins.toString prNum;
           shortId = name;

@@ -4,6 +4,8 @@
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
+# Only used by checkHEad, not checkPr
+, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
@@ -30,15 +32,16 @@ let
         ["recovery"]
       ];
       ecmultGenPrecision = [ 2 4 8 ];
-      ecmultWindow = [
+      # z-prefix this to try to spread out the 24-bit instances in the matrix
+      zecmultWindow = [
         2 10 15
         # Frustratingly my system OOMs when dealing with more than one commit
         # at 24-bit ecmult windows. Even with 1TB of RAM. So throttle it in
         # the multi-commit case but leave it be for the "just testing HEAD"
         # case.
-        if builtins.length gitCommits > 1
+        (if builtins.length gitCommits > 1
         then 21
-        else 24
+        else 24)
       ];
       withAsm = [ "no" "x86_64" ];
       withMsan = [ true false ];
@@ -53,7 +56,7 @@ let
       mtxName,
       extraModules,
       ecmultGenPrecision,
-      ecmultWindow,
+      zecmultWindow,
       withAsm,
       withMsan,
       widemul,
@@ -79,17 +82,17 @@ let
           fi
         '';
       # clang can't seem to handle ecmult windows > 20 :(
-      adjEcmultWindow = if withMsan && ecmultWindow > 20
-        then ecmultWindow - 4
-        else ecmultWindow;
+      adjEcmultWindow = if withMsan && zecmultWindow > 20
+        then zecmultWindow - 4
+        else zecmultWindow;
       drv = stdenv.mkDerivation {
         name = "${projectName}-${src.shortId}";
         src = src.src;
 
         nativeBuildInputs = [ pkgs.pkgconfig pkgs.autoreconfHook pkgs.valgrind ]
           ++ lib.optionals withMsan [
-            pkgs.llvmPackages_15.llvm # to get llvm-symbolizer when clang blows up
-            pkgs.clang_15
+            pkgs.llvmPackages_16.llvm # to get llvm-symbolizer when clang blows up
+            pkgs.clang_16
           ];
         buildInputs = [];
 
@@ -145,12 +148,13 @@ in
           src = builtins.fetchGit {
             allRefs = true;
             url = jsonConfig.gitDir;
-            rev = prNum;
+            rev = singleRev;
           };
           name = builtins.toString prNum;
           shortId = name;
           commitId = shortId;
         };
+        zecmultWindow = [2 10 15 23]; # fixme drop this when we sort out OOM issues
       })
       checkData.argsMatrices;
   });

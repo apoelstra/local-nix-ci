@@ -42,9 +42,7 @@ let
 
         features = [
           [ ]
-          [ "default" ]
-          [ "strict" ]
-          [ "default" "strict" ]
+          [ "std" ]
         ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
@@ -58,7 +56,7 @@ let
 
         isTip = true;
 
-        features = [ [ "default" "strict" ] ];
+        features = [ [] [ "std" ] ];
         rustc = nightlyRustc;
         lockFile = /. + builtins.head jsonConfig.lockFiles;
         src = builtins.head gitCommits;
@@ -96,9 +94,13 @@ let
           testPostRun =
             if isTip
             then ''
-              export PATH=$PATH:${rustc}/bin
-              cargo fmt --check
-              #cargo clippy #broken til #45 or #88
+              export PATH=$PATH:${rustc}/bin:${pkgs.gcc}/bin
+              export CARGO_TARGET_DIR=$PWD/target
+              export CARGO_HOME=${nixes.generated}/cargo
+              pushd ${nixes.generated}/crate
+              cargo clippy --locked -- -D warnings
+              cargo fmt --all -- --check
+              popd
             ''
             else "";
         };
@@ -123,3 +125,4 @@ in
       checkData.argsMatrices;
   });
 }
+

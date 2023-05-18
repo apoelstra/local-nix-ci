@@ -7,6 +7,8 @@
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
+# Only used by checkHEad, not checkPr
+, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
@@ -31,7 +33,7 @@ let
         srcName = self: self.src.commitId;
         mtxName = self: "${self.src.shortId}-${self.attr}";
 
-        attr = [ "coq" "haskell" "compcert" "vst" ];
+        attr = [ "coq" "haskell" "compcert" "vst" "pdf" ];
         doCheck = null;
         wideMultiply = null;
         withCoverage = null;
@@ -105,7 +107,7 @@ let
               '';
             })
         else drv;
-        taggedDrv = diffDrv.overrideDerivation (drv: {
+        taggedDrv = diffDrv.overrideAttrs (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = "Simplicity";
           checkPrAttr = attr;
@@ -127,7 +129,7 @@ in
           src = builtins.fetchGit {
             allRefs = true;
             url = jsonConfig.gitDir;
-            rev = prNum;
+            rev = singleRev;
           };
           name = builtins.toString prNum;
           shortId = name;

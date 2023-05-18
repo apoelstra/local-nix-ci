@@ -23,6 +23,7 @@ else
 fi
 
 # Do actual build
+date
 banner "Testing $PRNUM"
 banner "$COMMIT_ID"
 DRV_FILE=$(

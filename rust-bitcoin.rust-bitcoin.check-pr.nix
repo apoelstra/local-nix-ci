@@ -7,6 +7,8 @@
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
+# Only used by checkHEad, not checkPr
+, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
@@ -197,7 +199,7 @@ in
           src = builtins.fetchGit {
             allRefs = true;
             url = jsonConfig.gitDir;
-            rev = prNum;
+            rev = singleRev;
           };
           name = builtins.toString prNum;
           shortId = builtins.toString prNum;

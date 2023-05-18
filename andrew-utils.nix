@@ -195,12 +195,15 @@ rec {
   # Cargo.nix as the key, and the result of calling it as the value.
   #
   # Assumes that your matrix has entries projectName, prNum, rustc, lockFile, src.
+  #
+  # Note that EVERY INPUT TO THIS FUNCTION MUST BE ADDED TO generatedCargoNix. If it is
+  # not, the memoization logic will collapse all the different values for that input
+  # into one.
   crate2nixSingleCheckMemo =
     { projectName
     , prNum
     , rustc
     , lockFile
-    , features ? []
     , src
     , ...
     }:
@@ -211,7 +214,7 @@ rec {
         }) ];
       };
       generatedCargoNix = tools-nix.generatedCargoNix {
-        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}";
+        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}-${builtins.toString rustc}";
         src = src.src;
         overrideLockFile = lockFile;
       };
@@ -235,7 +238,6 @@ rec {
               echo "rustc: ${builtins.toString rustc}"
               echo "lockFile: ${lockFile}"
               echo "Source: ${builtins.toJSON src}"
-              echo "Features: ${builtins.toJSON features}"
             '';
           }
           else pkgs.buildRustCrate crate;
@@ -258,6 +260,78 @@ rec {
         called = calledCargoNix;
       };
     };
+
+  cargoFuzzDrv = {
+    normalDrv
+  , projectName
+  , src
+  , nixes
+  , fuzzTargets
+  }: let
+    overlaidPkgs = import <nixpkgs> {
+      overlays = [
+        (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
+      ];
+    };
+    singleFuzzDrv = fuzzTarget: stdenv.mkDerivation {
+      name = "fuzz-${fuzzTarget}";
+      src = src.src;
+      buildInputs = [
+        overlaidPkgs.rust-bin.stable."1.58.0".default
+        (import ./honggfuzz-rs.nix { })
+        # Pinned version because of breaking change in args to init_disassemble_info
+        nixpkgs.libopcodes_2_38 # for dis-asm.h and bfd.h
+        nixpkgs.libunwind       # for libunwind-ptrace.h
+      ];
+      phases = [ "unpackPhase" "buildPhase" ];
+
+      buildPhase = ''
+        set -x
+        export CARGO_HOME=$PWD/cargo
+        export HFUZZ_RUN_ARGS="--run_time 300 --exit_upon_crash"
+
+        cargo -V
+        cargo hfuzz version
+        echo "Source: ${builtins.toJSON src}"
+        echo "Fuzz target: ${fuzzTarget}"
+
+        # honggfuzz rebuilds the world, including itself for some reason, and
+        # it expects to be able to build itself in-place. So we need a read/write
+        # copy.
+        cp -r ${nixes.generated}/cargo .
+        chmod -R +w cargo
+
+        DEP_DIR=$(grep 'directory =' $CARGO_HOME/config | sed 's/directory = "\(.*\)"/\1/')
+        cp -r "$DEP_DIR" vendor-copy/
+        chmod +w vendor-copy/
+        rm vendor-copy/*honggfuzz*
+        cp -rL "$DEP_DIR/"*honggfuzz* vendor-copy/ # -L means copy soft-links as real files
+        chmod -R +w vendor-copy/
+        # These two lines are just a search-and-replace ... but trying to get sed to replace
+        # one string full of slashes with another is an unreadable mess, so easier to just
+        # erase the line completely then recreate it with echo.
+        sed -i "s/directory = \".*\"//" "$CARGO_HOME/config"
+        echo "directory = \"$PWD/vendor-copy\"" >> "$CARGO_HOME/config"
+        cat "$CARGO_HOME/config"
+        # Done crazy honggfuzz shit
+
+        pushd fuzz/
+        cargo hfuzz run "${fuzzTarget}"
+        popd
+
+        touch $out
+      '';
+    };
+    fuzzDrv = overlaidPkgs.linkFarm
+      "${projectName}-${src.shortId}-fuzz" 
+      ((map (x: rec {
+        name = "fuzz-${path.name}";
+        path = singleFuzzDrv x;
+      }) fuzzTargets) ++ [{
+        name = "fuzz-normal-tests";
+        path = normalDrv;
+      }]);
+    in fuzzDrv;
 }
 
 

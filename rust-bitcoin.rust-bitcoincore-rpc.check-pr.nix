@@ -7,6 +7,8 @@
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
+# Only used by checkHEad, not checkPr
+, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
@@ -16,7 +18,7 @@ let
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.41.0".default
+    pkgs.rust-bin.stable."1.48.0".default
   ];
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits

@@ -7,16 +7,17 @@
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
+# Only used by checkHEad, not checkPr
+, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
-  cargoHfuzz = import ./honggfuzz-rs.nix { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   allRustcs = [
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.41.0".default
+    pkgs.rust-bin.stable."1.48.0".default
   ];
   isNightly = rustc: rustc == builtins.head allRustcs;
   gitCommits = utils.githubPrSrcs {
@@ -74,9 +75,9 @@ let
         projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum;
 
-        workspace = "miniscript-fuzz";
+        workspace = "descriptor-fuzz";
         features = [ [] ];
-        rustc = pkgs.rust-bin.stable."1.58.0".default;
+        rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
@@ -121,9 +122,8 @@ let
       ,
       }:
       nixes:
-        with pkgs;
         let
-          bitcoinSrc = (callPackage /home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
+          bitcoinSrc = (pkgs.callPackage /home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
           drv = nixes.called.workspaceMembers.${workspace}.build.override {
             inherit features;
             runTests = true;
@@ -142,61 +142,10 @@ let
           fuzzTargets = map
             (bin: bin.name)
             (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
-          singleFuzzDrv = fuzzTarget: stdenv.mkDerivation {
-            name = "fuzz-${fuzzTarget}";
-            src = src.src;
-            buildInputs = [
-              rustc
-              cargoHfuzz
-              # Pinned version because of breaking change in args to init_disassemble_info
-              libopcodes_2_38 # for dis-asm.h and bfd.h
-              libunwind       # for libunwind-ptrace.h
-            ];
-            phases = [ "unpackPhase" "buildPhase" ];
-
-            buildPhase = ''
-              set -x
-              export CARGO_HOME=$PWD/cargo
-              export HFUZZ_RUN_ARGS="--run_time 300 --exit_upon_crash"
-
-              cargo -V
-              cargo hfuzz version
-              echo "Source: ${builtins.toJSON src}"
-              echo "Fuzz target: ${fuzzTarget}"
-
-              # honggfuzz rebuilds the world, including itself for some reason, and
-              # it expects to be able to build itself in-place. So we need a read/write
-              # copy.
-              cp -r ${nixes.generated}/cargo .
-              chmod -R +w cargo
-
-              DEP_DIR=$(grep 'directory =' $CARGO_HOME/config | sed 's/directory = "\(.*\)"/\1/')
-              cp -r "$DEP_DIR" vendor-copy/
-              chmod +w vendor-copy/
-              rm vendor-copy/*honggfuzz*
-              cp -rL "$DEP_DIR/"*honggfuzz* vendor-copy/ # -L means copy soft-links as real files
-              chmod -R +w vendor-copy/
-              # These two lines are just a search-and-replace ... but trying to get sed to replace
-              # one string full of slashes with another is an unreadable mess, so easier to just
-              # erase the line completely then recreate it with echo.
-              sed -i "s/directory = \".*\"//" "$CARGO_HOME/config"
-              echo "directory = \"$PWD/vendor-copy\"" >> "$CARGO_HOME/config"
-              cat "$CARGO_HOME/config"
-              # Done crazy honggfuzz shit
-
-              pushd fuzz/
-              cargo hfuzz run "${fuzzTarget}"
-              popd
-
-              touch $out
-            '';
+          fuzzDrv = utils.cargoFuzzDrv {
+            normalDrv = drv;
+            inherit projectName src nixes fuzzTargets;
           };
-          fuzzDrv = pkgs.linkFarm
-            "${projectName}-${src.shortId}-fuzz" 
-            (map (x: rec {
-              name = "fuzz-${path.name}";
-              path = singleFuzzDrv x;
-            }) fuzzTargets);
           finalDrv = stdenv.mkDerivation {
             name = projectName;
             src = src.src;
@@ -221,7 +170,7 @@ let
         in
         if projectName == "final-checks"
         then finalDrv
-        else if workspace == "miniscript-fuzz"
+        else if workspace == "descriptor-fuzz"
         then fuzzDrv
         else drv.overrideDerivation (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
@@ -246,7 +195,7 @@ in
           src = builtins.fetchGit {
             allRefs = true;
             url = jsonConfig.gitDir;
-            rev = prNum;
+            rev = singleRev;
           };
           name = builtins.toString prNum;
           shortId = name;
