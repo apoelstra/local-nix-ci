@@ -19,6 +19,7 @@ let
     pkgs.rust-bin.beta.latest.default
     pkgs.rust-bin.stable."1.48.0".default
   ];
+  isNightly = rustc: rustc == builtins.head allRustcs;
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
     # well set the GIT_DIR env variable to it before calling git commands. The
@@ -35,53 +36,45 @@ let
     (src: "${src.src}/Cargo-recent.lock")
   ];
   lockFileFn1 = map (x: (src: /. + x)) jsonConfig.lockFiles;
+  fullMatrix = {
+    projectName = jsonConfig.repoName;
+    inherit prNum srcName mtxName lockFileFn;
+    isTip = false;
+
+    workspace = "bitcoin";
+    features = [
+      [ "default" ]
+      [ "std" "rand-std" ]
+      [ "std" "bitcoinconsenus-std" ]
+      [ "std" "rand-std" "bitcoinconsenus-std" ]
+      [ "default" "serde" "rand" ]
+      [ "default" "base64" "serde" "rand" "rand-std" "secp-lowmemory" "bitcoinconsensus-std" ]
+
+      [ "no-std" ]
+      [ "no-std" "base64" ]
+      [ "no-std" "rand" ]
+      [ "no-std" "serde" ]
+      [ "no-std" "secp-lowmemory" ]
+      [ "no-std" "secp-recovery" ]
+      [ "no-std" "bitcoinconsenus" ]
+      [ "no-std" "secp-recovery" "secp-lowmemory" ]
+    ];
+    rustc = allRustcs;
+    src = gitCommits;
+  };
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
     argsMatrices = [
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName lockFileFn;
+      (fullMatrix // {
         isTip = false;
-
-        workspace = "bitcoin";
-        features = [
-          [ "default" ]
-          [ "std" "rand-std" ]
-          [ "std" "bitcoinconsenus-std" ]
-          [ "std" "rand-std" "bitcoinconsenus-std" ]
-          [ "default" "serde" "rand" ]
-          [ "default" "base64" "serde" "rand" "rand-std" "secp-lowmemory" "bitcoinconsensus-std" ]
-
-          [ "no-std" ]
-          [ "no-std" "base64" ]
-          [ "no-std" "rand" ]
-          [ "no-std" "serde" ]
-          [ "no-std" "secp-lowmemory" ]
-          [ "no-std" "secp-recovery" ]
-          [ "no-std" "bitcoinconsenus" ]
-          [ "no-std" "secp-recovery" "secp-lowmemory" ]
-        ];
+        rustc = pkgs.rust-bin.stable.latest.default;
+      })
+      (fullMatrix // {
+        isTip = true;
         rustc = allRustcs;
-        src = gitCommits;
-      }
-      # bitcoin, no-std (does not work on 1.48)
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName lockFileFn;
-        isTip = false;
-
-        workspace = "bitcoin";
-        features = [
-        ];
-        rustc = [
-          (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
-          pkgs.rust-bin.stable.latest.default
-          pkgs.rust-bin.beta.latest.default
-          pkgs.rust-bin.stable."1.50.0".default
-        ];
-        src = gitCommits;
-      }
+        src = builtins.head gitCommits;
+      })
 
       {
         projectName = jsonConfig.repoName;
@@ -102,16 +95,15 @@ let
           [ "std" "serde" "serde-std" "alloc" "schemars" ]
         ];
         rustc = allRustcs;
-        src = builtins.head gitCommits;
+        src = gitCommits;
       }
 
-/*
       {
         projectName = jsonConfig.repoName;
         inherit prNum srcName mtxName lockFileFn;
         isTip = false;
 
-        workspace = "bitcoin-private";
+        workspace = "bitcoin-internals";
         features = [
           [ ]
           [ "alloc" ]
@@ -120,7 +112,6 @@ let
         rustc = allRustcs;
         src = gitCommits;
       }
-*/
 
       # Only tip
       {
@@ -177,13 +168,13 @@ let
         # repeatedly for every workspace, just choose one ("bitcoin") and only
         # run it there..
         testPostRun =
-          if workspace == "bitcoin" && isTip
+          if workspace == "bitcoin" && isNightly rustc && isTip
           then ''
             export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
 
             export CARGO_TARGET_DIR=$PWD/target
             pushd ${nixes.generated}/crate
-            CARGO_HOME=../cargo cargo clippy --locked #  -- -D warnings
+            CARGO_HOME=../cargo cargo clippy --locked -- -A clippy::incorrect_clone_impl_on_copy_type #  -- -D warnings
             popd
           ''
           else "";

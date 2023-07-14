@@ -265,6 +265,7 @@ rec {
     normalDrv
   , projectName
   , src
+  , lockFile
   , nixes
   , fuzzTargets
   }: let
@@ -277,7 +278,7 @@ rec {
       name = "fuzz-${fuzzTarget}";
       src = src.src;
       buildInputs = [
-        overlaidPkgs.rust-bin.stable."1.58.0".default
+        overlaidPkgs.rust-bin.stable."1.64.0".default
         (import ./honggfuzz-rs.nix { })
         # Pinned version because of breaking change in args to init_disassemble_info
         nixpkgs.libopcodes_2_38 # for dis-asm.h and bfd.h
@@ -315,6 +316,11 @@ rec {
         cat "$CARGO_HOME/config"
         # Done crazy honggfuzz shit
 
+        # If we have git dependencies, we need a lockfile, or else we get an error of the
+        # form "cannot use a vendored dependency without an existing lockfile". This is a
+        # limitation in cargo 1.58 (and probably later) which they apparently decided to
+        # fob off on us users.
+        cp ${lockFile} Cargo.lock
         pushd fuzz/
         cargo hfuzz run "${fuzzTarget}"
         popd

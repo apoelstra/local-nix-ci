@@ -35,7 +35,27 @@ let
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
     argsMatrices =
-    let baseMatrix = {
+    let
+      baseMatrix = {
+        projectName = jsonConfig.repoName;
+        inherit isTip srcName mtxName prNum;
+
+        workspace = "miniscript";
+        features = [
+          ["std"]
+          ["std" "serde"]
+          ["std" "rand"]
+          ["std" "base64"]
+          ["std" "compiler"]
+          ["std" "trace"]
+          ["std" "serde" "rand" "base64" "compiler"]
+          ["std" "serde" "rand" "base64" "compiler" "trace"]
+        ];
+        rustc = allRustcs;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      };
+      nostdMatrix = {
         projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum;
 
@@ -49,16 +69,8 @@ let
           ["no-std" "trace"]
           ["no-std" "serde" "rand" "base64" "compiler"]
           ["no-std" "serde" "rand" "base64" "compiler" "trace"]
-          ["std"]
           ["std" "hashbrown"] # dumb, but shouldn't fail
           ["std" "no-std"] # dumb, but shouldn't fail
-          ["std" "serde"]
-          ["std" "rand"]
-          ["std" "base64"]
-          ["std" "compiler"]
-          ["std" "trace"]
-          ["std" "serde" "rand" "base64" "compiler"]
-          ["std" "serde" "rand" "base64" "compiler" "trace"]
         ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
@@ -67,6 +79,11 @@ let
     in [
       baseMatrix
       (baseMatrix // {
+        rustc = builtins.head allRustcs;
+        features = map (x: x ++ ["unstable"]) baseMatrix.features;
+      })
+      nostdMatrix
+      (nostdMatrix // {
         rustc = builtins.head allRustcs;
         features = map (x: x ++ ["unstable"]) baseMatrix.features;
       })
@@ -144,7 +161,7 @@ let
             (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
           fuzzDrv = utils.cargoFuzzDrv {
             normalDrv = drv;
-            inherit projectName src nixes fuzzTargets;
+            inherit projectName src lockFile nixes fuzzTargets;
           };
           finalDrv = stdenv.mkDerivation {
             name = projectName;
@@ -160,7 +177,7 @@ let
               export CARGO_TARGET_DIR=$PWD/target
               export CARGO_HOME=${nixes.generated}/cargo
               pushd ${nixes.generated}/crate
-              cargo clippy --locked -- #-D warnings
+              cargo clippy --locked -- -A clippy::arc_with_non_send_sync # -- -D warnings
               cargo fmt --all -- --check
               popd
 
@@ -168,11 +185,11 @@ let
             '';
           };
         in
-        if projectName == "final-checks"
+        (if projectName == "final-checks"
         then finalDrv
         else if workspace == "descriptor-fuzz"
         then fuzzDrv
-        else drv.overrideDerivation (drv: {
+        else drv).overrideAttrs (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;

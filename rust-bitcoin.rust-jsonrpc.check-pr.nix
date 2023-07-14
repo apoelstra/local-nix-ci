@@ -39,6 +39,7 @@ let
         projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum;
 
+        workspace = "jsonrpc";
         features = [
           ["default"]
           ["default" "simple_http"]
@@ -51,6 +52,20 @@ let
         lockFile = builtins.head (map (x: /. + x) jsonConfig.lockFiles);
         src = gitCommits;
       }
+
+ # Disabled until `honggfuzz` becomes non-optional
+      {
+        projectName = jsonConfig.repoName;
+        inherit srcName mtxName prNum;
+        isTip = _: false;
+
+        workspace = "jsonrpc-fuzz";
+        features = [ [] ];
+        rustc = pkgs.rust-bin.stable."1.58.0".default;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
@@ -59,6 +74,7 @@ let
       { projectName
       , prNum
       , isTip
+      , workspace
       , features
       , rustc
       , lockFile
@@ -73,28 +89,47 @@ let
           pkgs = import <nixpkgs> {
             overlays = [ (self: super: { inherit rustc; }) ];
           };
+          drv = nixes.called.workspaceMembers.${workspace}.build.override {
+            inherit features;
+            runTests = true;
+            testPreRun = ''
+              ${rustc}/bin/rustc -V
+              ${rustc}/bin/cargo -V
+              echo "Features: ${builtins.toJSON features}"
+            '';
+            testPostRun =
+              if isTip src && isNightly rustc
+              then ''
+                export PATH=$PATH:${rustc}/bin:${gcc}/bin
+                export CARGO_TARGET_DIR=$PWD/target
+                export CARGO_HOME=${nixes.generated}/cargo
+                pushd ${nixes.generated}/crate
+                cargo clippy --locked -- -D warnings
+                #cargo fmt --all -- --check
+                popd
+              ''
+              else "";
+          };
+          fuzzTargets = map
+            (bin: bin.name)
+            (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
+          fuzzDrv = utils.cargoFuzzDrv {
+            normalDrv = drv;
+            inherit projectName src lockFile nixes fuzzTargets;
+          };
         in
-        nixes.called.rootCrate.build.override {
-          inherit features;
-          runTests = true;
-          testPreRun = ''
-            ${rustc}/bin/rustc -V
-            ${rustc}/bin/cargo -V
-            echo "Features: ${builtins.toJSON features}"
-          '';
-          testPostRun =
-            if isTip src && isNightly rustc
-            then ''
-              export PATH=$PATH:${rustc}/bin:${gcc}/bin
-              export CARGO_TARGET_DIR=$PWD/target
-              export CARGO_HOME=${nixes.generated}/cargo
-              pushd ${nixes.generated}/crate
-              cargo clippy --locked -- -D warnings
-              #cargo fmt --all -- --check
-              popd
-            ''
-            else "";
-        };
+        if workspace == "jsonrpc-fuzz"
+        then fuzzDrv
+        else drv.overrideDerivation (drv: {
+          # Add a bunch of stuff just to make the derivation easier to grok
+          checkPrProjectName = projectName;
+          checkPrPrNum = prNum;
+          checkPrRustc = rustc;
+          checkPrLockFile = lockFile;
+          checkPrFeatures = builtins.toJSON features;
+          checkPrWorkspace = workspace;
+          checkPrSrc = builtins.toJSON src;
+        });
   };
 in
 {

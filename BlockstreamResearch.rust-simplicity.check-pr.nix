@@ -20,7 +20,6 @@ let
     pkgs.rust-bin.beta.latest.default
     pkgs.rust-bin.stable."1.48.0".default
   ];
-  isNightly = rustc: rustc == builtins.head allRustcs;
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
     # well set the GIT_DIR env variable to it before calling git commands. The
@@ -29,41 +28,46 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
+  projectName = jsonConfig.repoName;
+  isTip = { src, rustc }: src == builtins.head gitCommits && rustc == builtins.head allRustcs;
   srcName = self: self.src.commitId;
   mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
-  isTip = src: src == builtins.head gitCommits;
 
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
     argsMatrices = [
-      # Main project
       {
-        projectName = "simplicity";
-        inherit isTip srcName mtxName prNum;
+        inherit projectName srcName mtxName prNum isTip;
+        workspace = "simplicity";
+
         features = [ [ ] [ "bitcoin" ] [ "elements" ] [ "bitcoin" "elements" ] ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
-
-      # simplicity-sys
       {
-        projectName = "simplicity-sys";
-        inherit isTip srcName mtxName prNum;
+        inherit projectName srcName mtxName prNum isTip;
+        workspace = "simplicity-sys";
 
         features = [ [ ] [ "test-utils" ] ];
         rustc = allRustcs;
-        src = map
-          (commit: commit // {
-            src = "${commit.src}/simplicity-sys";
-            shortId = "simplicity-sys-${commit.shortId}";
-          })
-          gitCommits;
-        # FIXME avoid hardcoding this
-        lockFile = /home/apoelstra/code/BlockstreamResearch/rust-simplicity/Cargo.simplicity-sys.lock;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
       }
+
+/* disabled until we can un-patch the fuzztests
+      {
+        inherit projectName srcName mtxName prNum isTip;
+
+        workspace = "simplicity-fuzz";
+        features = [ [] ];
+        rustc = pkgs.rust-bin.stable."1.58.0".default;
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+*/
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
@@ -71,6 +75,7 @@ let
     singleCheckDrv =
       { projectName
       , prNum
+      , workspace
       , features
       , rustc
       , lockFile
@@ -83,18 +88,33 @@ let
       nixes:
         with pkgs;
         let
-          simplicityRevFile = if projectName == "simplicity"
-          then builtins.readFile "${src.src}/simplicity-sys/depend/simplicity-HEAD-revision.txt"
-          else builtins.readFile "${src.src}/depend/simplicity-HEAD-revision.txt";
+          simplicityRevFile = builtins.split "\n"
+            (builtins.readFile "${src.src}/simplicity-sys/depend/simplicity-HEAD-revision.txt");
           simplicitySrc = builtins.fetchGit {
             allRefs = true;
             url = "https://github.com/BlockstreamResearch/simplicity/";
-            rev = builtins.elemAt (builtins.split "\n" simplicityRevFile) 2;
+            rev = builtins.elemAt simplicityRevFile 2;
           };
-          pkgs = import <nixpkgs> {
-            overlays = [ (self: super: { inherit rustc; }) ];
-          };
-          drv = nixes.called.rootCrate.build.override {
+          checkJets = ''
+            # Check whether jets are consistent with upstream
+            ${(import "${simplicitySrc}/default.nix" {}).haskell}/bin/GenRustJets
+            diff jets_ffi.rs ./simplicity-sys/src/c_jets/jets_ffi.rs
+            diff jets_wrapper.rs ./simplicity-sys/src/c_jets/jets_wrapper.rs
+            diff core.rs ./src/jet/init/core.rs
+            diff bitcoin.rs ./src/jet/init/bitcoin.rs
+            diff elements.rs ./src/jet/init/elements.rs
+            rm jets_ffi.rs
+            rm jets_wrapper.rs
+            rm core.rs
+            rm bitcoin.rs
+            rm elements.rs
+          '';
+          checkVendoredC = ''
+            # Check whether C code is consistent with upstream
+            diff -r ${simplicitySrc}/C depend/simplicity/
+          '';
+
+          nonFuzzDrv = nixes.called.workspaceMembers.${workspace}.build.override {
             inherit features;
             runTests = true;
             testPreRun = ''
@@ -103,37 +123,37 @@ let
               echo "Source: ${builtins.toJSON src}"
               echo "Features: ${builtins.toJSON features}"
             '';
-            testPostRun = lib.optionalString (isTip src && isNightly rustc) (
-              if projectName == "simplicity"
-              then ''
-                # Check whether jets are consistent with upstream
-                ${(import "${simplicitySrc}/default.nix" {}).haskell}/bin/GenRustJets
-                diff jets_ffi.rs ./simplicity-sys/src/c_jets/jets_ffi.rs
-                diff jets_wrapper.rs ./simplicity-sys/src/c_jets/jets_wrapper.rs
-                diff core.rs ./src/jet/init/core.rs
-                diff bitcoin.rs ./src/jet/init/bitcoin.rs
-                diff elements.rs ./src/jet/init/elements.rs
-                rm jets_ffi.rs
-                rm jets_wrapper.rs
-                rm core.rs
-                rm bitcoin.rs
-                rm elements.rs
+            testPostRun = lib.optionalString (isTip { inherit src rustc; }) (
+              if workspace == "simplicity"
+              then checkJets
+              else if workspace == "simplicity-sys"
+              then checkVendoredC
+              else "" +
               ''
-              else ''
-                # Check whether C code is consistent with upstream
-                diff -r ${simplicitySrc}/C depend/simplicity/
-              '' + ''
-                export PATH=$PATH:${rustc}/bin:${gcc}/bin
+                export PATH=$PATH:${rustc}/bin:${gcc}/bin:${pkgs.cargo-criterion}/bin
                 export CARGO_TARGET_DIR=$PWD/target
                 export CARGO_HOME=${nixes.generated}/cargo
                 pushd ${nixes.generated}/crate
-                cargo clippy --locked # -- -D warnings # FIXME re-enable warnings
+                cargo clippy --locked -- -D warnings
                 cargo fmt --all -- --check
+                pushd jets-bench
+                  cargo clippy --locked -- -D warnings
+                  cargo test --locked
+                  cargo criterion --locked --no-run
                 popd
               '');
           };
+          fuzzTargets = map
+            (bin: bin.name)
+            (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
+          fuzzDrv = utils.cargoFuzzDrv {
+            normalDrv = nonFuzzDrv;
+            inherit projectName src lockFile nixes fuzzTargets;
+          };
         in
-        drv.overrideDerivation (drv: {
+        (if workspace == "simplicity-fuzz"
+        then fuzzDrv
+        else nonFuzzDrv).overrideAttrs (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;
@@ -147,23 +167,18 @@ in
   checkPr = utils.checkPr checkData;
   checkHead = utils.checkPr (checkData // rec {
     argsMatrices = map
-      (argsMtx: argsMtx // rec {
-        src =
-          let
-            isSys = argsMtx.projectName != "simplicity";
-            gitSrc = builtins.fetchGit {
-              allRefs = true;
-              url = jsonConfig.gitDir;
-              rev = singleRev;
-            };
-          in rec {
-              src = if isSys
-              then "${gitSrc}/simplicity-sys"
-              else gitSrc;
-              commitId = builtins.toString prNum;
-              shortId = "${builtins.substring 0 8 commitId}${lib.optionalString isSys "-sys"}";
-            };
-        isTip = x: true;
+      (argsMtx: argsMtx // {
+        src = rec {
+          src = builtins.fetchGit {
+            allRefs = true;
+            url = jsonConfig.gitDir;
+            rev = singleRev;
+          };
+          name = builtins.toString prNum;
+          shortId = name;
+          commitId = shortId;
+        };
+        isTip = { src, rustc }: rustc == builtins.head allRustcs;
       })
       checkData.argsMatrices;
   });

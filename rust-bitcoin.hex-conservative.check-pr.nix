@@ -131,7 +131,7 @@ let
             (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
           fuzzDrv = utils.cargoFuzzDrv {
             normalDrv = drv;
-            inherit projectName src nixes fuzzTargets;
+            inherit projectName src lockFile nixes fuzzTargets;
           };
         in
         if workspace == "hex-fuzz"
