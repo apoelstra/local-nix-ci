@@ -31,11 +31,11 @@ let
   lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
   mtxName = self: "${self.src.shortId}-${self.rustc.name}-${self.workspace}-${lockFileName self}-${builtins.concatStringsSep "," self.features}";
-  lockFileFn = [
+  lockFileFn1 = [
     (src: "${src.src}/Cargo-minimal.lock")
     (src: "${src.src}/Cargo-recent.lock")
   ];
-  lockFileFn1 = map (x: (src: /. + x)) jsonConfig.lockFiles;
+  lockFileFn = map (x: (src: /. + x)) jsonConfig.lockFiles;
   fullMatrix = {
     projectName = jsonConfig.repoName;
     inherit prNum srcName mtxName lockFileFn;
@@ -103,7 +103,7 @@ let
         inherit prNum srcName mtxName lockFileFn;
         isTip = false;
 
-        workspace = "bitcoin-internals";
+        workspace = "bitcoin-private";
         features = [
           [ ]
           [ "alloc" ]

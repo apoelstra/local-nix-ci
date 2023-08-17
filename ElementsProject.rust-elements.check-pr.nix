@@ -121,6 +121,7 @@ let
           checkPrPrNum = prNum;
           checkPrRustc = rustc;
           checkPrLockFile = lockFile;
+          checkPrWorkspace = workspace;
           checkPrFeatures = builtins.toJSON features;
           checkPrSrc = builtins.toJSON src;
         });

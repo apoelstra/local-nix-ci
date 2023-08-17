@@ -17,7 +17,7 @@ let
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.48.0".default
+    pkgs.rust-bin.stable."1.58.0".default
   ];
   isNightly = rustc: rustc == builtins.head allRustcs;
   gitCommits = utils.githubPrSrcs {
@@ -34,9 +34,10 @@ let
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
-    argsMatrices =
-    let baseMatrix = {
+    argsMatrices = [
+      {
         projectName = jsonConfig.repoName;
+        workspace = "elements-miniscript";
         inherit isTip srcName mtxName prNum;
 
         features = [
@@ -52,13 +53,31 @@ let
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
-      };
-    in [
-      baseMatrix
-      (baseMatrix // {
+      }
+
+/*
+      {
+        projectName = jsonConfig.repoName;
+        workspace = "bitcoind-tests";
+        inherit isTip srcName mtxName prNum;
+
+        features = [ [] ];
         rustc = builtins.head allRustcs;
-        features = map (x: x ++ ["unstable"]) baseMatrix.features;
-      })
+        lockFile = map (x: /. + x) jsonConfig.lockFiles;
+        src = gitCommits;
+      }
+*/ # Disabled until we update version of elementsd
+
+      {
+        projectName = jsonConfig.repoName;
+        workspace = "descriptor-fuzz";
+        inherit isTip srcName mtxName prNum;
+
+        features = [ [] ];
+        rustc = allRustcs;
+        lockFile = /. + builtins.head jsonConfig.lockFiles;
+        src = gitCommits;
+      }
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
@@ -67,6 +86,7 @@ let
       { projectName
       , prNum
       , isTip
+      , workspace
       , features
       , rustc
       , lockFile
@@ -78,13 +98,30 @@ let
       nixes:
         with pkgs;
         let
-          drv = nixes.called.rootCrate.build.override {
+          bitcoinSrc = (callPackage /home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
+          elementsSrc = (callPackage /home/apoelstra/code/ElementsProject/elements/default.nix {}).elements21;
+          fuzzTargets = map
+            (bin: bin.name)
+            (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
+          fuzzDrv = utils.cargoFuzzDrv {
+            normalDrv = drv;
+            inherit projectName src lockFile nixes fuzzTargets;
+          };
+          drv = nixes.called.workspaceMembers.${workspace}.build.override {
             inherit features;
             runTests = true;
             testPreRun = ''
               ${rustc}/bin/rustc -V
               ${rustc}/bin/cargo -V
-              echo "Features: ${builtins.toJSON features}"
+              echo "Tip: ${builtins.toString (isTip src)}"
+              echo "PR: ${prNum}"
+              echo "Commit: ${src.commitId}"
+              echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
+            '' + lib.optionalString (workspace == "bitcoind-tests") ''
+              export BITCOIND_EXE="${bitcoinSrc}/bin/bitcoind"
+              export ELEMENTSD_EXE="${elementsSrc}/bin/elementsd"
+              echo "Bitcoind exe: $BITCOIND_EXE"
+              echo "Elementsd exe: $ELEMENTSD_EXE"
             '';
             testPostRun =
               if isTip src && isNightly rustc
@@ -100,12 +137,15 @@ let
               else "";
           };
         in
-        drv.overrideDerivation (drv: {
+        (if workspace == "descriptor-fuzz" && isNightly rustc
+        then fuzzDrv
+        else drv).overrideAttrs (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;
           checkPrRustc = rustc;
           checkPrLockFile = lockFile;
+          checkPrWorkspace = workspace;
           checkPrFeatures = builtins.toJSON features;
           checkPrSrc = builtins.toJSON src;
         });
