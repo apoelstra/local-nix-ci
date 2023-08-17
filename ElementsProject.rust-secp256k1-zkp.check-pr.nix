@@ -14,13 +14,11 @@ let
   utils = import ./andrew-utils.nix { };
   tools-nix = pkgs.callPackage utils.tools-nix-path { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
-  allRustcs = map
-  (tchain: tchain.override { targets = [ "wasm32-unknown-unknown" ]; })
-  [
-#    (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
+  allRustcs = [
+    (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
     pkgs.rust-bin.stable.latest.default
-#    pkgs.rust-bin.beta.latest.default
-#    pkgs.rust-bin.stable."1.48.0".default
+    pkgs.rust-bin.beta.latest.default
+    pkgs.rust-bin.stable."1.48.0".default
   ];
   isNightly = rustc: rustc == builtins.head allRustcs;
   gitCommits = utils.githubPrSrcs {
@@ -33,17 +31,9 @@ let
   };
   lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
-  mtxName = self: "${self.src.shortId}-${self.workspace}-${self.rustc.name}-${lockFileName self}-${builtins.concatStringsSep "," (map (name: builtins.substring 0 8 name) self.features)}";
-  lockFileFn = [
-    (src: "${src.src}/Cargo-minimal.lock")
-    (src: "${src.src}/Cargo-recent.lock")
-  ];
+  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${lockFileName self}-${builtins.concatStringsSep "," (map (name: builtins.substring 0 8 name) self.features)}";
+  lockFileFn = map (x: (src: /. + x)) jsonConfig.lockFiles;
   isTip = src: src == builtins.head gitCommits;
-
-  libsecpSrc = fetchGit {
-    url = "https://github.com/bitcoin-core/secp256k1/";
-    ref = "master";
-  };
 
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
@@ -54,42 +44,17 @@ let
         projectName = jsonConfig.repoName;
         inherit isTip srcName mtxName prNum lockFileFn;
 
-        workspace = "secp256k1";
         features = [
           [ ]
           [ "std" ]
-          [ "alloc" ]
-          [ "hashes" ]
-          [ "hashes-std" ]
           [ "rand" ]
           [ "rand-std" ]
           [ "recovery" ]
           [ "lowmemory" ]
           [ "serde" ]
           [ "global-context" ]
-          [ "global-context-less-secure" ]
-          [ "global-context" "global-context-less-secure" ]
-          [ "std" "hashes" "hashes-std" "rand" "rand-std" "recovery" "lowmemory" "global-context" "global-context-less-secure" "serde" ]
-          [ "hashes" "rand" "recovery" "lowmemory" "global-context" "global-context-less-secure" "serde" ]
-        ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-
-
-      # secp256k1-sys
-      rec {
-        projectName = jsonConfig.repoName;
-        inherit isTip srcName mtxName prNum lockFileFn;
-
-        workspace = "secp256k1-sys";
-        features = [
-          [ ]
-          [ "lowmemory" ]
-          [ "recovery" ]
-          [ "alloc" ]
-          [ "std" ]
-          [ "std" "lowmemory" "recovery" ]
+          [ "std" "bitcoin_hashes" "rand" "rand-std" "recovery" "lowmemory" "global-context" "serde" ]
+          [ "bitcoin_hashes" "rand" "recovery" "lowmemory" "global-context" "serde" ]
         ];
         rustc = allRustcs;
         src = gitCommits;
@@ -100,7 +65,6 @@ let
         projectName = "final-checks";
         inherit isTip srcName mtxName prNum lockFileFn;
 
-        workspace = "secp256k1";
         features = [ [] ];
         rustc = builtins.head allRustcs;
         src = gitCommits;
@@ -115,7 +79,6 @@ let
       { projectName
       , prNum
       , isTip
-      , workspace
       , features
       , rustc
       , lockFileFn
@@ -130,13 +93,13 @@ let
           pkgs = import <nixpkgs> {
             overlays = [ (self: super: { inherit rustc; }) ];
           };
-          libsecpRevFile = builtins.readFile "${src.src}/secp256k1-sys/depend/secp256k1-HEAD-revision.txt";
+          libsecpRevFile = builtins.readFile "${src.src}/secp256k1-zkp-sys/depend/secp256k1-HEAD-revision.txt";
           libsecpSrc = builtins.fetchGit {
             allRefs = true;
-            url = "https://github.com/bitcoin-core/secp256k1/";
+            url = "https://github.com/ElementsProject/secp256k1-zkp/";
             rev = builtins.elemAt (builtins.split "\n" libsecpRevFile) 2;
           };
-          drv = nixes.called.workspaceMembers.${workspace}.build.override {
+          drv = nixes.called.rootCrate.build.override {
             inherit features;
             runTests = true;
             testPreRun = ''
@@ -149,18 +112,10 @@ let
           finalDrv = stdenv.mkDerivation {
             name = projectName;
             src = src.src;
-            buildInputs = [
-              rustc    # not from pkgs; this is an arg to singleCheckDrv
-              binaryen # for wasm: some sort of optimizer
-              clang_15 # for wasm: needs clang, and default (clang11) couldn't compile
-              nodejs   # for wasm: need node to run tests
-              pkgsi686Linux.glibc # for wasm: need stubs-32.h
-              wasm-pack # for wasm: build driver
-            ];
+            buildInputs = [ rustc ];
             phases = [ "unpackPhase" "buildPhase" ];
 
             buildPhase = ''
-              set -x
               cargo -V
               echo "Source: ${builtins.toJSON src}"
 
@@ -172,17 +127,8 @@ let
               #cargo fmt --all -- --check
               popd
 
-              # Do wasm-pack
-              #export WASM_PACK_CACHE=$PWD/wasm-pack-cache
-              #cp ${lockFileFn src} Cargo.lock
-              #cargo install wasm-bindgen-cli ## FIXME this line currently does not work since we need to vendor wasm-bindgen-cli somehow, of a version that matches wasm-bindgen (which is vendored)
-              #printf '\n[lib]\ncrate-type = ["cdylib", "rlib"]\n' >> Cargo.toml
-              #CC=clang wasm-pack build -- --locked
-              #CC=clang wasm-pack test --node -- --locked
-              #mv Cargo-old.toml Cargo.toml
-
               # Check whether C code is consistent with upstream
-              pushd secp256k1-sys
+              pushd secp256k1-zkp-sys
               patchShebangs ./vendor-libsecp.sh
               mkdir depend2/
               cp depend/*.patch depend/check_uint128_t.c depend2/
@@ -200,13 +146,14 @@ let
             '';
           };
         in
-        if projectName == "final-checks"
-        then finalDrv
-        else drv.overrideDerivation (drv: {
+#FIXME need to replace a couple 'git apply' lines with 'patch'
+#        if projectName == "final-checks"
+#        then finalDrv
+#        else
+drv.overrideDerivation (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;
-          checkPrWorkspace = workspace;
           checkPrRustc = rustc;
           checkPrFeatures = builtins.toJSON features;
           checkPrSrc = builtins.toJSON src;

@@ -18,7 +18,7 @@ let
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.48.0".default
+    pkgs.rust-bin.stable."1.58.0".default
   ];
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
@@ -100,9 +100,10 @@ let
             ${(import "${simplicitySrc}/default.nix" {}).haskell}/bin/GenRustJets
             diff jets_ffi.rs ./simplicity-sys/src/c_jets/jets_ffi.rs
             diff jets_wrapper.rs ./simplicity-sys/src/c_jets/jets_wrapper.rs
-            diff core.rs ./src/jet/init/core.rs
-            diff bitcoin.rs ./src/jet/init/bitcoin.rs
-            diff elements.rs ./src/jet/init/elements.rs
+            #FIXME reenable once we change `bitcoin_hashes` to `hashes` in Simplicity
+            #diff core.rs ./src/jet/init/core.rs
+            #diff bitcoin.rs ./src/jet/init/bitcoin.rs
+            #diff elements.rs ./src/jet/init/elements.rs
             rm jets_ffi.rs
             rm jets_wrapper.rs
             rm core.rs

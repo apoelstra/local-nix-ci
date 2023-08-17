@@ -78,15 +78,19 @@ let
       };
     in [
       baseMatrix
+/*
       (baseMatrix // {
         rustc = builtins.head allRustcs;
         features = map (x: x ++ ["unstable"]) baseMatrix.features;
       })
+*/
       nostdMatrix
+/*
       (nostdMatrix // {
         rustc = builtins.head allRustcs;
         features = map (x: x ++ ["unstable"]) baseMatrix.features;
       })
+*/
 
       {
         projectName = jsonConfig.repoName;
@@ -140,7 +144,7 @@ let
       }:
       nixes:
         let
-          bitcoinSrc = (pkgs.callPackage /home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
+          bitcoinSrc = (pkgs.callPackage /store/home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
           drv = nixes.called.workspaceMembers.${workspace}.build.override {
             inherit features;
             runTests = true;
@@ -177,7 +181,7 @@ let
               export CARGO_TARGET_DIR=$PWD/target
               export CARGO_HOME=${nixes.generated}/cargo
               pushd ${nixes.generated}/crate
-              cargo clippy --locked -- -A clippy::arc_with_non_send_sync # -- -D warnings
+              cargo clippy --locked -- -A clippy::incorrect_partial_ord_impl_on_ord_type -A clippy::arc_with_non_send_sync # -- -D warnings
               cargo fmt --all -- --check
               popd
 
@@ -187,7 +191,7 @@ let
         in
         (if projectName == "final-checks"
         then finalDrv
-        else if workspace == "descriptor-fuzz"
+        else if workspace == "descriptor-fuzz" && rustc == builtins.head allRustcs
         then fuzzDrv
         else drv).overrideAttrs (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok

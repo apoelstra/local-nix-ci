@@ -35,6 +35,10 @@ DRV_FILE=$(
 	"$GIT_DIR/../../check-pr.nix"
 )
 
+echo "$DRV_FILE"
+#echo "Sleeping 10s to let you copy/paste the drv file"
+#sleep 10
+
 OUT_FILE=$(
   nix-build \
 	--builders-use-substitutes \

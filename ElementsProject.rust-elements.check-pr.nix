@@ -82,8 +82,8 @@ let
       nixes:
         with pkgs;
         let
-          bitcoinSrc = (callPackage /home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
-          elementsSrc = (callPackage /home/apoelstra/code/ElementsProject/elements/default.nix {}).elements21;
+          bitcoinSrc = (callPackage /store/home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
+          elementsSrc = (callPackage /store/home/apoelstra/code/ElementsProject/elements/default.nix {}).elements21;
           drv = nixes.called.workspaceMembers.${workspace}.build.override {
             inherit features;
             runTests = true;
@@ -101,7 +101,7 @@ let
               echo "Elementsd exe: $ELEMENTSD_EXE"
             '';
             testPostRun =
-              if isTip src && isNightly rustc
+              (if isTip src && isNightly rustc
               then ''
                 export PATH=$PATH:${rustc}/bin:${gcc}/bin
                 export CARGO_TARGET_DIR=$PWD/target
@@ -112,7 +112,9 @@ let
                 #RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links" cargo doc --all-features
                 popd
               ''
-              else "";
+              else "") + ''
+                # ${pkgs.debianutils}/bin/run-parts $PWD/target/debug/examples # :( needs https://github.com/kolloch/crate2nix/issues/284
+              '';
           };
         in
         drv.overrideDerivation (drv: {

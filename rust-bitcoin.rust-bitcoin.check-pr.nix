@@ -174,7 +174,7 @@ let
 
             export CARGO_TARGET_DIR=$PWD/target
             pushd ${nixes.generated}/crate
-            CARGO_HOME=../cargo cargo clippy --locked -- -A clippy::incorrect_clone_impl_on_copy_type #  -- -D warnings
+            CARGO_HOME=../cargo cargo clippy --locked -- -A clippy::incorrect_partial_ord_impl_on_ord_type -A clippy::incorrect_clone_impl_on_copy_type #  -- -D warnings
             popd
           ''
           else "";
