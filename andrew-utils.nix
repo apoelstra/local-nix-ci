@@ -233,6 +233,7 @@ rec {
           if builtins.elem crate.crateName rootCrateIds
           then (pkgs.buildRustCrate crate).override {
             preUnpack = ''
+              set +x
               echo "Project name: ${projectName}"
               echo "PR number: ${builtins.toString prNum}"
               echo "rustc: ${builtins.toString rustc}"

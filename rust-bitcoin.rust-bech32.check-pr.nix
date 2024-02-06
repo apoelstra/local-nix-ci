@@ -42,9 +42,8 @@ let
 
         features = [
           [ ]
+          [ "alloc" ]
           [ "default" ]
-          [ "strict" ]
-          [ "default" "strict" ]
         ];
         rustc = allRustcs;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
@@ -58,7 +57,7 @@ let
 
         isTip = true;
 
-        features = [ [ "default" "strict" ] ];
+        features = [ [ "default" ] ];
         rustc = nightlyRustc;
         lockFile = /. + builtins.head jsonConfig.lockFiles;
         src = builtins.head gitCommits;
@@ -96,9 +95,17 @@ let
           testPostRun =
             if isTip
             then ''
-              export PATH=$PATH:${rustc}/bin
+              # These two export lines are needed for `cargo test --doc` (or more generally,
+              # cargo invocations that compile code). The first line allows rust-secp256k1
+              # to be built (otherwise fails "can't find cc"). The CARGO_HOME line avoids
+              # a "cannot find dependency mutagen" error, for reasons I don't really understand,
+              # but I must've understood at some point in the past, because I had this solution
+              # in rust-simplicity.
+              export PATH=$PATH:${rustc}/bin:${pkgs.gcc}/bin
+              export CARGO_HOME=${nixes.generated}/cargo # allows cargo test --doc to work
               cargo fmt --check
-              #cargo clippy #broken til #45 or #88
+              cargo test --doc
+              cargo clippy
             ''
             else "";
         };

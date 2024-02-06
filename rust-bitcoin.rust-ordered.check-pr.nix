@@ -40,29 +40,8 @@ let
 
         isTip = false;
 
-        workspace = "hex-conservative";
-        features = [
-          [ ]
-          [ "alloc" ]
-          [ "std" ]
-          [ "core2" ]
-          [ "core2" "alloc" ]
-          [ "core2" "std" ]
-        ];
+        features = [[]];
         rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
-        src = gitCommits;
-      }
-
-      {
-        projectName = jsonConfig.repoName;
-        inherit srcName mtxName prNum;
-
-        isTip = false;
-
-        workspace = "hex-fuzz";
-        features = [ [] ];
-        rustc = pkgs.rust-bin.stable."1.58.0".default;
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
@@ -74,8 +53,7 @@ let
 
         isTip = true;
 
-        workspace = "hex-conservative";
-        features = [ [ "default" "strict" ] ];
+        features = [[]];
         rustc = nightlyRustc;
         lockFile = /. + builtins.head jsonConfig.lockFiles;
         src = builtins.head gitCommits;
@@ -90,7 +68,6 @@ let
       { projectName
       , prNum
       , isTip
-      , workspace
       , features
       , rustc
       , lockFile
@@ -100,52 +77,26 @@ let
       ,
       }:
       nixes:
-        let
-          drv = nixes.called.workspaceMembers.${workspace}.build.override {
-            inherit features;
-            runTests = true;
-            testPreRun = ''
-              ${rustc}/bin/rustc -V
-              ${rustc}/bin/cargo -V
-              echo "Tip: ${builtins.toString isTip}"
-              echo "PR: ${prNum}"
-              echo "Commit: ${src.commitId}"
-              echo "Features: ${builtins.toJSON features}"
-            '';
-            testPostRun =
-              if isTip
-              then ''
-                export PATH=$PATH:${rustc}/bin:${pkgs.gcc}/bin
-                export CARGO_TARGET_DIR=$PWD/target
-                export CARGO_HOME=${nixes.generated}/cargo
-                pushd ${nixes.generated}/crate
-                cargo run --example hexy
-                cargo clippy --locked -- -D warnings
-                cargo fmt --all -- --check
-                popd
-              ''
-              else "";
-          };
-          fuzzTargets = map
-            (bin: bin.name)
-            (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
-          fuzzDrv = utils.cargoFuzzDrv {
-            normalDrv = drv;
-            inherit projectName src lockFile nixes fuzzTargets;
-          };
-        in
-        if workspace == "hex-fuzz"
-        then fuzzDrv
-        else drv.overrideDerivation (drv: {
-          # Add a bunch of stuff just to make the derivation easier to grok
-          checkPrProjectName = projectName;
-          checkPrPrNum = prNum;
-          checkPrRustc = rustc;
-          checkPrLockFile = lockFile;
-          checkPrFeatures = builtins.toJSON features;
-          checkPrWorkspace = workspace;
-          checkPrSrc = builtins.toJSON src;
-        });
+        nixes.called.rootCrate.build.override {
+          inherit features;
+          runTests = true;
+          testPreRun = ''
+            ${rustc}/bin/rustc -V
+            ${rustc}/bin/cargo -V
+            echo "Tip: ${builtins.toString isTip}"
+            echo "PR: ${prNum}"
+            echo "Commit: ${src.commitId}"
+            echo "Features: ${builtins.toJSON features}"
+          '';
+          testPostRun =
+            if isTip
+            then ''
+              export PATH=$PATH:${rustc}/bin
+              #cargo fmt --check
+              cargo clippy
+            ''
+            else "";
+        };
   };
 in
 {

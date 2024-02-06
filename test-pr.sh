@@ -46,6 +46,7 @@ OUT_FILE=$(
 	--no-out-link \
 	--keep-failed \
 	--keep-derivations \
+	--show-trace \
 	--keep-outputs \
 	--log-lines 100 \
 	--arg jsonConfigFile "$JSON" \
@@ -53,8 +54,8 @@ OUT_FILE=$(
 	--argstr singleRev "$COMMIT_ID" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix" \
-	--log-format internal-json -v \
-	2> >(nom --json)
+	#--log-format internal-json -v \
+	#2> >(nom --json)
 )
 
 # Add outputs to gc roots
@@ -74,7 +75,7 @@ done
 # Ack on github, if this is what we're supposed to do
 if [ "$TARGET" == "checkPr" ]; then
 	if [ "$ACK" == "ACK" ]; then
-		gh pr review "$PRNUM" -a -b "ACK $(git rev-parse "pr/$PRNUM/head")"
+		gh pr review "$PRNUM" -a -b "ACK $(git rev-parse "pr/$PRNUM/head") $3"
 	else
 		echo "Not ACKing because second arg was not the literal text ACK."
 	fi

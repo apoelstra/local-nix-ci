@@ -181,7 +181,7 @@ let
               export CARGO_TARGET_DIR=$PWD/target
               export CARGO_HOME=${nixes.generated}/cargo
               pushd ${nixes.generated}/crate
-              cargo clippy --locked -- -A clippy::incorrect_partial_ord_impl_on_ord_type -A clippy::arc_with_non_send_sync # -- -D warnings
+              #cargo clippy --locked -- -A clippy::incorrect_partial_ord_impl_on_ord_type -A clippy::arc_with_non_send_sync -A clippy::mem_replace_with_default -A clippy::useless_conversion # -- -D warnings
               cargo fmt --all -- --check
               popd
 

@@ -68,6 +68,7 @@ let
       }
 */ # Disabled until we update version of elementsd
 
+/*
       {
         projectName = jsonConfig.repoName;
         workspace = "descriptor-fuzz";
@@ -78,6 +79,7 @@ let
         lockFile = /. + builtins.head jsonConfig.lockFiles;
         src = gitCommits;
       }
+*/ # Disabled because there are link errors, I suspect related to weird fuzz stuff in rust-simplicity
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;

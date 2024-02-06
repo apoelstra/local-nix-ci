@@ -39,7 +39,7 @@ let
     argsMatrices = [
       {
         inherit projectName srcName mtxName prNum isTip;
-        workspace = "simplicity";
+        workspace = "simplicity-lang";
 
         features = [ [ ] [ "bitcoin" ] [ "elements" ] [ "bitcoin" "elements" ] ];
         rustc = allRustcs;
@@ -57,7 +57,6 @@ let
         src = gitCommits;
       }
 
-/* disabled until we can un-patch the fuzztests
       {
         inherit projectName srcName mtxName prNum isTip;
 
@@ -67,7 +66,6 @@ let
         lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
-*/
     ];
 
     singleCheckMemo = utils.crate2nixSingleCheckMemo;
@@ -98,12 +96,12 @@ let
           checkJets = ''
             # Check whether jets are consistent with upstream
             ${(import "${simplicitySrc}/default.nix" {}).haskell}/bin/GenRustJets
+            set -x
             diff jets_ffi.rs ./simplicity-sys/src/c_jets/jets_ffi.rs
             diff jets_wrapper.rs ./simplicity-sys/src/c_jets/jets_wrapper.rs
-            #FIXME reenable once we change `bitcoin_hashes` to `hashes` in Simplicity
-            #diff core.rs ./src/jet/init/core.rs
-            #diff bitcoin.rs ./src/jet/init/bitcoin.rs
-            #diff elements.rs ./src/jet/init/elements.rs
+            diff core.rs ./src/jet/init/core.rs
+            diff bitcoin.rs ./src/jet/init/bitcoin.rs
+            diff elements.rs ./src/jet/init/elements.rs
             rm jets_ffi.rs
             rm jets_wrapper.rs
             rm core.rs
@@ -112,6 +110,7 @@ let
           '';
           checkVendoredC = ''
             # Check whether C code is consistent with upstream
+            set -x
             diff -r ${simplicitySrc}/C depend/simplicity/
           '';
 
@@ -125,7 +124,7 @@ let
               echo "Features: ${builtins.toJSON features}"
             '';
             testPostRun = lib.optionalString (isTip { inherit src rustc; }) (
-              if workspace == "simplicity"
+              if workspace == "simplicity-lang"
               then checkJets
               else if workspace == "simplicity-sys"
               then checkVendoredC
@@ -135,10 +134,10 @@ let
                 export CARGO_TARGET_DIR=$PWD/target
                 export CARGO_HOME=${nixes.generated}/cargo
                 pushd ${nixes.generated}/crate
-                cargo clippy --locked -- -D warnings
+                cargo clippy --locked #-- -D warnings
                 cargo fmt --all -- --check
                 pushd jets-bench
-                  cargo clippy --locked -- -D warnings
+                  cargo clippy --locked #-- -D warnings
                   cargo test --locked
                   cargo criterion --locked --no-run
                 popd

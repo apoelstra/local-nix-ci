@@ -17,7 +17,7 @@ let
     (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.48.0".default
+    pkgs.rust-bin.stable."1.56.1".default
   ];
   isNightly = rustc: rustc == builtins.head allRustcs;
   gitCommits = utils.githubPrSrcs {
@@ -31,11 +31,11 @@ let
   lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
   mtxName = self: "${self.src.shortId}-${self.rustc.name}-${self.workspace}-${lockFileName self}-${builtins.concatStringsSep "," self.features}";
-  lockFileFn1 = [
+  lockFileFn = [
     (src: "${src.src}/Cargo-minimal.lock")
     (src: "${src.src}/Cargo-recent.lock")
   ];
-  lockFileFn = map (x: (src: /. + x)) jsonConfig.lockFiles;
+  lockFileFn1 = map (x: (src: /. + x)) jsonConfig.lockFiles;
   fullMatrix = {
     projectName = jsonConfig.repoName;
     inherit prNum srcName mtxName lockFileFn;
@@ -44,20 +44,21 @@ let
     workspace = "bitcoin";
     features = [
       [ "default" ]
+      [ "all-stable-features" ]
       [ "std" "rand-std" ]
       [ "std" "bitcoinconsenus-std" ]
       [ "std" "rand-std" "bitcoinconsenus-std" ]
       [ "default" "serde" "rand" ]
       [ "default" "base64" "serde" "rand" "rand-std" "secp-lowmemory" "bitcoinconsensus-std" ]
 
-      [ "no-std" ]
-      [ "no-std" "base64" ]
-      [ "no-std" "rand" ]
-      [ "no-std" "serde" ]
-      [ "no-std" "secp-lowmemory" ]
-      [ "no-std" "secp-recovery" ]
-      [ "no-std" "bitcoinconsenus" ]
-      [ "no-std" "secp-recovery" "secp-lowmemory" ]
+      [ "unstable" ]
+      [ "unstable" "base64" ]
+      [ "unstable" "rand" ]
+      [ "unstable" "serde" ]
+      [ "unstable" "secp-lowmemory" ]
+      [ "unstable" "secp-recovery" ]
+      [ "unstable" "bitcoinconsenus" ]
+      [ "unstable" "secp-recovery" "secp-lowmemory" ]
     ];
     rustc = allRustcs;
     src = gitCommits;
@@ -75,6 +76,21 @@ let
         rustc = allRustcs;
         src = builtins.head gitCommits;
       })
+
+      {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName lockFileFn;
+        isTip = false;
+
+        workspace = "bitcoin-io";
+        features = [
+          [ ]
+          [ "default" ]
+#          [ "alloc" ]
+        ];
+        rustc = allRustcs;
+        src = gitCommits;
+      }
 
       {
         projectName = jsonConfig.repoName;
@@ -103,7 +119,7 @@ let
         inherit prNum srcName mtxName lockFileFn;
         isTip = false;
 
-        workspace = "bitcoin-private";
+        workspace = "bitcoin-internals";
         features = [
           [ ]
           [ "alloc" ]
@@ -121,7 +137,7 @@ let
         isTip = true;
 
 #        workspace = [ "bitcoin" "bitcoin-private" "bitcoin_hashes" ];
-        workspace = [ "bitcoin" "bitcoin_hashes" ];
+        workspace = [ "bitcoin" "bitcoin-internals" "bitcoin_hashes" ];
         features = [ [ "default" ] ];
         rustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
         src = builtins.head gitCommits;
@@ -174,7 +190,7 @@ let
 
             export CARGO_TARGET_DIR=$PWD/target
             pushd ${nixes.generated}/crate
-            CARGO_HOME=../cargo cargo clippy --locked -- -A clippy::incorrect_partial_ord_impl_on_ord_type -A clippy::incorrect_clone_impl_on_copy_type #  -- -D warnings
+            CARGO_HOME=../cargo cargo clippy --locked -- -D warnings
             popd
           ''
           else "";
