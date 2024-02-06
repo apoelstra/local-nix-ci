@@ -34,6 +34,7 @@ let
         mtxName = self: "${self.src.shortId}-${self.attr}";
 
         attr = [ "coq" "haskell" "compcert" "vst" "pdf" ];
+#        attr = [ "coq" ];
         doCheck = null;
         wideMultiply = null;
         withCoverage = null;
@@ -59,7 +60,12 @@ let
     singleCheckDrv = { src, attr, doCheck, wideMultiply, withCoverage, production, env, srcName, mtxName }: dummy:
       let
         sourceDir = src.src;
-        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" { inherit doCheck wideMultiply withCoverage production; });
+        drv = builtins.getAttr attr (import "${sourceDir}/default.nix" {
+          inherit doCheck wideMultiply withCoverage production;
+          withProfiler = withCoverage;
+          withValgrind = !withCoverage; # The coverage tool does some bad memory things so it must be exclusive with valgrind
+          withTiming = false; # !withValgrind; # just leave at false since this is so flakey for me
+        });
         diffDrv = if attr == "haskell"
         then
           drv.overrideAttrs
