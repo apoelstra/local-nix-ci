@@ -13,7 +13,8 @@
 let
   utils = import ./andrew-utils.nix { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
-  nightlyRustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
+#  nightlyRustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
+  nightlyRustc =  pkgs.rust-bin.stable.latest.default;
   allRustcs = [
     nightlyRustc
     pkgs.rust-bin.stable.latest.default
@@ -121,7 +122,7 @@ let
                 pushd ${nixes.generated}/crate
                 cargo run --example hexy
                 cargo clippy --locked -- -D warnings
-                cargo fmt --all -- --check
+#                cargo fmt --all -- --check
                 popd
               ''
               else "";

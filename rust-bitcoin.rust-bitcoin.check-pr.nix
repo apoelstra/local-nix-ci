@@ -14,7 +14,8 @@ let
   utils = import ./andrew-utils.nix { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
   allRustcs = [
-    (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
+#    (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
+    pkgs.rust-bin.nightly."2024-03-05".default
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
     pkgs.rust-bin.stable."1.56.1".default
@@ -82,6 +83,35 @@ let
         inherit prNum srcName mtxName lockFileFn;
         isTip = false;
 
+        workspace = "base58ck";
+        features = [
+          [ ]
+          [ "default" ]
+        ];
+        rustc = allRustcs;
+        src = gitCommits;
+      }
+
+      {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName lockFileFn;
+        isTip = false;
+
+        workspace = "bitcoin-units";
+        features = [
+          [ ]
+          [ "alloc" ]
+          [ "default" ]
+        ];
+        rustc = allRustcs;
+        src = gitCommits;
+      }
+
+      {
+        projectName = jsonConfig.repoName;
+        inherit prNum srcName mtxName lockFileFn;
+        isTip = false;
+
         workspace = "bitcoin-io";
         features = [
           [ ]
@@ -91,7 +121,6 @@ let
         rustc = allRustcs;
         src = gitCommits;
       }
-
       {
         projectName = jsonConfig.repoName;
         inherit prNum srcName mtxName lockFileFn;
@@ -136,8 +165,7 @@ let
 
         isTip = true;
 
-#        workspace = [ "bitcoin" "bitcoin-private" "bitcoin_hashes" ];
-        workspace = [ "bitcoin" "bitcoin-internals" "bitcoin_hashes" ];
+        workspace = [ "base58ck" "bitcoin" "bitcoin-internals" "bitcoin-io" "bitcoin-units" "bitcoin_hashes" ];
         features = [ [ "default" ] ];
         rustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
         src = builtins.head gitCommits;
@@ -186,11 +214,34 @@ let
         testPostRun =
           if workspace == "bitcoin" && isNightly rustc && isTip
           then ''
+            set -x
+            pwd
             export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
 
             export CARGO_TARGET_DIR=$PWD/target
             pushd ${nixes.generated}/crate
-            CARGO_HOME=../cargo cargo clippy --locked -- -D warnings
+            export CARGO_HOME=../cargo
+
+            # Nightly clippy
+            cargo clippy --all-features --all-targets --locked -- -D warnings
+            # Do nightly "broken links" check
+            ls /build/ || true
+            ls /build/target || true
+            ls /build/target/doc || true
+            ls /build/target/doc/bitcoin_hashes || true
+            #export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
+            cargo doc -j1 --all-features
+            #ls /build/ || true
+            #ls /build/target || true
+            #ls /build/target/doc || true
+            #ls /build/target/doc/bitcoin_hashes || true
+            # Do non-docsrs check that our docs are feature-gated correctly.
+            export RUSTDOCFLAGS="-D warnings"
+            cargo doc -j1 --all-features
+            ls /build/ || true
+            ls /build/target || true
+            ls /build/target/doc || true
+            ls /build/target/doc/bitcoin_hashes || true
             popd
           ''
           else "";

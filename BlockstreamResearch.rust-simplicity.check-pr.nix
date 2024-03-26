@@ -30,45 +30,48 @@ let
   };
   projectName = jsonConfig.repoName;
   isTip = { src, rustc }: src == builtins.head gitCommits && rustc == builtins.head allRustcs;
+  lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
-  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${builtins.baseNameOf self.lockFile}-${builtins.concatStringsSep "," self.features}";
+  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${lockFileName self}-${builtins.concatStringsSep "," self.features}";
+  lockFileFn = [
+    (src: "${src.src}/Cargo-recent.lock")
+  ];
 
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
     argsMatrices = [
       {
-        inherit projectName srcName mtxName prNum isTip;
+        inherit projectName srcName mtxName prNum isTip lockFileFn;
         workspace = "simplicity-lang";
 
         features = [ [ ] [ "bitcoin" ] [ "elements" ] [ "bitcoin" "elements" ] ];
         rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
       {
-        inherit projectName srcName mtxName prNum isTip;
+        inherit projectName srcName mtxName prNum isTip lockFileFn;
         workspace = "simplicity-sys";
 
         features = [ [ ] [ "test-utils" ] ];
         rustc = allRustcs;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
 
       {
-        inherit projectName srcName mtxName prNum isTip;
+        inherit projectName srcName mtxName prNum isTip lockFileFn;
 
         workspace = "simplicity-fuzz";
         features = [ [] ];
         rustc = pkgs.rust-bin.stable."1.58.0".default;
-        lockFile = map (x: /. + x) jsonConfig.lockFiles;
         src = gitCommits;
       }
     ];
 
-    singleCheckMemo = utils.crate2nixSingleCheckMemo;
+    singleCheckMemo = attrs:
+      let tweakAttrs = attrs // { lockFile = attrs.lockFileFn attrs.src; };
+      in utils.crate2nixSingleCheckMemo tweakAttrs;
 
     singleCheckDrv =
       { projectName
@@ -76,7 +79,7 @@ let
       , workspace
       , features
       , rustc
-      , lockFile
+      , lockFileFn
       , src
       , isTip
       , srcName
@@ -109,9 +112,10 @@ let
             rm elements.rs
           '';
           checkVendoredC = ''
-            # Check whether C code is consistent with upstream
+            # Check whether C code is consistent with upstream, explicitly excluding
+            # simplicity_alloc.h which we need to rewrite for the Rust bindings.
             set -x
-            diff -r ${simplicitySrc}/C depend/simplicity/
+            diff -r -x simplicity_alloc.h ${simplicitySrc}/C depend/simplicity/
           '';
 
           nonFuzzDrv = nixes.called.workspaceMembers.${workspace}.build.override {
@@ -148,7 +152,8 @@ let
             (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
           fuzzDrv = utils.cargoFuzzDrv {
             normalDrv = nonFuzzDrv;
-            inherit projectName src lockFile nixes fuzzTargets;
+            lockFile = lockFileFn src;
+            inherit projectName src nixes fuzzTargets;
           };
         in
         (if workspace == "simplicity-fuzz"

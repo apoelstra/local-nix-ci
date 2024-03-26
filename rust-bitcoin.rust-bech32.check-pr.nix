@@ -18,7 +18,7 @@ let
     nightlyRustc
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.48.0".default
+    pkgs.rust-bin.stable."1.56.1".default
   ];
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
@@ -106,6 +106,8 @@ let
               cargo fmt --check
               cargo test --doc
               cargo clippy
+              RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links" cargo doc --all-features
+              RUSTDOCFLAGS="-D warnings" cargo doc --all-features
             ''
             else "";
         };
