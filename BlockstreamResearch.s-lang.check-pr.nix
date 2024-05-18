@@ -12,13 +12,14 @@
 }:
 let
   utils = import ./andrew-utils.nix { };
-  tools-nix = pkgs.callPackage utils.tools-nix-path { };
   jsonConfig = lib.trivial.importJSON jsonConfigFile;
+  nightlyRustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
+#   nightlyRustc = pkgs.rust-bin.nightly."2024-03-23".default;
   allRustcs = [
-    (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
+    nightlyRustc
     pkgs.rust-bin.stable.latest.default
     pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.56.1".default
+    pkgs.rust-bin.stable."1.61.0".default
   ];
   gitCommits = utils.githubPrSrcs {
     # This must be a .git directory, not a URL or anything, since githubPrCommits
@@ -28,44 +29,39 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
+  lockFileFn = [
+    (src: "${src.src}/Cargo.lock")
+  ];
   lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
   srcName = self: self.src.commitId;
   mtxName = self: "${self.src.shortId}-${self.rustc.name}-${lockFileName self}-${builtins.concatStringsSep "," self.features}";
-  lockFileFn = [
-    (src: "${src.src}/Cargo-minimal.lock")
-    (src: "${src.src}/Cargo-recent.lock")
-  ];
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
+
     argsMatrices = [
       {
-        inherit srcName mtxName prNum lockFileFn;
         projectName = jsonConfig.repoName;
+        inherit srcName mtxName prNum lockFileFn;
 
-        workspace = "bitcoincore-rpc-json";
-        features = [ [ ] [ "rand" ] [ "default" ] ];
+        isTip = false;
+
+        features = [[]];
         rustc = allRustcs;
         src = gitCommits;
       }
 
+      # Only tip
       {
-        inherit srcName mtxName prNum lockFileFn;
         projectName = jsonConfig.repoName;
+        inherit srcName prNum lockFileFn;
 
-        workspace = "bitcoincore-rpc";
-        features = [ [ ] [ "rand" ] [ "default" ] ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
+        isTip = true;
 
-      {
-        inherit srcName mtxName prNum lockFileFn;
-        projectName = jsonConfig.repoName;
+        features = [[]];
+        rustc = nightlyRustc;
+        src = builtins.head gitCommits;
 
-        workspace = "integration_test";
-        features = [ [ ] ];
-        rustc = allRustcs;
-        src = gitCommits;
+        mtxName = self: (mtxName self) + "-tip";
       }
     ];
 
@@ -76,53 +72,40 @@ let
     singleCheckDrv =
       { projectName
       , prNum
+      , isTip
+      , features
+      , rustc
+      , lockFileFn
       , src
       , srcName
       , mtxName
-      , workspace
-      , lockFileFn
-      , features
-      , rustc
+      ,
       }:
       nixes:
-        let
-          drv = nixes.called.workspaceMembers.${workspace}.build.override {
-            inherit features;
-            runTests = true;
-            testPreRun = ''
-              ${rustc}/bin/rustc -V
-              ${rustc}/bin/cargo -V
-              echo "PR: ${prNum}"
-              echo "Commit: ${src.commitId}"
-              echo "Features: ${builtins.toJSON features}"
-            '';
-            testPostRun = ''
-              export PATH=$PATH:${rustc}/bin:${pkgs.gcc}/bin
+        nixes.called.rootCrate.build.override {
+          inherit features;
+          runTests = true;
+          testPreRun = ''
+            ${rustc}/bin/rustc -V
+            ${rustc}/bin/cargo -V
+            echo "Tip: ${builtins.toString isTip}"
+            echo "PR: ${prNum}"
+            echo "Commit: ${src.commitId}"
+            echo "Features: ${builtins.toJSON features}"
+          '';
+          testPostRun =
+            if isTip
+            then ''
+              export PATH=$PATH:${rustc}/bin:${pkgs.gcc}/bin:${pkgs.cargo-criterion}/bin
               export CARGO_TARGET_DIR=$PWD/target
               export CARGO_HOME=${nixes.generated}/cargo
               pushd ${nixes.generated}/crate
-              #cargo clippy --locked -- -D warnings # 2024-04 there are a ton of clippy issues
+              #cargo fmt --check
+              cargo clippy --locked --all-features -- -D warnings
               popd
-            '';
-          };
-          fuzzTargets = map
-            (bin: bin.name)
-            (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
-          fuzzDrv = utils.cargoFuzzDrv {
-            normalDrv = drv;
-            lockFile = lockFileFn src;
-            inherit projectName src nixes fuzzTargets;
-          };
-        in drv.overrideDerivation (drv: {
-          # Add a bunch of stuff just to make the derivation easier to grok
-          checkPrProjectName = projectName;
-          checkPrPrNum = prNum;
-          checkPrRustc = rustc;
-          checkPrLockFile = lockFileFn src;
-          checkPrFeatures = builtins.toJSON features;
-          checkPrWorkspace = workspace;
-          checkPrSrc = builtins.toJSON src;
-        });
+            ''
+            else "";
+        };
   };
 in
 {

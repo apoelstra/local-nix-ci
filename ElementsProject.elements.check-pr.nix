@@ -117,7 +117,7 @@ let
         ''
         else if check == "check" then ''
           patchShebangs test/functional
-          ./test/functional/test_runner.py -j8
+          ./test/functional/test_runner.py -j1
         ''
         else "";
 

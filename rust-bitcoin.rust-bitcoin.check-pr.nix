@@ -242,6 +242,8 @@ let
             ls /build/target || true
             ls /build/target/doc || true
             ls /build/target/doc/bitcoin_hashes || true
+            # Check API
+
             popd
           ''
           else "";
