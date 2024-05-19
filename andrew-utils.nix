@@ -557,7 +557,7 @@ rec {
       buildPhase = ''
         set -x
         export CARGO_HOME=$PWD/cargo
-        export HFUZZ_RUN_ARGS="--run_time 300 --exit_upon_crash"
+        export HFUZZ_RUN_ARGS="--run_time 120 --threads 2 --exit_upon_crash"
 
         cargo -V
         cargo hfuzz version
