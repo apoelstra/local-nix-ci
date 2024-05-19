@@ -29,154 +29,68 @@ let
     gitUrl = jsonConfig.gitUrl;
     inherit prNum;
   };
-  lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
-  srcName = self: self.src.commitId;
-  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${self.workspace}-${lockFileName self}-${builtins.concatStringsSep "," self.features}";
-  lockFileFn = [
-    (src: "${src.src}/Cargo-minimal.lock")
-    (src: "${src.src}/Cargo-recent.lock")
+  lockFileName = path: builtins.unsafeDiscardStringContext (builtins.baseNameOf path);
+  srcName = { src, ... }: src.commitId;
+  mtxName = { src, rustc, workspace, features, lockFile, isTip, ... }: "${src.shortId}-${rustc.name}-${workspace}-${lockFileName lockFile}-${builtins.concatStringsSep "," features}${if isTip then "-tip" else ""}";
+  lockFile = { src, ... }: [
+    "${src.src}/Cargo-minimal.lock"
+    "${src.src}/Cargo-recent.lock"
   ];
-  lockFileFn1 = map (x: (src: /. + x)) jsonConfig.lockFiles;
   fullMatrix = {
     projectName = jsonConfig.repoName;
-    inherit prNum srcName mtxName lockFileFn;
-    isTip = false;
-
-    workspace = "bitcoin";
-    features = [
-      [ "default" ]
-      [ "all-stable-features" ]
-      [ "std" "rand-std" ]
-      [ "std" "bitcoinconsenus-std" ]
-      [ "std" "rand-std" "bitcoinconsenus-std" ]
-      [ "default" "serde" "rand" ]
-      [ "default" "base64" "serde" "rand" "rand-std" "secp-lowmemory" "bitcoinconsensus-std" ]
-
-      [ "unstable" ]
-      [ "unstable" "base64" ]
-      [ "unstable" "rand" ]
-      [ "unstable" "serde" ]
-      [ "unstable" "secp-lowmemory" ]
-      [ "unstable" "secp-recovery" ]
-      [ "unstable" "bitcoinconsenus" ]
-      [ "unstable" "secp-recovery" "secp-lowmemory" ]
-    ];
     rustc = allRustcs;
     src = gitCommits;
+
+    inherit prNum srcName mtxName lockFile;
+    isTip = { rustc, src, ... }:
+      rustc == builtins.head allRustcs && src == builtins.head gitCommits;
+
+    workspace = { src, ... }: (lib.trivial.importTOML "${src.src}/Cargo.toml").workspace.members;
+
+    features = { workspace, ... }: if workspace == "bitcoin" then [
+      [ "default" ]
+      [ "std" "rand-std" ]
+      [ "std" "bitcoinconsensus-std" ]
+      [ "std" "rand-std" "bitcoinconsensus-std" ]
+      [ "default" "serde" "rand" ]
+      [ "default" "base64" "serde" "rand" "rand-std" "secp-lowmemory" "bitcoinconsensus-std" ]
+    ]
+    else if workspace == "base58" then [
+      [ ]
+      [ "default" ]
+    ]
+    else if workspace == "hashes" then [
+      [ ]
+      [ "default" ]
+      [ "alloc" ]
+      [ "serde" ]
+      [ "std" "schemars" ] # Note schemars does NOT work with nostd
+      [ "std" "serde" ]
+      [ "std" "serde" "alloc" "schemars" ]
+    ]
+    else if workspace == "internals" then [
+      [ ]
+      [ "alloc" ]
+      [ "std" ]
+    ]
+    else if workspace == "io" then [
+      [ ]
+      [ "default" ]
+    ]
+    else if workspace == "units" then [
+      [ ]
+      [ "alloc" ]
+      [ "default" ]
+    ]
+    else if workspace == "fuzz" then [ [] ] # Fuzz is treated specially
+    else builtins.abort "Unknown workspace ${workspace}!";
   };
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
-    argsMatrices = [
-      (fullMatrix // {
-        isTip = false;
-        rustc = pkgs.rust-bin.stable.latest.default;
-      })
-      (fullMatrix // {
-        isTip = true;
-        rustc = allRustcs;
-        src = builtins.head gitCommits;
-      })
+    argsMatrices = [ fullMatrix ];
 
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName lockFileFn;
-        isTip = false;
-
-        workspace = "base58ck";
-        features = [
-          [ ]
-          [ "default" ]
-        ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName lockFileFn;
-        isTip = false;
-
-        workspace = "bitcoin-units";
-        features = [
-          [ ]
-          [ "alloc" ]
-          [ "default" ]
-        ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName lockFileFn;
-        isTip = false;
-
-        workspace = "bitcoin-io";
-        features = [
-          [ ]
-          [ "default" ]
-#          [ "alloc" ]
-        ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName lockFileFn;
-        isTip = false;
-
-        workspace = "bitcoin_hashes";
-        features = [
-          [ ]
-          [ "default" ]
-          [ "alloc" ]
-          [ "serde" ]
-          [ "std" "schemars" ] # Note schemars does NOT work with nostd
-          [ "std" "serde" ]
-          [ "std" "serde-std" ]
-          [ "serde-std" ]
-          [ "std" "serde-std" "alloc" ]
-          [ "std" "serde" "serde-std" "alloc" "schemars" ]
-        ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-
-      {
-        projectName = jsonConfig.repoName;
-        inherit prNum srcName mtxName lockFileFn;
-        isTip = false;
-
-        workspace = "bitcoin-internals";
-        features = [
-          [ ]
-          [ "alloc" ]
-          [ "std" ]
-        ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-
-      # Only tip
-      {
-        projectName = jsonConfig.repoName;
-        inherit srcName prNum lockFileFn;
-
-        isTip = true;
-
-        workspace = [ "base58ck" "bitcoin" "bitcoin-internals" "bitcoin-io" "bitcoin-units" "bitcoin_hashes" ];
-        features = [ [ "default" ] ];
-        rustc = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
-        src = builtins.head gitCommits;
-
-        mtxName = self: (mtxName self) + "-tip";
-      }
-    ];
-
-    singleCheckMemo = attrs:
-      let tweakAttrs = attrs // { lockFile = attrs.lockFileFn attrs.src; };
-      in utils.crate2nixSingleCheckMemo tweakAttrs;
+    singleCheckMemo = utils.crate2nixSingleCheckMemo;
 
     singleCheckDrv =
       { projectName
@@ -185,7 +99,7 @@ let
       , workspace
       , features
       , rustc
-      , lockFileFn
+      , lockFile
       , src
       , srcName
       , mtxName
@@ -196,58 +110,86 @@ let
         pkgs = import <nixpkgs> {
           overlays = [ (self: super: { inherit rustc; }) ];
         };
+        workspaceToml = lib.trivial.importTOML "${src.src}/${workspace}/Cargo.toml";
+        workspaceName = workspaceToml.package.name;
+        allowedFeatures = builtins.attrNames workspaceToml.features
+          ++ (if workspaceToml ? dependencies
+            then builtins.attrNames (lib.filterAttrs (_: opt: opt ? optional && opt.optional) workspaceToml.dependencies)
+            else [])
+          ++ [ "default" ];
+        drv = if ! lib.all (feat: lib.elem feat allowedFeatures) features
+        then builtins.abort "Feature list ${builtins.toString features} had feature not in TOML ${builtins.toString allowedFeatures}"
+        else nixes.called.workspaceMembers.${workspaceName}.build.override {
+          inherit features;
+          runTests = true;
+          testPreRun = ''
+            ${rustc}/bin/rustc -V
+            ${rustc}/bin/cargo -V
+            echo "Tip: ${builtins.toString isTip}"
+            echo "PR: ${prNum}"
+            echo "Commit: ${src.commitId}"
+            echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
+          '';
+          # cargo clippy runs on all workspaces at once, so rather than doing it
+          # repeatedly for every workspace, just choose one ("bitcoin") and only
+          # run it there..
+          testPostRun =
+            if workspace == "bitcoin" && isNightly rustc && isTip
+            then ''
+              set -x
+              pwd
+              export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
+
+              export CARGO_TARGET_DIR=$PWD/target
+              pushd ${nixes.generated}/crate
+              export CARGO_HOME=../cargo
+
+              # Nightly clippy
+              cargo clippy --all-features --all-targets --locked -- -D warnings
+              # Do nightly "broken links" check
+              ls /build/ || true
+              ls /build/target || true
+              ls /build/target/doc || true
+              ls /build/target/doc/bitcoin_hashes || true
+              #export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
+              cargo doc -j1 --all-features
+              #ls /build/ || true
+              #ls /build/target || true
+              #ls /build/target/doc || true
+              #ls /build/target/doc/bitcoin_hashes || true
+              # Do non-docsrs check that our docs are feature-gated correctly.
+              export RUSTDOCFLAGS="-D warnings"
+              cargo doc -j1 --all-features
+              ls /build/ || true
+              ls /build/target || true
+              ls /build/target/doc || true
+              ls /build/target/doc/bitcoin_hashes || true
+              # Check API
+
+              popd
+            ''
+            else "";
+        };
+        fuzzTargets = map
+          (bin: bin.name)
+          (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
+        fuzzDrv = utils.cargoFuzzDrv {
+          normalDrv = drv;
+          inherit projectName src lockFile nixes fuzzTargets;
+        };
       in
-      nixes.called.workspaceMembers.${workspace}.build.override {
-        inherit features;
-        runTests = true;
-        testPreRun = ''
-          ${rustc}/bin/rustc -V
-          ${rustc}/bin/cargo -V
-          echo "Tip: ${builtins.toString isTip}"
-          echo "PR: ${prNum}"
-          echo "Commit: ${src.commitId}"
-          echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
-        '';
-        # cargo clippy runs on all workspaces at once, so rather than doing it
-        # repeatedly for every workspace, just choose one ("bitcoin") and only
-        # run it there..
-        testPostRun =
-          if workspace == "bitcoin" && isNightly rustc && isTip
-          then ''
-            set -x
-            pwd
-            export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
-
-            export CARGO_TARGET_DIR=$PWD/target
-            pushd ${nixes.generated}/crate
-            export CARGO_HOME=../cargo
-
-            # Nightly clippy
-            cargo clippy --all-features --all-targets --locked -- -D warnings
-            # Do nightly "broken links" check
-            ls /build/ || true
-            ls /build/target || true
-            ls /build/target/doc || true
-            ls /build/target/doc/bitcoin_hashes || true
-            #export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
-            cargo doc -j1 --all-features
-            #ls /build/ || true
-            #ls /build/target || true
-            #ls /build/target/doc || true
-            #ls /build/target/doc/bitcoin_hashes || true
-            # Do non-docsrs check that our docs are feature-gated correctly.
-            export RUSTDOCFLAGS="-D warnings"
-            cargo doc -j1 --all-features
-            ls /build/ || true
-            ls /build/target || true
-            ls /build/target/doc || true
-            ls /build/target/doc/bitcoin_hashes || true
-            # Check API
-
-            popd
-          ''
-          else "";
-      };
+        if workspace == "fuzz"
+        then fuzzDrv
+        else drv.overrideDerivation (drv: {
+          # Add a bunch of stuff just to make the derivation easier to grok
+          checkPrProjectName = projectName;
+          checkPrPrNum = prNum;
+          checkPrRustc = rustc;
+          checkPrLockFile = lockFile;
+          checkPrFeatures = builtins.toJSON features;
+          checkPrWorkspace = workspace;
+          checkPrSrc = builtins.toJSON src;
+        });
   };
 in
 {
@@ -265,6 +207,7 @@ in
           shortId = builtins.toString prNum;
           commitId = builtins.toString prNum;
         };
+        isTip = true;
       })
       checkData.argsMatrices;
   });

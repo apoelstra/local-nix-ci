@@ -7,7 +7,7 @@
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
-# Only used by checkHEad, not checkPr
+# Only used by checkHead, not checkPr
 , singleRev ? prNum
 }:
 let

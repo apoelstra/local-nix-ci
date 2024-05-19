@@ -8,9 +8,44 @@ rec {
   # Laziness means this is only called when used
   tools-nix = nixpkgs.callPackage tools-nix-path { };
 
+  # Takes a JSON configuration file which should have the keys:
+  #
+  #   `gitDir`: a path to a *local* .git directory to be used as a commit db
+  #   `gitURL`: (optional) a URL to download the actual commits from
+  #   `repoName`: name of the repository, used in various outputs
+  #   `lockFiles`: (optional) array of paths to fixed lockfiles.
+  #
+  # Will attempt to use lockfiles from within the repository itself (looking
+  # for Cargo.lock, Cargo-recent.lock, Cargo-minimal.lock, and using all the
+  # ones it finds). *Only if none are present*, will use the `lockFiles` JSON
+  # key.
+  parseRustConfig =
+    { jsonConfigFile
+    , prNum
+    }:
+    let
+      lib = nixpkgs.lib;
+      jsonConfig = lib.trivial.importJSON jsonConfigFile;
+
+      _1 = assert jsonConfig ? gitDir && builtins.pathExists (/. + jsonConfig.gitDir); "gitDir must be present and be a local path";
+      _2 = assert (jsonConfig ? gitUrl) -> builtins.isString jsonConfig.gitUrl; "gitUrl must be a string";
+      _3 = assert jsonConfig ? repoName && builtins.isString jsonConfig.repoName; "repoName must be present and be a string";
+      _4 = assert (jsonConfig ? lockFiles) -> builtins.isList jsonConfig.lockFiles; "lockFiles must be a list";
+    in
+    {
+      fallbackLockFiles = jsonConfig.lockFiles or [];
+      gitCommits = githubPrSrcs {
+        gitDir = /. + jsonConfig.gitDir;
+        gitUrl = jsonConfig.gitUrl or jsonConfig.gitDir;
+        inherit prNum;
+      };
+    };
+
   # Given a set with a set of list-valued attributes, explode it into
   # a list of sets with every possible combination of attributes. If
-  # any attribute is a non-list it is treated as a single-valued list.
+  # an attribute is a function, it is evaluated with the set of all
+  # non-function attributes (which will be exploded before the function
+  # ones).
   #
   # Ex: matrix { a = [1 2 3]; b = [true false]; c = "Test" }
   #
@@ -26,19 +61,32 @@ rec {
       appendKeyVal = e: k: v: e // builtins.listToAttrs [{ name = k; value = v; }];
       addNames = currentSets: prevNames: origSet:
         let
-          newSet = builtins.removeAttrs origSet prevNames;
+          newSet = lib.filterAttrs (k: _: !lib.elem k prevNames) origSet;
           newKeys = builtins.attrNames newSet;
         in
         if newKeys == [ ]
         then currentSets
         else
           let
-            nextKey = builtins.head newKeys;
-            nextVal = builtins.getAttr nextKey origSet;
-            newSets =
-              if builtins.isList nextVal
-              then builtins.concatLists (map (v: map (s: appendKeyVal s nextKey v) currentSets) nextVal)
-              else map (s: appendKeyVal s nextKey nextVal) currentSets;
+            evaluateValue = s: v: if builtins.isFunction v then v s else v;
+            expandValue = v: if builtins.isList v then v else [ v ];
+            # We want to choose the next attribute such that, if it is a function,
+            # then all of its inputs have already been evaluated.
+            availableKeys = builtins.filter (k:
+              let
+                origVal = origSet.${k};
+                isFunc = builtins.isFunction origVal;
+                funcArgs = if isFunc
+                  then builtins.functionArgs origVal
+                  else {};
+              in lib.all (name: lib.elem name prevNames) (builtins.attrNames funcArgs)
+              ) newKeys;
+            nextKey = builtins.trace { keys = newKeys; done = prevNames;} builtins.head availableKeys;
+            nextVal = origSet.${nextKey};
+            newSets = builtins.concatMap (s: map
+                (v: appendKeyVal s nextKey v)
+                (expandValue (evaluateValue s nextVal))
+              ) currentSets;
           in
           addNames newSets (prevNames ++ [ nextKey ]) origSet;
     in
@@ -183,7 +231,7 @@ rec {
             inherit memo;
             link = rec {
               path = singleCheckDrv mtx memoTable.${memo.name};
-              name = "${mtx.srcName mtx}/${mtx.mtxName mtx}--${derivationName path}";
+              name = "${mtx.srcName}/${mtx.mtxName}--${derivationName path}";
             };
           }
         )
@@ -262,6 +310,9 @@ rec {
       };
     };
 
+  # Derivation which wraps an existing derivation (which should be e.g. something that
+  # runs tests in the fuzz/ directory) in one that runs cargo-hfuzz on a series of
+  # targets.
   cargoFuzzDrv = {
     normalDrv
   , projectName
