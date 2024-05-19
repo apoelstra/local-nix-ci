@@ -54,6 +54,12 @@ rec {
   #   { a = 2; b = true; c = "Test" }
   #   ...
   #   { a = 3; b = false; c = "Test" } ]
+  #
+  # Despite the complexity of this function and the fact that its runtime
+  # is exponential in the number of args, worst-case, it runs very quickly
+  # and is probably not worth further optimization. The slowness (and "too
+  # many open files" failures) come from call sot singleCheckMemo, which
+  # does the crate2nix IFD).
   matrix =
     let
       pkgs = import <nixpkgs> { };
@@ -81,7 +87,7 @@ rec {
                   else {};
               in lib.all (name: lib.elem name prevNames) (builtins.attrNames funcArgs)
               ) newKeys;
-            nextKey = builtins.trace { keys = newKeys; done = prevNames;} builtins.head availableKeys;
+            nextKey = builtins.head availableKeys;
             nextVal = origSet.${nextKey};
             newSets = builtins.concatMap (s: map
                 (v: appendKeyVal s nextKey v)
@@ -170,6 +176,7 @@ rec {
         };
         commitId = commit;
         shortId = builtins.substring 0 8 commit;
+        isTIp = commit == builtins.head bareCommits;
       })
       bareCommits;
 
@@ -247,6 +254,13 @@ rec {
   # Note that EVERY INPUT TO THIS FUNCTION MUST BE ADDED TO generatedCargoNix. If it is
   # not, the memoization logic will collapse all the different values for that input
   # into one.
+  #
+  # During evaluation, this method is by far the slowest, since it is doing an IFD of
+  # a crate2nix call. A single run takes several seconds, and the number of times it
+  # is run is the product of the number of possibilities for each input. So "global"
+  # values like `projectNAme` and `prNum` are free, but for each commit in `src`,
+  # it will be run 4 (number of rustcs) times 2 (number of lockfiles), and if you
+  # add any more arguments, it will be multiplied again.
   crate2nixSingleCheckMemo =
     { projectName
     , prNum
@@ -305,8 +319,8 @@ rec {
     {
       name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
       value = {
-        generated = generatedCargoNix;
-        called = calledCargoNix;
+        generated = builtins.trace "return generatedCargoNix" generatedCargoNix;
+        called = builtins.trace "return calledCargoNix" calledCargoNix;
       };
     };
 

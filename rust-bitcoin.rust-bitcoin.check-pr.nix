@@ -43,7 +43,7 @@ let
 
     inherit prNum srcName mtxName lockFile;
     isTip = { rustc, src, ... }:
-      rustc == builtins.head allRustcs && src == builtins.head gitCommits;
+      rustc == builtins.head allRustcs && src.isTip;
 
     workspace = { src, ... }: (lib.trivial.importTOML "${src.src}/Cargo.toml").workspace.members;
 
@@ -206,8 +206,8 @@ in
           name = builtins.toString prNum;
           shortId = builtins.toString prNum;
           commitId = builtins.toString prNum;
+          isTip = true;
         };
-        isTip = true;
       })
       checkData.argsMatrices;
   });
