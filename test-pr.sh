@@ -30,7 +30,6 @@ DRV_FILE=$(
   nix-instantiate \
 	--arg jsonConfigFile "$JSON" \
 	--argstr prNum "$PRNUM" \
-	--argstr singleRev "$COMMIT_ID" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix"
 )
@@ -51,11 +50,10 @@ OUT_FILE=$(
 	--log-lines 100 \
 	--arg jsonConfigFile "$JSON" \
 	--argstr prNum "$PRNUM" \
-	--argstr singleRev "$COMMIT_ID" \
 	-A "$TARGET" \
 	"$GIT_DIR/../../check-pr.nix" \
-	#--log-format internal-json -v \
-	#2> >(nom --json)
+#	--log-format internal-json -v \
+#	2> >(nom --json)
 )
 
 # Add outputs to gc roots

@@ -33,13 +33,55 @@ rec {
       _4 = assert (jsonConfig ? lockFiles) -> builtins.isList jsonConfig.lockFiles; "lockFiles must be a list";
     in
     {
+      projectName = jsonConfig.repoName;
       fallbackLockFiles = jsonConfig.lockFiles or [];
       gitCommits = githubPrSrcs {
         gitDir = /. + jsonConfig.gitDir;
-        gitUrl = jsonConfig.gitUrl or jsonConfig.gitDir;
+        # Setting gitUrl is intended to provide an alternate source for
+        # git repos, which when building remotely results in a large
+        # speedup. But it also means that we can't test commits that
+        # only exist on the local machine (e.g. git merges). Eventually
+        # we should detect this case, but for now just disable the
+        # feature.
+        #gitUrl = jsonConfig.gitUrl or jsonConfig.gitDir;
         inherit prNum;
       };
     };
+
+  # Takes a `src` object (as returned from `srcFromCommit`) and determines
+  # the set of rustcs to test it with.
+  rustcsForSrc = src:
+    let
+      pkgs = import <nixpkgs> {
+        overlays = [
+          (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
+        ];
+      };
+      msrv = if src.clippyToml != null && src.clippyToml ? msrv
+        then pkgs.rust-bin.fromRustupToolchain { channel = src.clippyToml.msrv; }
+        else builtins.trace "warning - no clippy.toml, using 1.56.1 as MSRV" pkgs.rust-bin.stable."1.56.1".default;
+      nightly = if src.nightlyVersion != null
+        then pkgs.rust-bin.fromRustupToolchain { channel = builtins.elemAt (builtins.match "([^\r\n]+)\r?\n?" src.nightlyVersion) 0; }
+        else builtins.trace "warning - no rust-version, using latest nightly" (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default));
+    in [
+      nightly
+      pkgs.rust-bin.stable.latest.default
+      pkgs.rust-bin.beta.latest.default
+      msrv
+    ];
+
+  # Determines whether a given rustc is a nightly rustc.
+  rustcIsNightly = rustc: !builtins.isNull (builtins.match "nightly-([0-9]+-[0-9]+-[0-9]+)" rustc.version);
+
+  # Takes a `src` object (as returned from `srcFromCommit`) and determines
+  # the set of lockfiles to test it with.
+  lockFilesForSrc = { src, fallbackLockFiles }:
+    let
+      listIfExists = x: if builtins.pathExists x then [ x ] else [];
+      srcLockFiles = (listIfExists "${src.src}/Cargo-minimal.lock")
+        ++ (listIfExists "${src.src}/Cargo-recent.lock");
+    in
+      if srcLockFiles == [] then fallbackLockFiles else srcLockFiles;
 
   # Given a set with a set of list-valued attributes, explode it into
   # a list of sets with every possible combination of attributes. If
@@ -62,7 +104,7 @@ rec {
   # does the crate2nix IFD).
   matrix =
     let
-      pkgs = import <nixpkgs> { };
+      pkgs = nixpkgs;
       lib = pkgs.lib;
       appendKeyVal = e: k: v: e // builtins.listToAttrs [{ name = k; value = v; }];
       addNames = currentSets: prevNames: origSet:
@@ -98,6 +140,29 @@ rec {
     in
     addNames [{ }] [ ];
 
+  # Utility to obtain the basename of a path without trying to evaluate
+  # the derivation that it came from.
+  lockFileName = path: builtins.unsafeDiscardStringContext (builtins.baseNameOf path);
+
+  # A bunch of "standard" matrix functions useful for Rust projects
+  standardRustMatrixFns = jsonConfig: {
+    projectName = jsonConfig.projectName;
+    src = jsonConfig.gitCommits;
+
+    # Only inherit this if your project has workspaces.
+    workspace = { src, ... }: (nixpkgs.lib.trivial.importTOML "${src.src}/Cargo.toml").workspace.members;
+
+    rustc = { src, ... }: rustcsForSrc src;
+    lockFile = { src, ...}: lockFilesForSrc {
+      inherit src;
+      fallbackLockFiles = jsonConfig.fallbackLockFiles;
+    };
+    srcName = { src, ... }: src.commitId;
+    mtxName = { src, rustc, workspace, features, lockFile, isTip, ... }: "${src.shortId}-${rustc.name}-${workspace}-${lockFileName lockFile}-${builtins.concatStringsSep "," features}${if isTip then "-tip" else ""}";
+    isTip = { rustc, src, ... }:
+      rustcIsNightly rustc && src.isTip;
+  };
+
   # Given a git directory (the .git directory) and a PR number, obtain a list of
   # commits corresponding to that PR. Assumes that the refs pr/${prNum}/head and
   # pr/${prNum}/merge both exist.
@@ -126,15 +191,25 @@ rec {
         set -e
         export GIT_DIR="${gitDir}"
 
+        HEAD_COMMIT="pr/${builtins.toString prNum}/head"
+        if ! git rev-parse --verify --quiet "$HEAD_COMMIT^{commit}"; then
+          echo "Head commit $HEAD_COMMIT not found in git dir $GIT_DIR."
+
+          BARE_COMMIT="${builtins.toString prNum}"
+          if ! git rev-parse --verify --quiet "$BARE_COMMIT^{commit}"; then
+            echo "Bare $BARE_COMMIT also does not appear to be a commit ID."
+            exit 1
+          fi
+
+          mkdir -p "$out"
+          BARE_COMMIT=$(git rev-parse "$BARE_COMMIT^{commit}")
+          echo "pkgs: { gitCommits = [ \"$BARE_COMMIT\" ]; }" > "$out/default.nix";
+          exit 0
+        fi
+
         MERGE_COMMIT="pr/${builtins.toString prNum}/merge"
         if ! git rev-parse --verify --quiet "$MERGE_COMMIT^{commit}"; then
           echo "Merge commit $MERGE_COMMIT not found in git dir $GIT_DIR."
-          exit 1
-        fi
-
-        HEAD_COMMIT="pr/${builtins.toString prNum}/head"
-        if ! git rev-parse --verify --quiet "$HEAD_COMMIT^{commit}"; then
-          echo "Merge commit $HEAD_COMMIT not found in git dir $GIT_DIR."
           exit 1
         fi
 
@@ -148,6 +223,38 @@ rec {
 
         echo ']; }' >> "$out/default.nix"
       '';
+    };
+
+  # Given a commit ID, fetch it and obtain relevant data for the CI system.
+  #
+  # Throughout this code, a "src" refers to the set returned by this function.
+  srcFromCommit =
+    { commit
+    , isTip
+    , gitUrl
+    , ref ? "master"
+    }:
+    rec {
+      src = builtins.fetchGit {
+        url = gitUrl;
+        inherit ref;
+        rev = commit;
+        allRefs = true;
+      };
+      commitId = commit;
+      shortId = builtins.substring 0 8 commit;
+      inherit isTip;
+
+      # Rust-specific stuff.
+      clippyToml = if builtins.pathExists "${src}/clippy.toml" then
+        nixpkgs.lib.trivial.importTOML "${src}/clippy.toml"
+      else null;
+      cargoToml = if builtins.pathExists "${src}/Cargo.toml" then
+        nixpkgs.lib.trivial.importTOML "${src}/Cargo.toml"
+      else null;
+      nightlyVersion = if builtins.pathExists "${src}/nightly-version" then
+        builtins.readFile "${src}/nightly-version"
+      else null;
     };
 
   # Wrapper of githubPrCommits that actually calls the derivation to obtain the list of
@@ -168,17 +275,11 @@ rec {
       bareCommits = (import (githubPrCommits { inherit gitDir prNum; }) { }).gitCommits;
     in
     map
-      (commit: {
-        src = builtins.fetchGit {
-          url = gitUrl;
-          ref = "refs/pull/${builtins.toString prNum}/head";
-          rev = commit;
-        };
-        commitId = commit;
-        shortId = builtins.substring 0 8 commit;
-        isTIp = commit == builtins.head bareCommits;
-      })
-      bareCommits;
+      (commit: srcFromCommit {
+        inherit commit gitUrl;
+        isTip = (commit == builtins.head bareCommits);
+#        ref = "refs/pull/${builtins.toString prNum}/head";
+      }) bareCommits;
 
   derivationName = drv:
     builtins.unsafeDiscardStringContext (builtins.baseNameOf (builtins.toString drv));
@@ -186,7 +287,7 @@ rec {
   # Given a bunch of data, do a full PR check.
   #
   # name is a string that will be used as the name of the total linkFarm
-  # argsMatrices should be a list of "argument matrices", which are arbitrary-shaped
+  # argsMatrix should be an "argument matrix", which is an arbitrary-shaped
   #  sets, which will be exploded so that any list-typed fields will be turned into
   #  multiple sets, each of which has a different element from the list in place of
   #  that field. See documentation for 'matrix' for more information.
@@ -219,13 +320,13 @@ rec {
   # different.
   checkPr =
     { name
-    , argsMatrices
+    , argsMatrix
     , singleCheckDrv
     , singleCheckMemo ? x: { name = ""; value = null; }
     ,
     }:
     let
-      mtxs = builtins.concatMap matrix argsMatrices;
+      mtxs = matrix argsMatrix;
       # This twisty memoAndLinks logic is due to roconnor. It avoids computing
       # memo.name (which is potentially expensive) twice, which would be needed
       # if we first computing memoTable "normally" and then later indexed into
@@ -319,10 +420,111 @@ rec {
     {
       name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
       value = {
-        generated = builtins.trace "return generatedCargoNix" generatedCargoNix;
-        called = builtins.trace "return calledCargoNix" calledCargoNix;
+        generated = generatedCargoNix;
+        called = calledCargoNix;
       };
     };
+
+  # A value of singleCheckDrv useful for Rust projects. Should be used with
+  # `crate2nixSingleCheckMemo`.
+  crate2nixSingleCheckDrv =
+    { projectName
+    , prNum
+    , isTip
+    , workspace ? null
+    , features
+    , rustc
+    , lockFile
+    , src
+    , srcName
+    , mtxName
+    , runClippy ? true
+    , runDocs ? true
+    ,
+    }:
+    nixes:
+    let
+      pkgs = import <nixpkgs> {
+        overlays = [ (self: super: { inherit rustc; }) ];
+      };
+      lib = pkgs.lib;
+
+      cargoToml = if workspace == null
+        then lib.trivial.importTOML "${src.src}/Cargo.toml"
+        else lib.trivial.importTOML "${src.src}/${workspace}/Cargo.toml";
+
+      allowedFeatures = builtins.attrNames cargoToml.features
+        ++ (if cargoToml ? dependencies
+          then builtins.attrNames (lib.filterAttrs (_: opt: opt ? optional && opt.optional) cargoToml.dependencies)
+          else [])
+        ++ [ "default" ];
+
+      crate2nixDrv = if workspace == null
+        then nixes.called.rootCrate.build
+        else nixes.called.workspaceMembers.${cargoToml.package.name}.build;
+
+      drv = if ! lib.all (feat: lib.elem feat allowedFeatures) features
+        then builtins.abort "Feature list ${builtins.toString features} had feature not in TOML ${builtins.toString allowedFeatures}"
+        else crate2nixDrv.override {
+          inherit features;
+          runTests = true;
+          testPreRun = ''
+            ${rustc}/bin/rustc -V
+            ${rustc}/bin/cargo -V
+            echo "PR: ${projectName} #${prNum}"
+            echo "Commit: ${src.commitId}"
+            echo "Tip: ${builtins.toString isTip}"
+            echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
+            echo "Lockfile: ${lockFile}"
+            echo
+            echo "Run clippy: ${builtins.toString runClippy}"
+            echo "Run docs: ${builtins.toString runDocs}"
+          '';
+          testPostRun =
+            if workspace == "bitcoin" && isTip
+            then ''
+              set -x
+              pwd
+              export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
+
+              export CARGO_TARGET_DIR=$PWD/target
+              pushd ${nixes.generated}/crate
+              export CARGO_HOME=../cargo
+            '' ++ lib.optionalString runClippy ''
+              # Nightly clippy
+              cargo clippy --all-features --all-targets --locked -- -D warnings
+            '' ++ lib.optionalString runDocs ''
+              # Do nightly "broken links" check
+              export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
+              cargo doc -j1 --all-features
+              # Do non-docsrs check that our docs are feature-gated correctly.
+              export RUSTDOCFLAGS="-D warnings"
+              cargo doc -j1 --all-features
+            '' ++ ''
+              popd
+            ''
+            else "";
+        };
+        fuzzTargets = map
+          (bin: bin.name)
+          (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
+        fuzzDrv = cargoFuzzDrv {
+          normalDrv = drv;
+          inherit projectName src lockFile nixes fuzzTargets;
+        };
+      in
+        if cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz
+        then fuzzDrv
+        else drv.overrideDerivation (drv: {
+          # Add a bunch of stuff just to make the derivation easier to grok
+          checkPrProjectName = projectName;
+          checkPrPrNum = prNum;
+          checkPrRustc = rustc;
+          checkPrLockFile = lockFile;
+          checkPrFeatures = builtins.toJSON features;
+          checkPrWorkspace = workspace;
+          checkPrSrc = builtins.toJSON src;
+        });
 
   # Derivation which wraps an existing derivation (which should be e.g. something that
   # runs tests in the fuzz/ directory) in one that runs cargo-hfuzz on a series of
