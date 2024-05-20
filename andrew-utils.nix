@@ -83,6 +83,51 @@ rec {
     in
       if srcLockFiles == [] then fallbackLockFiles else srcLockFiles;
 
+  # Given a list of features
+  featuresForSrc = { include ? [], exclude ? [] }: { src, cargoToml, ... }:
+    let
+      randBit = name:
+        let
+          seed = builtins.hashString "sha256" (src.commitId + name);
+          seed0 = builtins.substring 0 1 seed;
+          bit = builtins.elem seed0 [ "0" "1" "2" "3" "4" "5" "6" "7" ];
+        in bit;
+
+      lib = nixpkgs.lib;
+      mapToTrue = set: builtins.mapAttrs (_: _: true) set;
+
+      cargoFeatures = { default = true; } // (if cargoToml ? features
+        then mapToTrue cargoToml.features
+        else {});
+      optionalDeps = if cargoToml ? dependencies
+        then mapToTrue (lib.filterAttrs (_: opt: opt ? optional && opt.optional) cargoToml.dependencies)
+        else {};
+
+      allFeatures = lib.filterAttrs (name: _: ! builtins.elem name exclude) (cargoFeatures // optionalDeps);
+      allFeatureNames = builtins.attrNames allFeatures;
+
+      result =
+        [
+          # Randoms
+          (builtins.filter (name: randBit name) allFeatureNames)
+          (builtins.filter (name: randBit ("0" + name)) allFeatureNames)
+          # Nothing and everything
+          []
+          allFeatureNames
+        ]
+        # Each individual feature in isolation.
+        ++ (map (feat: [ feat ]) allFeatureNames)
+        # Explicitly included things.
+        ++ include;
+    in
+      # This function is supposed to make a list of lists, and because this
+      # is hard to keep track of with all the maps and stuff flying around,
+      # we do a bunch of assertions here.
+      assert builtins.all builtins.isList include;
+      assert builtins.isList exclude;
+      assert builtins.all builtins.isList result;
+      result;
+
   # Given a set with a set of list-valued attributes, explode it into
   # a list of sets with every possible combination of attributes. If
   # an attribute is a function, it is evaluated with the set of all
@@ -140,27 +185,47 @@ rec {
     in
     addNames [{ }] [ ];
 
-  # Utility to obtain the basename of a path without trying to evaluate
-  # the derivation that it came from.
-  lockFileName = path: builtins.unsafeDiscardStringContext (builtins.baseNameOf path);
-
   # A bunch of "standard" matrix functions useful for Rust projects
-  standardRustMatrixFns = jsonConfig: {
-    projectName = jsonConfig.projectName;
-    src = jsonConfig.gitCommits;
-
-    # Only inherit this if your project has workspaces.
-    workspace = { src, ... }: (nixpkgs.lib.trivial.importTOML "${src.src}/Cargo.toml").workspace.members;
-
-    rustc = { src, ... }: rustcsForSrc src;
-    lockFile = { src, ...}: lockFilesForSrc {
+  standardRustMatrixFns =
+  let
+    lib = nixpkgs.lib;
+    allLockFiles = { src, jsonConfig }: lockFilesForSrc {
       inherit src;
       fallbackLockFiles = jsonConfig.fallbackLockFiles;
     };
+    lockFileName = path: builtins.unsafeDiscardStringContext (builtins.baseNameOf path);
+    featuresName = features: "feat-" + builtins.substring
+      0 8
+      (builtins.hashString "sha256" (builtins.concatStringsSep "," features));
+  in jsonConfig: {
+    projectName = jsonConfig.projectName;
+    src = jsonConfig.gitCommits;
+
+    mainCargoToml = { src, ... }: lib.trivial.importTOML "${src.src}/Cargo.toml";
+    workspace = { mainCargoToml, ... }:
+      if mainCargoToml ? workspace
+        then mainCargoToml.workspace.members
+        else null;
+
+    # If there are no include/exclude rules for the crate, you can just inherit this.
+    features = featuresForSrc {};
+
+    cargoToml = { workspace, mainCargoToml, src, ... }: if workspace == null
+      then mainCargoToml
+      else lib.trivial.importTOML "${src.src}/${workspace}/Cargo.toml";
+
+    rustc = { src, ... }: rustcsForSrc src;
+    lockFile = { src, ...}: allLockFiles { inherit src jsonConfig; };
     srcName = { src, ... }: src.commitId;
-    mtxName = { src, rustc, workspace, features, lockFile, isTip, ... }: "${src.shortId}-${rustc.name}-${workspace}-${lockFileName lockFile}-${builtins.concatStringsSep "," features}${if isTip then "-tip" else ""}";
-    isTip = { rustc, src, ... }:
-      rustcIsNightly rustc && src.isTip;
+    mtxName = { src, rustc, workspace, features, lockFile, ... }: "${src.shortId}-${rustc.name}-${workspace}-${lockFileName lockFile}-${featuresName features}${if src.isTip then "-tip" else ""}";
+
+    isMainLockFile = { src, lockFile, ... }: lockFile == builtins.head (allLockFiles { inherit src jsonConfig; });
+    isMainWorkspace = { mainCargoToml, workspace, ... }:
+      (workspace == null || workspace == builtins.head mainCargoToml.workspace.members);
+
+    # Clippy runs with --all-targets so we only need to run it on one workspace.
+    runClippy = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
+    runDocs = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
   };
 
   # Given a git directory (the .git directory) and a PR number, obtain a list of
@@ -430,8 +495,11 @@ rec {
   crate2nixSingleCheckDrv =
     { projectName
     , prNum
-    , isTip
+    , isMainLockFile
+    , isMainWorkspace
     , workspace ? null
+    , mainCargoToml
+    , cargoToml
     , features
     , rustc
     , lockFile
@@ -449,61 +517,49 @@ rec {
       };
       lib = pkgs.lib;
 
-      cargoToml = if workspace == null
-        then lib.trivial.importTOML "${src.src}/Cargo.toml"
-        else lib.trivial.importTOML "${src.src}/${workspace}/Cargo.toml";
-
-      allowedFeatures = builtins.attrNames cargoToml.features
-        ++ (if cargoToml ? dependencies
-          then builtins.attrNames (lib.filterAttrs (_: opt: opt ? optional && opt.optional) cargoToml.dependencies)
-          else [])
-        ++ [ "default" ];
-
       crate2nixDrv = if workspace == null
         then nixes.called.rootCrate.build
         else nixes.called.workspaceMembers.${cargoToml.package.name}.build;
 
-      drv = if ! lib.all (feat: lib.elem feat allowedFeatures) features
-        then builtins.abort "Feature list ${builtins.toString features} had feature not in TOML ${builtins.toString allowedFeatures}"
-        else crate2nixDrv.override {
-          inherit features;
-          runTests = true;
-          testPreRun = ''
-            ${rustc}/bin/rustc -V
-            ${rustc}/bin/cargo -V
-            echo "PR: ${projectName} #${prNum}"
-            echo "Commit: ${src.commitId}"
-            echo "Tip: ${builtins.toString isTip}"
-            echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
-            echo "Lockfile: ${lockFile}"
-            echo
-            echo "Run clippy: ${builtins.toString runClippy}"
-            echo "Run docs: ${builtins.toString runDocs}"
-          '';
-          testPostRun =
-            if workspace == "bitcoin" && isTip
-            then ''
-              set -x
-              pwd
-              export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
+      drv = crate2nixDrv.override {
+        inherit features;
+        runTests = true;
+        testPreRun = ''
+          ${rustc}/bin/rustc -V
+          ${rustc}/bin/cargo -V
+          echo "PR: ${projectName} #${prNum}"
+          echo "Commit: ${src.commitId}"
+          echo "Tip: ${builtins.toString src.isTip}"
+          echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
+          echo "Lockfile: ${lockFile}"
+          echo
+          echo "Run clippy: ${builtins.toString runClippy}"
+          echo "Run docs: ${builtins.toString runDocs}"
+        '';
+        testPostRun =
+          if rustcIsNightly rustc && src.isTip && isMainWorkspace
+          then ''
+            set -x
+            pwd
+            export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
 
-              export CARGO_TARGET_DIR=$PWD/target
-              pushd ${nixes.generated}/crate
-              export CARGO_HOME=../cargo
-            '' ++ lib.optionalString runClippy ''
-              # Nightly clippy
-              cargo clippy --all-features --all-targets --locked -- -D warnings
-            '' ++ lib.optionalString runDocs ''
-              # Do nightly "broken links" check
-              export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
-              cargo doc -j1 --all-features
-              # Do non-docsrs check that our docs are feature-gated correctly.
-              export RUSTDOCFLAGS="-D warnings"
-              cargo doc -j1 --all-features
-            '' ++ ''
-              popd
-            ''
-            else "";
+            export CARGO_TARGET_DIR=$PWD/target
+            pushd ${nixes.generated}/crate
+            export CARGO_HOME=../cargo
+          '' ++ lib.optionalString runClippy ''
+            # Nightly clippy
+            cargo clippy --all-features --all-targets --locked -- -D warnings
+          '' ++ lib.optionalString runDocs ''
+            # Do nightly "broken links" check
+            export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
+            cargo doc -j1 --all-features
+            # Do non-docsrs check that our docs are feature-gated correctly.
+            export RUSTDOCFLAGS="-D warnings"
+            cargo doc -j1 --all-features
+          '' ++ ''
+            popd
+          ''
+          else "";
         };
         fuzzTargets = map
           (bin: bin.name)
@@ -513,7 +569,7 @@ rec {
           inherit projectName src lockFile nixes fuzzTargets;
         };
       in
-        if cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz
+        if rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz
         then fuzzDrv
         else drv.overrideDerivation (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok

@@ -7,52 +7,19 @@ let
   jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
   fullMatrix = {
     inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig) projectName src rustc lockFile srcName mtxName isTip workspace;
+    inherit (utils.standardRustMatrixFns jsonConfig) projectName src rustc lockFile srcName mtxName isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml runClippy runDocs;
 
-    features = { workspace, ... }: if workspace == "bitcoin" then [
-      [ ]
-      [ "default" ]
-      [ "std" "rand-std" ]
-      [ "std" "bitcoinconsensus-std" ]
-      [ "std" "rand-std" "bitcoinconsensus-std" ]
-      [ "default" "serde" "rand" ]
-      [ "default" "base64" "serde" "rand" "rand-std" "secp-lowmemory" "bitcoinconsensus-std" ]
-      [ "serde" "rand" ]
-      [ "base64" "serde" "rand" "secp-lowmemory" "bitcoinconsensus" ]
-    ]
-    else if workspace == "base58" then [
-      [ ]
-      [ "default" ]
-    ]
-    else if workspace == "hashes" then [
-      [ ]
-      [ "default" ]
-      [ "alloc" ]
-      [ "serde" ]
-      [ "std" "schemars" ] # Note schemars does NOT work with nostd
-      [ "std" "serde" ]
-      [ "std" "serde" "alloc" "schemars" ]
-    ]
-    else if workspace == "internals" then [
-      [ ]
-      [ "alloc" ]
-      [ "std" ]
-    ]
-    else if workspace == "io" then [
-      [ ]
-      [ "default" ]
-    ]
-    else if workspace == "units" then [
-      [ ]
-      [ "alloc" ]
-      [ "default" ]
-    ]
-    else if workspace == "fuzz" then [ [] ] # Fuzz is treated specially
-    else builtins.abort "Unknown workspace ${workspace}!";
-
-    # Clippy runs with --all-targets so we only need to run it on one workspace.
-    runClippy = { workspace, isTip, ... }: workspace == "bitcoin" && isTip;
-    runDocs = { workspace, isTip, ... }: workspace == "bitcoin" && isTip;
+    features = { src, cargoToml, workspace, ... }:
+      if workspace == "bitcoin"
+      then utils.featuresForSrc { exclude = [ "actual-serde" ]; } { inherit src cargoToml; }
+      # schemars does not work with nostd, so exclude it from
+      # the standard list and test it separately.
+      else if workspace == "hashes"
+      then utils.featuresForSrc {
+        include = [ [ "std" "schemars" ] ];
+        exclude = [ "actual-serde" "schemars" ];
+      } { inherit src cargoToml; }
+      else utils.featuresForSrc {} { inherit src cargoToml; };
   };
 
   checkData = rec {
