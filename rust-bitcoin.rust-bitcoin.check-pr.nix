@@ -20,6 +20,8 @@ let
         exclude = [ "actual-serde" "schemars" ];
       } { inherit src cargoToml; }
       else utils.featuresForSrc {} { inherit src cargoToml; };
+
+      runFmt = false;
   };
 
   checkData = rec {

@@ -34,7 +34,7 @@ rec {
     in
     {
       projectName = jsonConfig.repoName;
-      fallbackLockFiles = jsonConfig.lockFiles or [];
+      fallbackLockFiles = map (x: /. + x) jsonConfig.lockFiles or [];
       gitCommits = githubPrSrcs {
         gitDir = /. + jsonConfig.gitDir;
         # Setting gitUrl is intended to provide an alternate source for
@@ -84,7 +84,7 @@ rec {
       if srcLockFiles == [] then fallbackLockFiles else srcLockFiles;
 
   # Given a list of features
-  featuresForSrc = { include ? [], exclude ? [] }: { src, cargoToml, ... }:
+  featuresForSrc = { needsNoStd ? false, include ? [], exclude ? [] }: { src, cargoToml, ... }:
     let
       randBit = name:
         let
@@ -126,7 +126,9 @@ rec {
       assert builtins.all builtins.isList include;
       assert builtins.isList exclude;
       assert builtins.all builtins.isList result;
-      result;
+      if needsNoStd
+      then map (fs: if builtins.elem "std" fs then fs else fs ++ ["no-std"]) result
+      else result;
 
   # Given a set with a set of list-valued attributes, explode it into
   # a list of sets with every possible combination of attributes. If
@@ -226,6 +228,7 @@ rec {
     # Clippy runs with --all-targets so we only need to run it on one workspace.
     runClippy = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
     runDocs = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
+    runFmt = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
   };
 
   # Given a git directory (the .git directory) and a PR number, obtain a list of
@@ -462,11 +465,11 @@ rec {
           then (pkgs.buildRustCrate crate).override {
             preUnpack = ''
               set +x
-              echo "Project name: ${projectName}"
-              echo "PR number: ${builtins.toString prNum}"
-              echo "rustc: ${builtins.toString rustc}"
-              echo "lockFile: ${lockFile}"
-              echo "Source: ${builtins.toJSON src}"
+              echo 'Project name: ${projectName}'
+              echo 'PR number: ${builtins.toString prNum}'
+              echo 'rustc: ${builtins.toString rustc}'
+              echo 'lockFile: ${lockFile}'
+              echo 'Source: ${builtins.toJSON src}'
             '';
           }
           else pkgs.buildRustCrate crate;
@@ -508,6 +511,7 @@ rec {
     , mtxName
     , runClippy ? true
     , runDocs ? true
+    , runFmt ? false
     ,
     }:
     nixes:
@@ -516,6 +520,10 @@ rec {
         overlays = [ (self: super: { inherit rustc; }) ];
       };
       lib = pkgs.lib;
+
+      # Used by bitcoind-tests in miniscript and corerpc; rather than
+      # detecting whether this is needed, we just always pull it in.
+      bitcoinSrc = (pkgs.callPackage /store/home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
 
       crate2nixDrv = if workspace == null
         then nixes.called.rootCrate.build
@@ -535,6 +543,11 @@ rec {
           echo
           echo "Run clippy: ${builtins.toString runClippy}"
           echo "Run docs: ${builtins.toString runDocs}"
+
+          # Always pull this in; though it is usually not needed.
+          echo
+          export BITCOIND_EXE="${bitcoinSrc}/bin/bitcoind"
+          echo "Bitcoind exe: $BITCOIND_EXE"
         '';
         testPostRun =
           if rustcIsNightly rustc && src.isTip && isMainWorkspace
@@ -556,6 +569,8 @@ rec {
             # Do non-docsrs check that our docs are feature-gated correctly.
             export RUSTDOCFLAGS="-D warnings"
             cargo doc -j1 --all-features
+          '' ++ lib.optionalString runFmt ''
+            cargo fmt --all -- --check
           '' ++ ''
             popd
           ''
