@@ -79,7 +79,8 @@ rec {
     let
       listIfExists = x: if builtins.pathExists x then [ x ] else [];
       srcLockFiles = (listIfExists "${src.src}/Cargo-minimal.lock")
-        ++ (listIfExists "${src.src}/Cargo-recent.lock");
+        ++ (listIfExists "${src.src}/Cargo-recent.lock")
+        ++ (listIfExists "${src.src}/Cargo.lock");
     in
       if srcLockFiles == [] then fallbackLockFiles else srcLockFiles;
 
@@ -207,6 +208,7 @@ rec {
     workspace = { mainCargoToml, ... }:
       if mainCargoToml ? workspace
         then mainCargoToml.workspace.members
+          ++ (if mainCargoToml ? package then [ "." ] else [])
         else null;
 
     # If there are no include/exclude rules for the crate, you can just inherit this.
@@ -219,7 +221,7 @@ rec {
     rustc = { src, ... }: rustcsForSrc src;
     lockFile = { src, ...}: allLockFiles { inherit src jsonConfig; };
     srcName = { src, ... }: src.commitId;
-    mtxName = { src, rustc, workspace, features, lockFile, ... }: "${src.shortId}-${rustc.name}-${workspace}-${lockFileName lockFile}-${featuresName features}${if src.isTip then "-tip" else ""}";
+    mtxName = { src, rustc, workspace, features, lockFile, ... }: "${src.shortId}-${rustc.name}${if isNull workspace then "" else "-" + workspace}-${lockFileName lockFile}-${featuresName features}${if src.isTip then "-tip" else ""}";
 
     isMainLockFile = { src, lockFile, ... }: lockFile == builtins.head (allLockFiles { inherit src jsonConfig; });
     isMainWorkspace = { mainCargoToml, workspace, ... }:
@@ -512,7 +514,8 @@ rec {
     , runClippy ? true
     , runDocs ? true
     , runFmt ? false
-    ,
+    , extraTestPostRun ? ""
+    , ...
     }:
     nixes:
     let
@@ -538,7 +541,8 @@ rec {
           echo "PR: ${projectName} #${prNum}"
           echo "Commit: ${src.commitId}"
           echo "Tip: ${builtins.toString src.isTip}"
-          echo "Workspace ${workspace} / Features: ${builtins.toJSON features}"
+          echo "Workspace: ${if isNull workspace then "[no workspaces]" else workspace}"
+          echo "Features: ${builtins.toJSON features}"
           echo "Lockfile: ${lockFile}"
           echo
           echo "Run clippy: ${builtins.toString runClippy}"
@@ -548,33 +552,39 @@ rec {
           echo
           export BITCOIND_EXE="${bitcoinSrc}/bin/bitcoind"
           echo "Bitcoind exe: $BITCOIND_EXE"
+
+          # We have "cannot find libstdc++" issues when compiling
+          # rust-bitcoin with bitcoinconsensus on and rustc nightly
+          # from 2024-05-22 onward (did not occur on 2024-05-04;
+          # intermediate versions not tested due to rustc #124800).
+          #
+          # Possible culprit: https://blog.rust-lang.org/2024/05/17/enabling-rust-lld-on-linux.html
+          export LD_LIBRARY_PATH=${stdenv.cc.cc.lib}/lib/
         '';
-        testPostRun =
-          if rustcIsNightly rustc && src.isTip && isMainWorkspace
-          then ''
+        testPostRun = ''
             set -x
             pwd
             export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
+            export NIXES_GENERATED_DIR=${nixes.generated}/
 
             export CARGO_TARGET_DIR=$PWD/target
             pushd ${nixes.generated}/crate
             export CARGO_HOME=../cargo
-          '' ++ lib.optionalString runClippy ''
+          '' + lib.optionalString runClippy ''
             # Nightly clippy
             cargo clippy --all-features --all-targets --locked -- -D warnings
-          '' ++ lib.optionalString runDocs ''
+          '' + lib.optionalString runDocs ''
             # Do nightly "broken links" check
             export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
             cargo doc -j1 --all-features
             # Do non-docsrs check that our docs are feature-gated correctly.
             export RUSTDOCFLAGS="-D warnings"
             cargo doc -j1 --all-features
-          '' ++ lib.optionalString runFmt ''
+          '' + lib.optionalString runFmt ''
             cargo fmt --all -- --check
-          '' ++ ''
+          '' + ''
             popd
-          ''
-          else "";
+          '' + extraTestPostRun;
         };
         fuzzTargets = map
           (bin: bin.name)

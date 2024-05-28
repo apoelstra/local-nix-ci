@@ -1,61 +1,33 @@
-{ pkgs ? import <nixpkgs> {
-    overlays = [
-      (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
-    ];
-  }
+{ pkgs ? import <nixpkgs> { }
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
 , prNum
-# Only used by checkHEad, not checkPr
-, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
-  jsonConfig = lib.trivial.importJSON jsonConfigFile;
-  gitCommits = utils.githubPrSrcs {
-    # This must be a .git directory, not a URL or anything, since githubPrCommits
-    # well set the GIT_DIR env variable to it before calling git commands. The
-    # intention is for this to be run locally.
-    gitDir = /. + jsonConfig.gitDir;
-    gitUrl = jsonConfig.gitUrl;
-    inherit prNum;
-  };
+  jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
   benchmarkSrc = builtins.fetchurl {
     url = "https://gist.githubusercontent.com/sanket1729/0bf92ab9b2d17895d4afdfe3a85bdf70/raw/a0c8cf0f08e07945d8fcc04640bf567a9ba9f368/jet_benches.json";
     sha256 = "1f2gdgvr5lfj3anzrs13hhcvdyfcz6dy2vy5p136hn5z3kzidnhk";
   };
   checkData = rec {
-    name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
+    name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
 
-    argsMatrices = [
-      {
-        srcName = self: self.src.commitId;
-        mtxName = self: "${self.src.shortId}-${self.attr}";
+    argsMatrix = {
+      srcName = { src, ... }: src.commitId;
+      mtxName = { src, attr, wideMultiply, env, withCoverage, ... }: if attr == "c"
+        then "${src.shortId}-${attr}-${builtins.toString wideMultiply}-${env}-cov-${builtins.toString withCoverage}"
+        else "${src.shortId}-${attr}";
 
-        attr = [ "coq" "haskell" "compcert" "vst" "pdf" ];
-#        attr = [ "coq" ];
-        doCheck = null;
-        wideMultiply = null;
-        withCoverage = null;
-        production = null;
-        env = null;
-        src = gitCommits;
-      }
-
-      {
-        srcName = self: self.src.commitId;
-        mtxName = self: "${self.src.shortId}-${self.attr}-${builtins.toString self.wideMultiply}-${self.env}-cov-${builtins.toString self.withCoverage}";
-
-        attr = "c";
-        doCheck = [ false true ];
-        wideMultiply = [ null "int64" "int128" "int128_struct" ];
-        withCoverage = [ false true ];
-        production = [ false true ];
-        env = [ "stdenv" "clangStdenv" ];
-        src = gitCommits;
-      }
-    ];
+      attr = [ "c" "coq" "haskell" "compcert" "vst" "pdf" ];
+      doCheck = { attr, ... }: if attr == "c" then [ false true ] else null;
+      wideMultiply = { attr, ... }: if attr == "c" then [ null "int64" "int128" "int128_struct" ] else null;
+      withCoverage = { attr, ... }: if attr == "c" then [ false true ] else null;
+      production = { attr, ... }: if attr == "c" then [ false true ] else null;
+      env = { attr, ... }: if attr == "c" then [ "stdenv" "clangStdenv" ] else null;
+      src = jsonConfig.gitCommits;
+    };
 
     singleCheckDrv = { src, attr, doCheck, wideMultiply, withCoverage, production, env, srcName, mtxName }: dummy:
       let
@@ -128,20 +100,5 @@ let
 in
 {
   checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr (checkData // {
-    argsMatrices = map
-      (argsMtx: argsMtx // {
-        src = rec {
-          src = builtins.fetchGit {
-            allRefs = true;
-            url = jsonConfig.gitDir;
-            rev = singleRev;
-          };
-          name = builtins.toString prNum;
-          shortId = name;
-          commitId = shortId;
-        };
-      })
-      checkData.argsMatrices;
-  });
+  checkHead = utils.checkPr checkData;
 }
