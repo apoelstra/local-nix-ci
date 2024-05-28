@@ -231,6 +231,10 @@ rec {
     runClippy = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
     runDocs = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
     runFmt = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
+    # This more-than-doubles the build time (vs not including it, in which case
+    # we default to false). So this should be inherited in crates where the total
+    # runtime is otherwise really fast, but probably not worthwhile otherwise.
+    releaseMode = [ false true ];
   };
 
   # Given a git directory (the .git directory) and a PR number, obtain a list of
@@ -422,7 +426,7 @@ rec {
   #
   # Assumes that your matrix has entries projectName, prNum, rustc, lockFile, src.
   #
-  # Note that EVERY INPUT TO THIS FUNCTION MUST BE ADDED TO generatedCargoNix. If it is
+  # Note that EVERY INPUT TO THIS FUNCTION MUST BE ADDED TO memoName. If it is
   # not, the memoization logic will collapse all the different values for that input
   # into one.
   #
@@ -438,6 +442,8 @@ rec {
     , rustc
     , lockFile
     , src
+    # We have some should_panic tests in rust-bitcoin that fail in release mode
+    , releaseMode ? false
     , ...
     }:
     let
@@ -446,8 +452,10 @@ rec {
           inherit rustc;
         }) ];
       };
+      memoName = builtins.unsafeDiscardStringContext
+        "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}-${builtins.toString rustc}-${lockFile}";
       generatedCargoNix = tools-nix.generatedCargoNix {
-        name = "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}-${builtins.toString rustc}";
+        name = memoName;
         src = src.src;
         overrideLockFile = lockFile;
       };
@@ -467,6 +475,7 @@ rec {
           then (pkgs.buildRustCrate crate).override {
             preUnpack = ''
               set +x
+              echo "[buildRustCrate override]"
               echo 'Project name: ${projectName}'
               echo 'PR number: ${builtins.toString prNum}'
               echo 'rustc: ${builtins.toString rustc}'
@@ -475,8 +484,7 @@ rec {
             '';
           }
           else pkgs.buildRustCrate crate;
-        # We have some should_panic tests in rust-bitcoin that fail in release mode
-        release = false;
+        release = releaseMode;
       };
       rootCrateIds =
         (if calledCargoNix ? rootCrate
@@ -488,9 +496,9 @@ rec {
         
     in
     {
-      name = builtins.unsafeDiscardStringContext (builtins.toString generatedCargoNix);
+      name = memoName;
       value = {
-        generated = generatedCargoNix;
+        generated = builtins.trace "Evaluating generaed ${memoName}" generatedCargoNix;
         called = calledCargoNix;
       };
     };
@@ -514,6 +522,7 @@ rec {
     , runClippy ? true
     , runDocs ? true
     , runFmt ? false
+    , releaseMode ? false
     , extraTestPostRun ? ""
     , ...
     }:
@@ -547,6 +556,7 @@ rec {
           echo
           echo "Run clippy: ${builtins.toString runClippy}"
           echo "Run docs: ${builtins.toString runDocs}"
+          echo "Release mode: ${builtins.toString releaseMode}"
 
           # Always pull this in; though it is usually not needed.
           echo

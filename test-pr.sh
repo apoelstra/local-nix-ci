@@ -23,10 +23,14 @@ else
 fi
 
 # Do actual build
+export NIX_SHOW_STATS=1
+export NIX_SHOW_STATS_PATH=./nix-instantiate-stats.json
+
 date
 banner "Testing $PRNUM"
 banner "$COMMIT_ID"
 DRV_FILE=$(
+  time \
   nix-instantiate \
 	--arg jsonConfigFile "$JSON" \
 	--argstr prNum "$PRNUM" \
@@ -34,7 +38,10 @@ DRV_FILE=$(
 	"$GIT_DIR/../../check-pr.nix"
 )
 
+echo
 echo "$DRV_FILE"
+echo "Instantiation stats in $NIX_SHOW_STATS_PATH"
+echo
 #echo "Sleeping 10s to let you copy/paste the drv file"
 #sleep 10
 

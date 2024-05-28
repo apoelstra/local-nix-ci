@@ -13,7 +13,9 @@ let
       features # Must be overridden if there are any exceptional feature combinations
       runClippy
       runFmt
-      runDocs;
+      runDocs
+      releaseMode # Both release and debug mode; only inherit for fast crates
+      ;
   };
 
   checkData = rec {
