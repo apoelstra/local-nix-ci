@@ -1,3 +1,18 @@
+# Note: from time to time nixpkgs will break things. In order to bisect the
+# most straightforward way is to pull out the `nix-instantiate` command from
+# test.sh (or modify test.sh itself) to set
+#
+#     NIX_PATH=nixpkgs=$HOME/code/NixOS/nixpkgs/master/
+#
+# Then, in that directory, bisect by fetching `origin` then running
+#
+#     git reset --hard origin/master~N
+#
+# Where N starts from 65536 or whatever and you bisect from there. I would NOT
+# try to bisect by overriding the `nixpkgs` input here because it isn't
+# consistently propagated even within this file, and even if I fixed that it
+# would not be propagated into crate2nix (I suspect) or into crate2nix's generated
+# IFD nixfiles (I'm pretty sure).
 { nixpkgs ? import <nixpkgs> { }
 , stdenv ? nixpkgs.stdenv
 }:
