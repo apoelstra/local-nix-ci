@@ -22,7 +22,7 @@ let
   crate2nixRepo = fetchGit {
     url = "https://github.com/kolloch/crate2nix";
     ref = "master";
-    rev = "cf034861fdc4e091fc7c5f01d6c022dc46686cf1"; # master on 2024-06-04; needed update to include #341 after nixpkgs #303527 broke us
+    rev = "cf034861fdc4e091fc7c5f01d6c022dc46686cf1"; # master at 2024-06-05
   };
   cargoNix = pkgs.callPackage "${crate2nixRepo}/crate2nix/Cargo.nix" { inherit strictDeprecation; };
   crate2nix = cargoNix.rootCrate.build;

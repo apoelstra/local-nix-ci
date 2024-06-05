@@ -13,6 +13,12 @@
 # consistently propagated even within this file, and even if I fixed that it
 # would not be propagated into crate2nix (I suspect) or into crate2nix's generated
 # IFD nixfiles (I'm pretty sure).
+
+# Works with nixpkgs 4f3a074422623781034daf8b1a966ee556587539 and crate2nix cf034861fdc4e091fc7c5f01d6c022dc46686cf1
+# The next nixpkgs commit is affected by https://github.com/NixOS/nixpkgs/issues/317323 and does not work for me.
+
+# 4f3a074422623781034daf8b1a966ee556587539 48871 good
+# e594a0fc14f457b554dce4c7bf8a8174f495a389 48870 bad  (and suspicious!)
 { nixpkgs ? import <nixpkgs> { }
 , stdenv ? nixpkgs.stdenv
 }:
@@ -465,6 +471,7 @@ rec {
       overlaidPkgs = import <nixpkgs> {
         overlays = [ (self: super: {
           inherit rustc;
+          buildPackages = super.buildPackages // { inherit rustc; };
         }) ];
       };
       memoName = builtins.unsafeDiscardStringContext
@@ -513,7 +520,7 @@ rec {
     {
       name = memoName;
       value = {
-        generated = builtins.trace "Evaluating generaed ${memoName}" generatedCargoNix;
+        generated = builtins.trace "Evaluating generated ${memoName}" generatedCargoNix;
         called = calledCargoNix;
       };
     };
@@ -544,7 +551,9 @@ rec {
     nixes:
     let
       pkgs = import <nixpkgs> {
-        overlays = [ (self: super: { inherit rustc; }) ];
+        overlays = [ (self: super: { inherit rustc;
+          buildPackages = super.buildPackages // { inherit rustc; };
+}) ];
       };
       lib = pkgs.lib;
 

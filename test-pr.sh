@@ -25,6 +25,7 @@ fi
 # Do actual build
 export NIX_SHOW_STATS=1
 export NIX_SHOW_STATS_PATH=./nix-instantiate-stats.json
+export NIX_PATH=nixpkgs=$HOME/code/NixOS/nixpkgs/local-ci-pin/
 
 date
 banner "Testing $PRNUM"
