@@ -454,74 +454,29 @@ rec {
   # During evaluation, this method is by far the slowest, since it is doing an IFD of
   # a crate2nix call. A single run takes several seconds, and the number of times it
   # is run is the product of the number of possibilities for each input. So "global"
-  # values like `projectNAme` and `prNum` are free, but for each commit in `src`,
-  # it will be run 4 (number of rustcs) times 2 (number of lockfiles), and if you
-  # add any more arguments, it will be multiplied again.
+  # values like `projectName` and `prNum` are free, but for each commit in `src`,
+  # it will be run twice (number of lockfiles), and if you add any more arguments, it
+  # will be multiplied again.
   crate2nixSingleCheckMemo =
     { projectName
     , prNum
-    , rustc
     , lockFile
     , src
-    # We have some should_panic tests in rust-bitcoin that fail in release mode
-    , releaseMode ? false
     , ...
     }:
     let
-      overlaidPkgs = import <nixpkgs> {
-        overlays = [ (self: super: {
-          inherit rustc;
-          buildPackages = super.buildPackages // { inherit rustc; };
-        }) ];
-      };
       memoName = builtins.unsafeDiscardStringContext
-        "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}-${builtins.toString rustc}-${lockFile}";
+        "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}-${lockFile}";
       generatedCargoNix = tools-nix.generatedCargoNix {
         name = memoName;
         src = src.src;
         overrideLockFile = lockFile;
       };
-      calledCargoNix = overlaidPkgs.callPackage generatedCargoNix {
-        # For dependencies we want to simply use the stock `pkgs.buildRustCrate`. But for
-        # the actual crates we're testing, it is nice to modify the derivation to include
-        # A bunch of metadata about the run. Annoyingly, there isn't any way to tell what
-        # a "root crate" exposed by crate2nix, so we have to sorta hack it by assembling
-        # a `rootCrateIds` list and checking membership.
-        #
-        # Ideally we could at least check whether `crate.crateName` matches the specific
-        # workspace under test, but that is yet-undetermined and right now we're in a
-        # `callPackage` call so we can't even use laziness to refer to yet-undetermined
-        # values.
-        buildRustCrateForPkgs = pkgs: crate:
-          if builtins.elem crate.crateName rootCrateIds
-          then (pkgs.buildRustCrate crate).override {
-            preUnpack = ''
-              set +x
-              echo "[buildRustCrate override]"
-              echo 'Project name: ${projectName}'
-              echo 'PR number: ${builtins.toString prNum}'
-              echo 'rustc: ${builtins.toString rustc}'
-              echo 'lockFile: ${lockFile}'
-              echo 'Source: ${builtins.toJSON src}'
-            '';
-          }
-          else pkgs.buildRustCrate crate;
-        release = releaseMode;
-      };
-      rootCrateIds =
-        (if calledCargoNix ? rootCrate
-         then [ calledCargoNix.rootCrate.packageId ]
-         else []) ++
-        (if calledCargoNix ? workspaceMembers
-         then map (p: p.packageId) (builtins.attrValues calledCargoNix.workspaceMembers)
-         else []);
-        
     in
     {
       name = memoName;
       value = {
         generated = builtins.trace "Evaluating generated ${memoName}" generatedCargoNix;
-        called = calledCargoNix;
       };
     };
 
@@ -544,6 +499,7 @@ rec {
     , runClippy ? true
     , runDocs ? true
     , runFmt ? false
+    # We have some should_panic tests in rust-bitcoin that fail in release mode
     , releaseMode ? false
     , extraTestPostRun ? ""
     , ...
@@ -557,13 +513,60 @@ rec {
       };
       lib = pkgs.lib;
 
+      # We are given the IFD for the crate in question as `nixes.called`. But to get
+      # an actual derivation, we first need to call it (setting various arguments
+      # according to the matrix values), then take the `build` attribute of that,
+      # which we further override.
+      calledCargoNix = nixpkgs.callPackage nixes.generated {
+        # For dependencies we want to simply use the stock `pkgs.buildRustCrate`. But for
+        # the actual crates we're testing, it is nice to modify the derivation to include
+        # A bunch of metadata about the run. Annoyingly, there isn't any way to tell what
+        # a "root crate" exposed by crate2nix, so we have to sorta hack it by assembling
+        # a `rootCrateIds` list and checking membership.
+        #
+        # Ideally we could at least check whether `crate.crateName` matches the specific
+        # workspace under test, but that is yet-undetermined and right now we're in a
+        # `callPackage` call so we can't even use laziness to refer to yet-undetermined
+        # values.
+        buildRustCrateForPkgs = pkgs: crate:
+          if builtins.elem crate.crateName rootCrateIds
+          then (pkgs.buildRustCrate crate).override {
+            preUnpack = ''
+              set +x
+              echo "[buildRustCrate override for crate ${crate.crateName} (root)]"
+              echo 'Project name: ${projectName}'
+              echo 'PR number: ${builtins.toString prNum}'
+              echo 'rustc: ${builtins.toString rustc}'
+              echo 'lockFile: ${lockFile}'
+              echo 'Source: ${builtins.toJSON src}'
+            '';
+            rust = rustc;
+          }
+          else (pkgs.buildRustCrate crate).override {
+            preUnpack = ''
+              set +x
+              echo "[buildRustCrate override for crate ${crate.crateName} (dependency)]"
+              echo 'rustc: ${builtins.toString rustc}'
+            '';
+            rust = rustc;
+          };
+        release = releaseMode;
+      };
+      rootCrateIds =
+        (if calledCargoNix ? rootCrate
+         then [ calledCargoNix.rootCrate.packageId ]
+         else []) ++
+        (if calledCargoNix ? workspaceMembers
+         then map (p: p.packageId) (builtins.attrValues calledCargoNix.workspaceMembers)
+         else []);
+
       # Used by bitcoind-tests in miniscript and corerpc; rather than
       # detecting whether this is needed, we just always pull it in.
       bitcoinSrc = (pkgs.callPackage /store/home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
 
       crate2nixDrv = if workspace == null
-        then nixes.called.rootCrate.build
-        else nixes.called.workspaceMembers.${cargoToml.package.name}.build;
+        then calledCargoNix.rootCrate.build
+        else calledCargoNix.workspaceMembers.${cargoToml.package.name}.build;
 
       drv = crate2nixDrv.override {
         inherit features;
