@@ -7,7 +7,7 @@ let
   jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
   fullMatrix = {
     inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig) projectName src rustc lockFile srcName mtxName isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml runClippy runDocs;
+    inherit (utils.standardRustMatrixFns jsonConfig) projectName src rustc lockFile srcName mtxName isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml runClippy runDocs runCheckPublicApi;
 
     features = { src, cargoToml, workspace, ... }:
       if workspace == "bitcoin"

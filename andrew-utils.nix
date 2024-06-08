@@ -1,4 +1,4 @@
-# Note: from time to time nixpkgs will break things. In order to bisect the
+# nOTE: FROM TIME TO Time nixpkgs will break things. In order to bisect the
 # most straightforward way is to pull out the `nix-instantiate` command from
 # test.sh (or modify test.sh itself) to set
 #
@@ -92,7 +92,7 @@ rec {
     ];
 
   # Determines whether a given rustc is a nightly rustc.
-  rustcIsNightly = rustc: !builtins.isNull (builtins.match "nightly-([0-9]+-[0-9]+-[0-9]+)" rustc.version);
+  rustcIsNightly = rustc: !builtins.isNull (builtins.match ".*nightly-([0-9]+-[0-9]+-[0-9]+).*" rustc.version);
 
   # Takes a `src` object (as returned from `srcFromCommit`) and determines
   # the set of lockfiles to test it with.
@@ -221,6 +221,7 @@ rec {
     featuresName = features: "feat-" + builtins.substring
       0 8
       (builtins.hashString "sha256" (builtins.concatStringsSep "," features));
+    fullTip = { src, features, rustc, isMainWorkspace, ... }: features == [ "default" ] && rustcIsNightly rustc && src.isTip && isMainWorkspace;
   in jsonConfig: {
     projectName = jsonConfig.projectName;
     src = jsonConfig.gitCommits;
@@ -249,9 +250,10 @@ rec {
       (workspace == null || workspace == builtins.head mainCargoToml.workspace.members);
 
     # Clippy runs with --all-targets so we only need to run it on one workspace.
-    runClippy = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
-    runDocs = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
-    runFmt = { src, rustc, isMainWorkspace, ... }: rustcIsNightly rustc && src.isTip && isMainWorkspace;
+    runClippy = fullTip;
+    runDocs = fullTip;
+    runFmt = fullTip;
+    runCheckPublicApi = fullTip;
     # This more-than-doubles the build time (vs not including it, in which case
     # we default to false). So this should be inherited in crates where the total
     # runtime is otherwise really fast, but probably not worthwhile otherwise.
@@ -422,25 +424,28 @@ rec {
     }:
     let
       mtxs = matrix argsMatrix;
-      # This twisty memoAndLinks logic is due to roconnor. It avoids computing
-      # memo.name (which is potentially expensive) twice, which would be needed
+      # This twisty memoAndLinks logic is due to roconnor. It avoids recomputing
+      # memo.value (which is potentially expensive), which would be needed
       # if we first computing memoTable "normally" and then later indexed into
       # it when producing a list of links.
       memoTable = builtins.listToAttrs (map (x: x.memo) memoAndLinks);
       memoAndLinks = map
         (mtx:
-          let memo = singleCheckMemo mtx;
+          let
+            memo = singleCheckMemo mtx;
+            mtxHash = builtins.hashString "sha256" (builtins.toJSON mtx);
           in {
             inherit memo;
             link = rec {
-              path = singleCheckDrv mtx memoTable.${memo.name};
-              name = "${mtx.srcName}/${mtx.mtxName}--${derivationName path}";
+              value = singleCheckDrv mtx memoTable.${memo.name};
+              name = "${mtx.srcName}/${mtx.mtxName}--${mtxHash}";
             };
           }
         )
         mtxs;
+      toFarm = builtins.listToAttrs (map (x: x.link) memoAndLinks);
     in
-    nixpkgs.linkFarm name (map (x: x.link) memoAndLinks);
+    nixpkgs.linkFarm name toFarm;
 
   # A value of singleCheckMemo useful for Rust projects, which uses a crate2nix generated
   # Cargo.nix as the key, and the result of calling it as the value.
@@ -499,6 +504,7 @@ rec {
     , runClippy ? true
     , runDocs ? true
     , runFmt ? false
+    , runCheckPublicApi ? false
     # We have some should_panic tests in rust-bitcoin that fail in release mode
     , releaseMode ? false
     , extraTestPostRun ? ""
@@ -512,6 +518,7 @@ rec {
 }) ];
       };
       lib = pkgs.lib;
+      boolString = b: if b then "true" else "false";
 
       # We are given the IFD for the crate in question as `nixes.called`. But to get
       # an actual derivation, we first need to call it (setting various arguments
@@ -576,14 +583,16 @@ rec {
           ${rustc}/bin/cargo -V
           echo "PR: ${projectName} #${prNum}"
           echo "Commit: ${src.commitId}"
-          echo "Tip: ${builtins.toString src.isTip}"
-          echo "Workspace: ${if isNull workspace then "[no workspaces]" else workspace}"
+          echo "Tip: ${boolString src.isTip}"
+          echo "Workspace: ${if isNull workspace then "[no workspaces]" else workspace} (main: ${boolString isMainWorkspace})"
           echo "Features: ${builtins.toJSON features}"
-          echo "Lockfile: ${lockFile}"
+          echo "Lockfile: ${lockFile} (main: ${boolString isMainLockFile})"
           echo
-          echo "Run clippy: ${builtins.toString runClippy}"
-          echo "Run docs: ${builtins.toString runDocs}"
-          echo "Release mode: ${builtins.toString releaseMode}"
+          echo "Nightly: ${boolString (rustcIsNightly rustc)}"
+          echo "Run clippy: ${boolString runClippy}"
+          echo "Run docs: ${boolString runDocs}"
+          echo "Run check-api: ${boolString runCheckPublicApi}"
+          echo "Release mode: ${boolString releaseMode}"
 
           # Always pull this in; though it is usually not needed.
           echo
@@ -619,6 +628,10 @@ rec {
             cargo doc -j1 --all-features
           '' + lib.optionalString runFmt ''
             cargo fmt --all -- --check
+          '' + lib.optionalString (rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz) ''
+            echo "Ran fuzztests: ${fuzzDrv}"
+          '' + lib.optionalString runCheckPublicApi ''
+            echo "Ran check-public-api: ${publicApiDrv}"
           '' + ''
             popd
           '' + extraTestPostRun;
@@ -627,13 +640,13 @@ rec {
           (bin: bin.name)
           (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
         fuzzDrv = cargoFuzzDrv {
-          normalDrv = drv;
           inherit projectName src lockFile nixes fuzzTargets;
         };
+        publicApiDrv = cargoPublicApiDrv {
+          inherit projectName rustc src nixes;
+        };
       in
-        if rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz
-        then fuzzDrv
-        else drv.overrideDerivation (drv: {
+        drv.overrideDerivation (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;
@@ -641,15 +654,60 @@ rec {
           checkPrLockFile = lockFile;
           checkPrFeatures = builtins.toJSON features;
           checkPrWorkspace = workspace;
-          checkPrSrc = builtins.toJSON src;
+          checkPrSrc = builtins.toString src.commitId;
+          checkPrIsMainLockFile = boolString isMainLockFile;
+          checkPrRustcIsNightly = boolString (rustcIsNightly rustc);
+          checkPrRunFmt = boolString runFmt;
+          checkPrRunClippy = boolString runClippy;
+          checkPrRunDocs = boolString runDocs;
+          checkPrRunCheckPublicApi = boolString runCheckPublicApi;
+          checkPrIsTip = boolString src.isTip;
         });
 
-  # Derivation which wraps an existing derivation (which should be e.g. something that
-  # runs tests in the fuzz/ directory) in one that runs cargo-hfuzz on a series of
-  # targets.
+  cargoPublicApiDrv = {
+    projectName
+  , rustc
+  , src
+  , nixes
+  }: let
+    publicApiDrv = stdenv.mkDerivation {
+      name = "${projectName}-check-public-api";
+      src = src.src;
+
+      phases = [ "unpackPhase" "buildPhase" ];
+      buildInputs = [
+        rustc
+        nixpkgs.bash
+        nixpkgs.cargo-public-api
+      ];
+
+      buildPhase = ''
+        set -x
+        export CARGO_HOME=${nixes.generated}/cargo
+        export CHECK_SCRIPT=./contrib/check-for-api-changes.sh
+
+        mv api/ old-api/
+        mkdir api/
+        # Edit out the git-based check_for_changes and the git-based directory finding.
+        sed -i "s/REPO_DIR=.*/REPO_DIR=./" "$CHECK_SCRIPT"
+        sed -i "s/API=.*/API_DIR=.\/api\//" "$CHECK_SCRIPT"
+        sed -i "s/check_for_changes$//" "$CHECK_SCRIPT"
+        sed -i "s/+\"\$NIGHTLY\"//" "$CHECK_SCRIPT"
+        patchShebangs "$CHECK_SCRIPT"
+        cat "$CHECK_SCRIPT"
+        cat ./cargo/config
+        "$CHECK_SCRIPT"
+        # Then manually check for changes.
+        diff -r old-api/ api/
+
+        touch $out;
+      '';
+    };
+  in publicApiDrv;
+
+  # Derivation that runs cargo-hfuzz on a series of targets found in fuzz/Cargo.toml.
   cargoFuzzDrv = {
-    normalDrv
-  , projectName
+    projectName
   , src
   , lockFile
   , nixes
@@ -715,14 +773,11 @@ rec {
       '';
     };
     fuzzDrv = overlaidPkgs.linkFarm
-      "${projectName}-${src.shortId}-fuzz" 
-      ((map (x: rec {
+      "${projectName}-${src.shortId}-fuzz"
+      (map (x: rec {
         name = "fuzz-${path.name}";
         path = singleFuzzDrv x;
-      }) fuzzTargets) ++ [{
-        name = "fuzz-normal-tests";
-        path = normalDrv;
-      }]);
+      }) fuzzTargets);
     in fuzzDrv;
 }
 
