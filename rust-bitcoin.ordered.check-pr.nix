@@ -9,13 +9,11 @@ let
     inherit prNum;
     inherit (utils.standardRustMatrixFns jsonConfig)
       projectName src rustc lockFile srcName mtxName
-      isMainLockFile isMainWorkspace mainCargoToml cargoToml
-      workspace
-      features # Must be overridden if there are any exceptional feature combinations
+      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
+      features
       runClippy
       runDocs;
-
-    runFmt = false; # we don't do rustfmt here
+    runFmt = false; # appears not to be formatted on initial try, 2024-07-22
   };
 
   checkData = rec {

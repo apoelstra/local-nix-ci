@@ -19,8 +19,9 @@ let
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
     argsMatrix = fullMatrix;
-    singleCheckMemo = utils.crate2nixSingleCheckMemo;
     singleCheckDrv = utils.crate2nixSingleCheckDrv;
+    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
+    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
   };
 in
 {

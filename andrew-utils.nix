@@ -71,7 +71,7 @@ rec {
 
   # Takes a `src` object (as returned from `srcFromCommit`) and determines
   # the set of rustcs to test it with.
-  rustcsForSrc = src:
+  rustcsForSrc = { src, nightlyVersion ? null, msrvVersion ? null }:
     let
       pkgs = import <nixpkgs> {
         overlays = [
@@ -169,7 +169,7 @@ rec {
   # Despite the complexity of this function and the fact that its runtime
   # is exponential in the number of args, worst-case, it runs very quickly
   # and is probably not worth further optimization. The slowness (and "too
-  # many open files" failures) come from call sot singleCheckMemo, which
+  # many open files" failures) come from calls to singleCheckMemo, which
   # does the crate2nix IFD).
   matrix =
     let
@@ -221,7 +221,7 @@ rec {
     featuresName = features: "feat-" + builtins.substring
       0 8
       (builtins.hashString "sha256" (builtins.concatStringsSep "," features));
-    fullTip = { src, features, rustc, isMainWorkspace, ... }: features == [ "default" ] && rustcIsNightly rustc && src.isTip && isMainWorkspace;
+    fullTip = { src, features, rustc, isMainWorkspace, isMainLockFile, ... }: features == [ "default" ] && rustcIsNightly rustc && src.isTip && isMainWorkspace && isMainLockFile;
   in jsonConfig: {
     projectName = jsonConfig.projectName;
     src = jsonConfig.gitCommits;
@@ -240,7 +240,7 @@ rec {
       then mainCargoToml
       else lib.trivial.importTOML "${src.src}/${workspace}/Cargo.toml";
 
-    rustc = { src, ... }: rustcsForSrc src;
+    rustc = { src, ... }: rustcsForSrc { inherit src; };
     lockFile = { src, ...}: allLockFiles { inherit src jsonConfig; };
     srcName = { src, ... }: src.commitId;
     mtxName = { src, rustc, workspace, features, lockFile, ... }: "${src.shortId}-${rustc.name}${if isNull workspace then "" else "-" + workspace}-${lockFileName lockFile}-${featuresName features}${if src.isTip then "-tip" else ""}";
@@ -419,7 +419,8 @@ rec {
     { name
     , argsMatrix
     , singleCheckDrv
-    , singleCheckMemo ? x: { name = ""; value = null; }
+    , memoGeneratedCargoNix ? x: { name = ""; value = null; }
+    , memoCalledCargoNix ? x: { name = ""; value = null; }
     ,
     }:
     let
@@ -428,16 +429,18 @@ rec {
       # memo.value (which is potentially expensive), which would be needed
       # if we first computing memoTable "normally" and then later indexed into
       # it when producing a list of links.
-      memoTable = builtins.listToAttrs (map (x: x.memo) memoAndLinks);
+      generatedMemoTable = builtins.listToAttrs (map (x: x.generatedMemo) memoAndLinks);
+      calledMemoTable = builtins.listToAttrs (map (x: x.calledMemo) memoAndLinks);
       memoAndLinks = map
         (mtx:
           let
-            memo = singleCheckMemo mtx;
+            generatedMemo = memoGeneratedCargoNix mtx;
+            calledMemo = memoCalledCargoNix mtx generatedMemoTable.${generatedMemo.name};
             mtxHash = builtins.hashString "sha256" (builtins.toJSON mtx);
           in {
-            inherit memo;
+            inherit generatedMemo calledMemo;
             link = rec {
-              value = singleCheckDrv mtx memoTable.${memo.name};
+              value = singleCheckDrv mtx generatedMemoTable.${generatedMemo.name} calledMemoTable.${calledMemo.name};
               name = "${mtx.srcName}/${mtx.mtxName}--${mtxHash}";
             };
           }
@@ -462,7 +465,7 @@ rec {
   # values like `projectName` and `prNum` are free, but for each commit in `src`,
   # it will be run twice (number of lockfiles), and if you add any more arguments, it
   # will be multiplied again.
-  crate2nixSingleCheckMemo =
+  crate2nixMemoGeneratedCargoNix =
     { projectName
     , prNum
     , lockFile
@@ -480,51 +483,28 @@ rec {
     in
     {
       name = memoName;
-      value = {
-        generated = builtins.trace "Evaluating generated ${memoName}" generatedCargoNix;
-      };
+      value = builtins.trace "Evaluating generated ${memoName}" generatedCargoNix;
     };
 
-  # A value of singleCheckDrv useful for Rust projects. Should be used with
-  # `crate2nixSingleCheckMemo`.
-  crate2nixSingleCheckDrv =
+  crate2nixMemoCalledCargoNix =
     { projectName
     , prNum
-    , isMainLockFile
-    , isMainWorkspace
-    , workspace ? null
-    , mainCargoToml
-    , cargoToml
-    , features
-    , rustc
     , lockFile
+    , rustc
     , src
-    , srcName
-    , mtxName
-    , runClippy ? true
-    , runDocs ? true
-    , runFmt ? false
-    , runCheckPublicApi ? false
-    # We have some should_panic tests in rust-bitcoin that fail in release mode
     , releaseMode ? false
-    , extraTestPostRun ? ""
     , ...
     }:
-    nixes:
+    generatedCargoNix:
     let
-      pkgs = import <nixpkgs> {
-        overlays = [ (self: super: { inherit rustc;
-          buildPackages = super.buildPackages // { inherit rustc; };
-}) ];
-      };
-      lib = pkgs.lib;
-      boolString = b: if b then "true" else "false";
-
-      # We are given the IFD for the crate in question as `nixes.called`. But to get
+      releaseModeName = if releaseMode then "release" else "debug";
+      memoName = builtins.unsafeDiscardStringContext
+        "${projectName}-called-cargo-nix-${builtins.toString prNum}-${src.shortId}-${lockFile}-${rustc.version}-${releaseModeName}";
+      # We are given the IFD for the crate in question as `generatedCargoNix`. But to get
       # an actual derivation, we first need to call it (setting various arguments
       # according to the matrix values), then take the `build` attribute of that,
       # which we further override.
-      calledCargoNix = nixpkgs.callPackage nixes.generated {
+      calledCargoNix = nixpkgs.callPackage generatedCargoNix {
         # For dependencies we want to simply use the stock `pkgs.buildRustCrate`. But for
         # the actual crates we're testing, it is nice to modify the derivation to include
         # A bunch of metadata about the run. Annoyingly, there isn't any way to tell what
@@ -545,7 +525,8 @@ rec {
               echo 'PR number: ${builtins.toString prNum}'
               echo 'rustc: ${builtins.toString rustc}'
               echo 'lockFile: ${lockFile}'
-              echo 'Source: ${builtins.toJSON src}'
+              echo 'Source commit: ${builtins.toString src.commitId}'
+              echo 'Source: ${builtins.toString src.src}'
             '';
             rust = rustc;
           }
@@ -566,10 +547,54 @@ rec {
         (if calledCargoNix ? workspaceMembers
          then map (p: p.packageId) (builtins.attrValues calledCargoNix.workspaceMembers)
          else []);
+    in
+    {
+      name = memoName;
+      value = builtins.trace "Evaluating called ${memoName}" calledCargoNix;
+    };
+
+  # A value of singleCheckDrv useful for Rust projects. Should be used with
+  # `crate2nixSingleCheckMemo`.
+  crate2nixSingleCheckDrv =
+    { projectName
+    , prNum
+    , isMainLockFile
+    , isMainWorkspace
+    , workspace ? null
+    , mainCargoToml
+    , cargoToml
+    , features
+    , rustc
+    , lockFile
+    , src
+    , srcName
+    , mtxName
+    , clippyExtraArgs ? null
+    , runClippy ? true
+    , runDocs ? true
+    , runFmt ? false
+    , runCheckPublicApi ? false
+    # We have some should_panic tests in rust-bitcoin that fail in release mode
+    , releaseMode ? false
+    , extraTestPostRun ? ""
+    , ...
+    }:
+    generatedCargoNix:
+    calledCargoNix:
+    let
+      pkgs = import <nixpkgs> {
+        overlays = [ (self: super: { inherit rustc;
+          buildPackages = super.buildPackages // { inherit rustc; };
+}) ];
+      };
+      lib = pkgs.lib;
+      boolString = b: if b then "true" else "false";
 
       # Used by bitcoind-tests in miniscript and corerpc; rather than
       # detecting whether this is needed, we just always pull it in.
       bitcoinSrc = (pkgs.callPackage /store/home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
+      # Similar, for rust-elements.
+      elementsSrc = (pkgs.callPackage /store/home/apoelstra/code/ElementsProject/elements/default.nix {}).elements21;
 
       crate2nixDrv = if workspace == null
         then calledCargoNix.rootCrate.build
@@ -594,10 +619,12 @@ rec {
           echo "Run check-api: ${boolString runCheckPublicApi}"
           echo "Release mode: ${boolString releaseMode}"
 
-          # Always pull this in; though it is usually not needed.
+          # Always pull these in; though it is usually not needed.
           echo
           export BITCOIND_EXE="${bitcoinSrc}/bin/bitcoind"
+          export ELEMENTSD_EXE="${elementsSrc}/bin/elementsd"
           echo "Bitcoind exe: $BITCOIND_EXE"
+          echo "Elementsd exe: $ELEMENTSD_EXE"
 
           # We have "cannot find libstdc++" issues when compiling
           # rust-bitcoin with bitcoinconsensus on and rustc nightly
@@ -611,14 +638,18 @@ rec {
             set -x
             pwd
             export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
-            export NIXES_GENERATED_DIR=${nixes.generated}/
+            export NIXES_GENERATED_DIR=${generatedCargoNix}/
 
             export CARGO_TARGET_DIR=$PWD/target
-            pushd ${nixes.generated}/crate
+            pushd ${generatedCargoNix}/crate
             export CARGO_HOME=../cargo
+
+            # We need to manually run cargo test because the runTests run will not.
+            # See https://github.com/nix-community/crate2nix/issues/194
+            cargo test --doc
           '' + lib.optionalString runClippy ''
             # Nightly clippy
-            cargo clippy --all-features --all-targets --locked -- -D warnings
+            cargo clippy --all-features --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
           '' + lib.optionalString runDocs ''
             # Do nightly "broken links" check
             export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
@@ -640,10 +671,10 @@ rec {
           (bin: bin.name)
           (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
         fuzzDrv = cargoFuzzDrv {
-          inherit projectName src lockFile nixes fuzzTargets;
+          inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
         };
         publicApiDrv = cargoPublicApiDrv {
-          inherit projectName rustc src nixes;
+          inherit projectName rustc src lockFile generatedCargoNix;
         };
       in
         drv.overrideDerivation (drv: {
@@ -668,7 +699,8 @@ rec {
     projectName
   , rustc
   , src
-  , nixes
+  , lockFile
+  , generatedCargoNix
   }: let
     publicApiDrv = stdenv.mkDerivation {
       name = "${projectName}-check-public-api";
@@ -677,14 +709,21 @@ rec {
       phases = [ "unpackPhase" "buildPhase" ];
       buildInputs = [
         rustc
-        nixpkgs.bash
-        nixpkgs.cargo-public-api
+        (import ./cargo-public-api.nix {
+          nixpkgs = import <nixpkgs> {
+            overlays = [ (self: super: { inherit rustc; }) ];
+          };
+        })
       ];
 
       buildPhase = ''
         set -x
-        export CARGO_HOME=${nixes.generated}/cargo
+        export CARGO_HOME=${generatedCargoNix}/cargo
         export CHECK_SCRIPT=./contrib/check-for-api-changes.sh
+
+        ${rustc}/bin/rustc -V
+        ${rustc}/bin/cargo -V
+        ${rustc}/bin/cargo public-api --version
 
         mv api/ old-api/
         mkdir api/
@@ -694,8 +733,9 @@ rec {
         sed -i "s/check_for_changes$//" "$CHECK_SCRIPT"
         sed -i "s/+\"\$NIGHTLY\"//" "$CHECK_SCRIPT"
         patchShebangs "$CHECK_SCRIPT"
-        cat "$CHECK_SCRIPT"
-        cat ./cargo/config
+
+        # See comment in cargoFuzzDrv for why this cp line is needed.
+        cp ${lockFile} Cargo.lock
         "$CHECK_SCRIPT"
         # Then manually check for changes.
         diff -r old-api/ api/
@@ -709,8 +749,9 @@ rec {
   cargoFuzzDrv = {
     projectName
   , src
+  , cargoToml
   , lockFile
-  , nixes
+  , generatedCargoNix
   , fuzzTargets
   }: let
     overlaidPkgs = import <nixpkgs> {
@@ -718,12 +759,18 @@ rec {
         (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
       ];
     };
+    honggfuzzVersion =
+      let
+        lockToml = nixpkgs.lib.importTOML lockFile;
+        honggfuzz = (builtins.filter (x: x.name == "honggfuzz") lockToml.package);
+      in (builtins.elemAt honggfuzz 0).version;
+
     singleFuzzDrv = fuzzTarget: stdenv.mkDerivation {
       name = "fuzz-${fuzzTarget}";
       src = src.src;
       buildInputs = [
         overlaidPkgs.rust-bin.stable."1.64.0".default
-        (import ./honggfuzz-rs.nix { })
+        (import ./honggfuzz-rs.nix { inherit honggfuzzVersion; })
         # Pinned version because of breaking change in args to init_disassemble_info
         nixpkgs.libopcodes_2_38 # for dis-asm.h and bfd.h
         nixpkgs.libunwind       # for libunwind-ptrace.h
@@ -737,13 +784,13 @@ rec {
 
         cargo -V
         cargo hfuzz version
-        echo "Source: ${builtins.toJSON src}"
+        echo "Source: ${src.commitId}"
         echo "Fuzz target: ${fuzzTarget}"
 
         # honggfuzz rebuilds the world, including itself for some reason, and
         # it expects to be able to build itself in-place. So we need a read/write
         # copy.
-        cp -r ${nixes.generated}/cargo .
+        cp -r ${generatedCargoNix}/cargo .
         chmod -R +w cargo
 
         DEP_DIR=$(grep 'directory =' $CARGO_HOME/config | sed 's/directory = "\(.*\)"/\1/')

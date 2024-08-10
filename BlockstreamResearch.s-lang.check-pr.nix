@@ -13,16 +13,18 @@ let
       features # Must be overridden if there are any exceptional feature combinations
       runClippy
       runFmt
-      runDocs
+     # runDocs
       releaseMode # Both release and debug mode; only inherit for fast crates
       ;
+      runDocs = false; # not working with slang right now
   };
 
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
     argsMatrix = fullMatrix;
-    singleCheckMemo = utils.crate2nixSingleCheckMemo;
     singleCheckDrv = utils.crate2nixSingleCheckDrv;
+    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
+    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
   };
 in
 {

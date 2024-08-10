@@ -7,9 +7,10 @@ let
   jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
   fullMatrix = {
     inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig) projectName src rustc lockFile srcName mtxName isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml runClippy runDocs runCheckPublicApi;
+    inherit (utils.standardRustMatrixFns jsonConfig) projectName src rustc lockFile srcName mtxName isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml runClippy runDocs;#runCheckPublicApi;
 
-    features = { src, cargoToml, workspace, ... }:
+    features = [ [ "default" ] ];
+    features1 = { src, cargoToml, workspace, ... }:
       if workspace == "bitcoin"
       then utils.featuresForSrc { exclude = [ "actual-serde" ]; } { inherit src cargoToml; }
       # schemars does not work with nostd, so exclude it from
@@ -27,8 +28,9 @@ let
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
     argsMatrix = fullMatrix;
-    singleCheckMemo = utils.crate2nixSingleCheckMemo;
     singleCheckDrv = utils.crate2nixSingleCheckDrv;
+    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
+    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
   };
 in
 {

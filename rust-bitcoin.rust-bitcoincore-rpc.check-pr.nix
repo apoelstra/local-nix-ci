@@ -1,146 +1,47 @@
-{ pkgs ? import <nixpkgs> {
-    overlays = [
-      (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
-    ];
-  }
-, lib ? pkgs.lib
-, stdenv ? pkgs.stdenv
+{ pkgs ? import <nixpkgs> { }
 , jsonConfigFile
 , prNum
-# Only used by checkHEad, not checkPr
-, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
-  tools-nix = pkgs.callPackage utils.tools-nix-path { };
-  jsonConfig = lib.trivial.importJSON jsonConfigFile;
-  allRustcs = [
-    (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default))
-    pkgs.rust-bin.stable.latest.default
-    pkgs.rust-bin.beta.latest.default
-    pkgs.rust-bin.stable."1.56.1".default
-  ];
-  gitCommits = utils.githubPrSrcs {
-    # This must be a .git directory, not a URL or anything, since githubPrCommits
-    # well set the GIT_DIR env variable to it before calling git commands. The
-    # intention is for this to be run locally.
-    gitDir = /. + jsonConfig.gitDir;
-    gitUrl = jsonConfig.gitUrl;
+  jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
+  fullMatrix = {
+    # Much of this was disabled 2024-06-10
     inherit prNum;
+    inherit (utils.standardRustMatrixFns jsonConfig)
+      projectName src rustc lockFile srcName mtxName
+      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
+      features; # Must be overridden if there are any exceptional feature combinations
+      #runClippy # doesn't work in rust-bitcoincore-rpc
+      #runFmt; # doesn't work in rust-bitcoincore-rpc
+      #runDocs; # doesn't work in rust-bitcoincore-rpc
+    runClippy = false;
+    runFmt = false;
+    runDocs = false;
+
+    extraTestPostRun = { workspace, ... }: if workspace == "integration_test"
+      then ''
+        export PATH=${pkgs.psmisc}/bin:${pkgs.valgrind}/bin:$PATH # for killall
+        sed -i 's/cargo run/valgrind .\/target\/debug\/integration_test/' run.sh
+        sed -i 's/bitcoind/"$BITCOIND_EXE"/' run.sh
+        # Disable the integration test. Seems not to work even with bitcoin as far back as 0.21.
+        # Gives "wallet verification failed" errors which are not transient
+        # or related to a Nix environment. They are just indicative of the tests
+        # having rotted.
+        #./run.sh
+      ''
+      else "";
   };
-  lockFileName = attrs: builtins.unsafeDiscardStringContext (builtins.baseNameOf (attrs.lockFileFn attrs.src));
-  srcName = self: self.src.commitId;
-  mtxName = self: "${self.src.shortId}-${self.rustc.name}-${lockFileName self}-${builtins.concatStringsSep "," self.features}";
-  lockFileFn = [
-    (src: "${src.src}/Cargo-minimal.lock")
-    (src: "${src.src}/Cargo-recent.lock")
-  ];
+
   checkData = rec {
-    name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
-    argsMatrices = [
-      {
-        inherit srcName mtxName prNum lockFileFn;
-        projectName = jsonConfig.repoName;
-
-        workspace = "bitcoincore-rpc-json";
-        features = [ [ ] [ "rand" ] [ "default" ] ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-
-      {
-        inherit srcName mtxName prNum lockFileFn;
-        projectName = jsonConfig.repoName;
-
-        workspace = "bitcoincore-rpc";
-        features = [ [ ] [ "rand" ] [ "default" ] ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-
-      {
-        inherit srcName mtxName prNum lockFileFn;
-        projectName = jsonConfig.repoName;
-
-        workspace = "integration_test";
-        features = [ [ ] ];
-        rustc = allRustcs;
-        src = gitCommits;
-      }
-    ];
-
-    singleCheckMemo = attrs:
-      let tweakAttrs = attrs // { lockFile = attrs.lockFileFn attrs.src; };
-      in utils.crate2nixSingleCheckMemo tweakAttrs;
-
-    singleCheckDrv =
-      { projectName
-      , prNum
-      , src
-      , srcName
-      , mtxName
-      , workspace
-      , lockFileFn
-      , features
-      , rustc
-      }:
-      nixes:
-        let
-          drv = nixes.called.workspaceMembers.${workspace}.build.override {
-            inherit features;
-            runTests = true;
-            testPreRun = ''
-              ${rustc}/bin/rustc -V
-              ${rustc}/bin/cargo -V
-              echo "PR: ${prNum}"
-              echo "Commit: ${src.commitId}"
-              echo "Features: ${builtins.toJSON features}"
-            '';
-            testPostRun = ''
-              export PATH=$PATH:${rustc}/bin:${pkgs.gcc}/bin
-              export CARGO_TARGET_DIR=$PWD/target
-              export CARGO_HOME=${nixes.generated}/cargo
-              pushd ${nixes.generated}/crate
-              #cargo clippy --locked -- -D warnings # 2024-04 there are a ton of clippy issues
-              popd
-            '';
-          };
-          fuzzTargets = map
-            (bin: bin.name)
-            (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
-          fuzzDrv = utils.cargoFuzzDrv {
-            normalDrv = drv;
-            lockFile = lockFileFn src;
-            inherit projectName src nixes fuzzTargets;
-          };
-        in drv.overrideDerivation (drv: {
-          # Add a bunch of stuff just to make the derivation easier to grok
-          checkPrProjectName = projectName;
-          checkPrPrNum = prNum;
-          checkPrRustc = rustc;
-          checkPrLockFile = lockFileFn src;
-          checkPrFeatures = builtins.toJSON features;
-          checkPrWorkspace = workspace;
-          checkPrSrc = builtins.toJSON src;
-        });
+    name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
+    argsMatrix = fullMatrix;
+    singleCheckDrv = utils.crate2nixSingleCheckDrv;
+    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
+    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
   };
 in
 {
   checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr (checkData // {
-    argsMatrices = map
-      (argsMtx: argsMtx // {
-        src = rec {
-          src = builtins.fetchGit {
-            allRefs = true;
-            url = jsonConfig.gitDir;
-            rev = singleRev;
-          };
-          name = builtins.toString prNum;
-          shortId = name;
-          commitId = shortId;
-        };
-      })
-      checkData.argsMatrices;
-  });
+  checkHead = utils.checkPr checkData;
 }

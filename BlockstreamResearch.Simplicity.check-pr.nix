@@ -29,7 +29,7 @@ let
       src = jsonConfig.gitCommits;
     };
 
-    singleCheckDrv = { src, attr, doCheck, wideMultiply, withCoverage, production, env, srcName, mtxName }: dummy:
+    singleCheckDrv = { src, attr, doCheck, wideMultiply, withCoverage, production, env, srcName, mtxName }: dummy1: dummy2:
       let
         sourceDir = src.src;
         drv = builtins.getAttr attr (import "${sourceDir}/default.nix" {

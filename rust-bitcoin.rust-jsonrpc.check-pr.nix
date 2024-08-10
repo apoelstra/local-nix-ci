@@ -1,4 +1,3 @@
-
 { pkgs ? import <nixpkgs> { }
 , jsonConfigFile
 , prNum
@@ -18,6 +17,7 @@ let
 
     extraTestPostRun = { workspace, ... }: if workspace == "integration_test"
       then ''
+        set -x
         export BITCOIND_PATH=$BITCOIND_EXE
         export PATH=${pkgs.psmisc}/bin:${pkgs.valgrind}/bin:$PATH # for killall
         sed -i 's/cargo run/valgrind .\/target\/debug\/integration_test/' run.sh
@@ -30,8 +30,9 @@ let
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
     argsMatrix = fullMatrix;
-    singleCheckMemo = utils.crate2nixSingleCheckMemo;
     singleCheckDrv = utils.crate2nixSingleCheckDrv;
+    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
+    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
   };
 in
 {

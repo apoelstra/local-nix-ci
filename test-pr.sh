@@ -30,6 +30,8 @@ export NIX_PATH=nixpkgs=$HOME/code/NixOS/nixpkgs/local-ci-pin/
 date
 banner "Testing $PRNUM"
 banner "$COMMIT_ID"
+
+#	--trace-function-calls \
 DRV_FILE=$(
   time \
   nix-instantiate \
@@ -59,7 +61,7 @@ OUT_FILE=$(
 	--arg jsonConfigFile "$JSON" \
 	--argstr prNum "$PRNUM" \
 	-A "$TARGET" \
-	"$GIT_DIR/../../check-pr.nix" \
+	"$GIT_DIR/../../check-pr.nix"
 #	--log-format internal-json -v \
 #	2> >(nom --json)
 )
@@ -81,9 +83,16 @@ done
 # Ack on github, if this is what we're supposed to do
 if [ "$TARGET" == "checkPr" ]; then
 	if [ "$ACK" == "ACK" ]; then
-		gh pr review "$PRNUM" -a -b "ACK $(git rev-parse "pr/$PRNUM/head") $3"
+		if [ "$3" == "" ]; then
+			MESSAGE="successfully ran local tests"
+		else
+			MESSAGE="successfully ran local tests; $3"
+		fi
+		gh pr review "$PRNUM" -a -b "ACK $(git rev-parse "pr/$PRNUM/head") $MESSAGE"
 	else
-		echo "Not ACKing because second arg was not the literal text ACK."
+		gh pr review "$PRNUM" -c -b "Successfully ran local tests on $(git rev-parse "pr/$PRNUM/head")."
+		echo "Not ACKing because second arg was not the literal text ACK. Commented."
+
 	fi
 fi
 
