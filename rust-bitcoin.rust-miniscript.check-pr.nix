@@ -20,6 +20,7 @@ let
       projectName src lockFile srcName mtxName
       isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
       rustc # override for backports 10.x and below
+      msrv # override for backports 10.x and below
       # features # Must be overridden if there are any exceptional feature combinations
       runClippy
       runFmt

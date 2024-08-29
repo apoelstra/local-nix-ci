@@ -8,7 +8,7 @@ let
   fullMatrix = {
     inherit prNum;
     inherit (utils.standardRustMatrixFns jsonConfig)
-      projectName src rustc lockFile srcName mtxName
+      projectName src rustc msrv lockFile srcName mtxName
       isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
       features # Must be overridden if there are any exceptional feature combinations
       runClippy

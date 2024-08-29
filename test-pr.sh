@@ -61,9 +61,9 @@ OUT_FILE=$(
 	--arg jsonConfigFile "$JSON" \
 	--argstr prNum "$PRNUM" \
 	-A "$TARGET" \
-	"$GIT_DIR/../../check-pr.nix"
-#	--log-format internal-json -v \
-#	2> >(nom --json)
+	"$GIT_DIR/../../check-pr.nix" \
+	--log-format internal-json -v \
+	2> >(nom --json)
 )
 
 # Add outputs to gc roots

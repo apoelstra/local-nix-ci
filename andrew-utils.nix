@@ -1,4 +1,4 @@
-# nOTE: FROM TIME TO Time nixpkgs will break things. In order to bisect the
+# Note: From time to time nixpkgs will break things. In order to bisect the
 # most straightforward way is to pull out the `nix-instantiate` command from
 # test.sh (or modify test.sh itself) to set
 #
@@ -28,6 +28,14 @@ rec {
   tools-nix-path = ./crate2nix/tools.nix;
   # Laziness means this is only called when used
   tools-nix = nixpkgs.callPackage tools-nix-path { };
+
+  # Used by bitcoind-tests in miniscript and corerpc; rather than
+  # detecting whether this is needed, we just always pull it in.
+  bitcoinSrc = (nixpkgs.callPackage /store/home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
+  # Similar, for rust-elements.
+  elementsSrc = (nixpkgs.callPackage /store/home/apoelstra/code/ElementsProject/elements/default.nix {}).elements21;
+  # See comment near usage for what this is for.
+  rustcLdLibraryPath = "${stdenv.cc.cc.lib}/lib/";
 
   # Takes a JSON configuration file which should have the keys:
   #
@@ -78,12 +86,11 @@ rec {
           (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
         ];
       };
-      msrv = if src.clippyToml != null && src.clippyToml ? msrv
-        then pkgs.rust-bin.fromRustupToolchain { channel = src.clippyToml.msrv; }
-        else builtins.trace "warning - no clippy.toml, using 1.56.1 as MSRV" pkgs.rust-bin.stable."1.56.1".default;
+      msrv = pkgs.rust-bin.fromRustupToolchain { channel = msrvVersion; };
       nightly = if src.nightlyVersion != null
         then pkgs.rust-bin.fromRustupToolchain { channel = builtins.elemAt (builtins.match "([^\r\n]+)\r?\n?" src.nightlyVersion) 0; }
-        else builtins.trace "warning - no rust-version, using latest nightly" (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default));
+        else builtins.trace "warning - no rust-version, using latest nightly" #(pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default));
+           pkgs.rust-bin.fromRustupToolchain { channel = "nightly-2024-08-20"; }; #temp 2024-08-26 due to new doc lint
     in [
       nightly
       pkgs.rust-bin.stable.latest.default
@@ -240,7 +247,11 @@ rec {
       then mainCargoToml
       else lib.trivial.importTOML "${src.src}/${workspace}/Cargo.toml";
 
-    rustc = { src, ... }: rustcsForSrc { inherit src; };
+    msrv = { src, ...}: if src.clippyToml != null && src.clippyToml ? msrv
+        then src.clippyToml.msrv
+        else builtins.trace "warning - no clippy.toml, using 1.56.1 as MSRV" "1.56.1";
+
+    rustc = { src, msrv, ... }: rustcsForSrc { inherit src; msrvVersion = msrv; };
     lockFile = { src, ...}: allLockFiles { inherit src jsonConfig; };
     srcName = { src, ... }: src.commitId;
     mtxName = { src, rustc, workspace, features, lockFile, ... }: "${src.shortId}-${rustc.name}${if isNull workspace then "" else "-" + workspace}-${lockFileName lockFile}-${featuresName features}${if src.isTip then "-tip" else ""}";
@@ -491,6 +502,7 @@ rec {
     , prNum
     , lockFile
     , rustc
+    , msrv
     , src
     , releaseMode ? false
     , ...
@@ -527,6 +539,10 @@ rec {
               echo 'lockFile: ${lockFile}'
               echo 'Source commit: ${builtins.toString src.commitId}'
               echo 'Source: ${builtins.toString src.src}'
+
+              # This should be set somehow, maybe by buildRustCrate, but isn't..
+              export CARGO_PKG_RUST_VERSION=${msrv}
+              echo "Set CARGO_PKG_RUST_VERSION to ${msrv}"
             '';
             rust = rustc;
           }
@@ -535,6 +551,10 @@ rec {
               set +x
               echo "[buildRustCrate override for crate ${crate.crateName} (dependency)]"
               echo 'rustc: ${builtins.toString rustc}'
+
+              # This should be set somehow, maybe by buildRustCrate, but isn't..
+              export CARGO_PKG_RUST_VERSION=${msrv}
+              echo "Set CARGO_PKG_RUST_VERSION to ${msrv}"
             '';
             rust = rustc;
           };
@@ -590,12 +610,6 @@ rec {
       lib = pkgs.lib;
       boolString = b: if b then "true" else "false";
 
-      # Used by bitcoind-tests in miniscript and corerpc; rather than
-      # detecting whether this is needed, we just always pull it in.
-      bitcoinSrc = (pkgs.callPackage /store/home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
-      # Similar, for rust-elements.
-      elementsSrc = (pkgs.callPackage /store/home/apoelstra/code/ElementsProject/elements/default.nix {}).elements21;
-
       crate2nixDrv = if workspace == null
         then calledCargoNix.rootCrate.build
         else calledCargoNix.workspaceMembers.${cargoToml.package.name}.build;
@@ -632,7 +646,7 @@ rec {
           # intermediate versions not tested due to rustc #124800).
           #
           # Possible culprit: https://blog.rust-lang.org/2024/05/17/enabling-rust-lld-on-linux.html
-          export LD_LIBRARY_PATH=${stdenv.cc.cc.lib}/lib/
+          export LD_LIBRARY_PATH=${rustcLdLibraryPath}
         '';
         testPostRun = ''
             set -x
@@ -646,7 +660,7 @@ rec {
 
             # We need to manually run cargo test because the runTests run will not.
             # See https://github.com/nix-community/crate2nix/issues/194
-            cargo test --doc
+            cargo test --locked --doc
           '' + lib.optionalString runClippy ''
             # Nightly clippy
             cargo clippy --all-features --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
@@ -677,6 +691,10 @@ rec {
           inherit projectName rustc src lockFile generatedCargoNix;
         };
       in
+        # If test derivations seem to be very slow to instantiate, uncomment
+        # the following line and run test.sh piped through `ts -s` to get a
+        # picture of how long each instantiation takes.
+        # builtins.trace "Evaluating test derivation"
         drv.overrideDerivation (drv: {
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;

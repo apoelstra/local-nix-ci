@@ -7,12 +7,16 @@ let
   jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
   fullMatrix = {
     inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig) projectName src rustc lockFile srcName mtxName isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml runClippy runDocs;#runCheckPublicApi;
+    inherit (utils.standardRustMatrixFns jsonConfig)
+      projectName src rustc msrv lockFile
+      srcName mtxName isMainLockFile isMainWorkspace mainCargoToml
+      workspace cargoToml runDocs;#runCheckPublicApi;
+runClippy  = false;
 
-    features = [ [ "default" ] ];
-    features1 = { src, cargoToml, workspace, ... }:
+    features1 = [ [ "default" ] ];
+    features = { src, cargoToml, workspace, ... }:
       if workspace == "bitcoin"
-      then utils.featuresForSrc { exclude = [ "actual-serde" ]; } { inherit src cargoToml; }
+      then utils.featuresForSrc { needsNoStd = true; exclude = [ "actual-serde" ]; } { inherit src cargoToml; }
       # schemars does not work with nostd, so exclude it from
       # the standard list and test it separately.
       else if workspace == "hashes"
@@ -20,7 +24,7 @@ let
         include = [ [ "std" "schemars" ] ];
         exclude = [ "actual-serde" "schemars" ];
       } { inherit src cargoToml; }
-      else utils.featuresForSrc {} { inherit src cargoToml; };
+      else utils.featuresForSrc {needsNoStd = true; } { inherit src cargoToml; };
 
       runFmt = false;
   };
