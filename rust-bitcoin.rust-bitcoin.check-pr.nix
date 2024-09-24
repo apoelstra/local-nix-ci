@@ -16,7 +16,7 @@ runClippy  = false;
     features1 = [ [ "default" ] ];
     features = { src, cargoToml, workspace, ... }:
       if workspace == "bitcoin"
-      then utils.featuresForSrc { needsNoStd = true; exclude = [ "actual-serde" ]; } { inherit src cargoToml; }
+      then utils.featuresForSrc { exclude = [ "actual-serde" ]; } { inherit src cargoToml; }
       # schemars does not work with nostd, so exclude it from
       # the standard list and test it separately.
       else if workspace == "hashes"
@@ -24,7 +24,7 @@ runClippy  = false;
         include = [ [ "std" "schemars" ] ];
         exclude = [ "actual-serde" "schemars" ];
       } { inherit src cargoToml; }
-      else utils.featuresForSrc {needsNoStd = true; } { inherit src cargoToml; };
+      else utils.featuresForSrc { } { inherit src cargoToml; };
 
       runFmt = false;
   };

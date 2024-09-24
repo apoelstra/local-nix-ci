@@ -21,19 +21,36 @@ let
         else "${src.shortId}-${attr}";
 
       attr = [ "c" "coq" "haskell" "compcert" "vst" "pdf" ];
+      use686 = { attr, ... }: if attr == "c" then [ false true ] else false;
       doCheck = { attr, ... }: if attr == "c" then [ false true ] else null;
-      wideMultiply = { attr, ... }: if attr == "c" then [ null "int64" "int128" "int128_struct" ] else null;
+      wideMultiply = { attr, use686, ... }: if attr == "c"
+        then if use686
+          then [ null ] # "int64" ] # int64 disabled since #256 for all configs
+          else [ null "int128" "int128_struct" ]
+        else null;
       withCoverage = { attr, ... }: if attr == "c" then [ false true ] else null;
       production = { attr, ... }: if attr == "c" then [ false true ] else null;
       env = { attr, ... }: if attr == "c" then [ "stdenv" "clangStdenv" ] else null;
       src = jsonConfig.gitCommits;
     };
 
-    singleCheckDrv = { src, attr, doCheck, wideMultiply, withCoverage, production, env, srcName, mtxName }: dummy1: dummy2:
+    singleCheckDrv = {
+      src,
+      attr,
+      use686,
+      doCheck,
+      wideMultiply,
+      withCoverage,
+      production,
+      env,
+      srcName,
+      mtxName
+    }: dummy1: dummy2:
       let
         sourceDir = src.src;
+        nixpkgs = if use686 then pkgs.pkgsi686Linux else pkgs;
         drv = builtins.getAttr attr (import "${sourceDir}/default.nix" {
-          inherit doCheck wideMultiply withCoverage production;
+          inherit nixpkgs doCheck wideMultiply withCoverage production;
           withProfiler = withCoverage;
           withValgrind = !withCoverage; # The coverage tool does some bad memory things so it must be exclusive with valgrind
           withTiming = false; # !withValgrind; # just leave at false since this is so flakey for me

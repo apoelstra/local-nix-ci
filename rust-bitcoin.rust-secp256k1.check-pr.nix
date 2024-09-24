@@ -46,6 +46,7 @@ let
         sed -i "s#set -e#set -ex#" ./vendor-libsecp.sh
         mkdir depend2/
         cp depend/*.patch depend/check_uint128_t.c depend2/
+        #SECP_VENDOR_VERSION_CODE=0_10_0 \
         SECP_VENDOR_CP_NOT_CLONE=yes \
             SECP_VENDOR_GIT_ROOT=".." \
             SECP_VENDOR_SECP_REPO=${secp256k1Src} \

@@ -28,7 +28,7 @@ let
   checkData = rec {
     name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
 
-    argsMatrices = [{
+    argsMatrx = {
       projectName = "elements";
       srcName = self: self.src.commitId;
       mtxName = self: "${self.projectName}-PR-${prNum}-${self.src.shortId}-${builtins.toString self.withBench}-${builtins.toString self.withWallet}-${builtins.toString self.withDebug}-${self.check}";
@@ -40,7 +40,7 @@ let
       check = [ "" "check" "fuzz" ];
 
       src = gitCommits;
-    }];
+    };
 
     singleCheckDrv = {
       projectName,

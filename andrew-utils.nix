@@ -156,7 +156,7 @@ rec {
       assert builtins.isList exclude;
       assert builtins.all builtins.isList result;
       if needsNoStd
-      then map (fs: if builtins.elem "std" fs then fs else fs ++ ["no-std"]) result
+      then map (fs: if builtins.elem "std" fs || builtins.elem "default" fs then fs else fs ++ ["no-std"]) result
       else result;
 
   # Given a set with a set of list-valued attributes, explode it into
@@ -247,7 +247,9 @@ rec {
       then mainCargoToml
       else lib.trivial.importTOML "${src.src}/${workspace}/Cargo.toml";
 
-    msrv = { src, ...}: if src.clippyToml != null && src.clippyToml ? msrv
+    msrv = { src, ...}: if src.cargoToml ? package && src.cargoToml.package ? rust-version
+        then src.cargoToml.package.rust-version
+        else if src.clippyToml != null && src.clippyToml ? msrv
         then src.clippyToml.msrv
         else builtins.trace "warning - no clippy.toml, using 1.56.1 as MSRV" "1.56.1";
 

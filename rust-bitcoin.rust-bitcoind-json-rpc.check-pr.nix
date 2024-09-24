@@ -9,14 +9,25 @@ let
     inherit prNum;
     inherit (utils.standardRustMatrixFns jsonConfig)
       projectName src rustc msrv lockFile srcName mtxName
-      isMainLockFile isMainWorkspace mainCargoToml cargoToml
-      workspace
+      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
       features # Must be overridden if there are any exceptional feature combinations
-      runClippy;
-#      runDocs;
-      runDocs = false; # 2024-09-24 -- should fix, several bugs
+      runClippy
+      runFmt
+      runDocs;
 
-    runFmt = false; # we don't do rustfmt here
+/*
+    2024-08-29 -- `integration_test` workspace is excluded entirely
+    extraTestPostRun = { workspace, ... }: if workspace == "integration_test"
+      then ''
+        set -x
+        export BITCOIND_PATH=$BITCOIND_EXE
+        export PATH=${pkgs.psmisc}/bin:${pkgs.valgrind}/bin:$PATH # for killall
+        sed -i 's/cargo run/valgrind .\/target\/debug\/integration_test/' run.sh
+        cat run.sh
+        ./run.sh
+      ''
+      else "";
+*/
   };
 
   checkData = rec {
