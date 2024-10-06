@@ -8,19 +8,12 @@ let
   jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
   fullMatrix = {
     inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig) projectName src rustc lockFile srcName mtxName isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml runClippy runDocs runFmt;#runCheckPublicApi;
-
-    features = { src, cargoToml, workspace, ... }:
-      if workspace == "bitcoin"
-      then utils.featuresForSrc { exclude = [ "actual-serde" ]; } { inherit src cargoToml; }
-      # schemars does not work with nostd, so exclude it from
-      # the standard list and test it separately.
-      else if workspace == "hashes"
-      then utils.featuresForSrc {
-        include = [ [ "std" "schemars" ] ];
-        exclude = [ "actual-serde" "schemars" ];
-      } { inherit src cargoToml; }
-      else utils.featuresForSrc {} { inherit src cargoToml; };
+    inherit (utils.standardRustMatrixFns jsonConfig)
+      projectName src rustc msrv
+      lockFile srcName mtxName
+      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml 
+      features
+      runClippy runDocs runFmt;#runCheckPublicApi;
 
     secp256k1RevFile = { src, ... }: builtins.elemAt (builtins.split "\n"
       (builtins.readFile "${src.src}/secp256k1-zkp-sys/depend/secp256k1-HEAD-revision.txt"))

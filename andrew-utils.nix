@@ -23,11 +23,16 @@
 , stdenv ? nixpkgs.stdenv
 }:
 rec {
+  overlaidPkgs = import <nixpkgs> {
+    overlays = [
+      (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
+    ];
+  };
   # Re-export crate2nix tools.nix path so that I don't need to worry about its
   # exact vaule in more than one place.
   tools-nix-path = ./crate2nix/tools.nix;
   # Laziness means this is only called when used
-  tools-nix = nixpkgs.callPackage tools-nix-path { };
+  tools-nix = overlaidPkgs.callPackage tools-nix-path {};
 
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
@@ -774,11 +779,6 @@ rec {
   , generatedCargoNix
   , fuzzTargets
   }: let
-    overlaidPkgs = import <nixpkgs> {
-      overlays = [
-        (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
-      ];
-    };
     honggfuzzVersion =
       let
         lockToml = nixpkgs.lib.importTOML lockFile;
@@ -791,9 +791,8 @@ rec {
       buildInputs = [
         overlaidPkgs.rust-bin.stable."1.64.0".default
         (import ./honggfuzz-rs.nix { inherit honggfuzzVersion; })
-        # Pinned version because of breaking change in args to init_disassemble_info
-        nixpkgs.libopcodes_2_38 # for dis-asm.h and bfd.h
-        nixpkgs.libunwind       # for libunwind-ptrace.h
+        nixpkgs.libopcodes  # for dis-asm.h and bfd.h
+        nixpkgs.libunwind   # for libunwind-ptrace.h
       ];
       phases = [ "unpackPhase" "buildPhase" ];
 
@@ -806,6 +805,10 @@ rec {
         cargo hfuzz version
         echo "Source: ${src.commitId}"
         echo "Fuzz target: ${fuzzTarget}"
+
+        # copied from libffi; see also https://github.com/NixOS/nixpkgs/pull/246244#issuecomment-1701571496
+        NIX_HARDENING_ENABLE=''${NIX_HARDENING_ENABLE/fortify3/}
+        NIX_HARDENING_ENABLE=''${NIX_HARDENING_ENABLE/fortify/}
 
         # honggfuzz rebuilds the world, including itself for some reason, and
         # it expects to be able to build itself in-place. So we need a read/write
