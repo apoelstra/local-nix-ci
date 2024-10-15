@@ -48,11 +48,9 @@ run_commands() {
                 fi
                 popd > /dev/null
             fi
-        else
-            # No commands left, break the loop
-            break
         fi
         # Check again for new commands after one execution
+	sleep 15
     done
 }
 

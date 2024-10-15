@@ -536,7 +536,8 @@ rec {
         # values.
         buildRustCrateForPkgs = pkgs: crate:
           if builtins.elem crate.crateName rootCrateIds
-          then (pkgs.buildRustCrate crate).override {
+          # need to force msrv in here because of https://github.com/NixOS/nixpkgs/pull/274440#pullrequestreview-2350593987
+          then (pkgs.buildRustCrate (crate // { rust-version = msrv; })).override {
             preUnpack = ''
               set +x
               echo "[buildRustCrate override for crate ${crate.crateName} (root)]"
@@ -546,22 +547,14 @@ rec {
               echo 'lockFile: ${lockFile}'
               echo 'Source commit: ${builtins.toString src.commitId}'
               echo 'Source: ${builtins.toString src.src}'
-
-              # This should be set somehow, maybe by buildRustCrate, but isn't..
-              export CARGO_PKG_RUST_VERSION=${msrv}
-              echo "Set CARGO_PKG_RUST_VERSION to ${msrv}"
             '';
             rust = rustc;
           }
-          else (pkgs.buildRustCrate crate).override {
+          else (pkgs.buildRustCrate (crate // { rust-version = msrv; })).override {
             preUnpack = ''
               set +x
               echo "[buildRustCrate override for crate ${crate.crateName} (dependency)]"
               echo 'rustc: ${builtins.toString rustc}'
-
-              # This should be set somehow, maybe by buildRustCrate, but isn't..
-              export CARGO_PKG_RUST_VERSION=${msrv}
-              echo "Set CARGO_PKG_RUST_VERSION to ${msrv}"
             '';
             rust = rustc;
           };
@@ -791,7 +784,8 @@ rec {
       buildInputs = [
         overlaidPkgs.rust-bin.stable."1.64.0".default
         (import ./honggfuzz-rs.nix { inherit honggfuzzVersion; })
-        nixpkgs.libopcodes  # for dis-asm.h and bfd.h
+        # Need to use libopcodes 2.38 because of https://github.com/rust-fuzz/honggfuzz-rs/issues/68
+        nixpkgs.libopcodes_2_38  # for dis-asm.h and bfd.h
         nixpkgs.libunwind   # for libunwind-ptrace.h
       ];
       phases = [ "unpackPhase" "buildPhase" ];

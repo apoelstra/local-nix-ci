@@ -22,7 +22,7 @@ let
 
       attr = [ "c" "coq" "haskell" "compcert" "vst" "pdf" ];
       use686 = { attr, ... }: if attr == "c" then [ false true ] else false;
-      doCheck = { attr, ... }: if attr == "c" then [ false true ] else null;
+      doCheck = { attr, ... }: if attr == "c" then [ false true ] else true;
       wideMultiply = { attr, use686, ... }: if attr == "c"
         then if use686
           then [ null ] # "int64" ] # int64 disabled since #256 for all configs
