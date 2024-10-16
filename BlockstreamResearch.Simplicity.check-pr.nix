@@ -35,7 +35,7 @@ let
           else [ null "int128" "int128_struct" ]
         else null;
       withCoverage = { attr, ... }: if attr == "c" then [ false true ] else null;
-      withValgrind = { attr, withCoverage, ... }: if attr == "haskell" then [ false true ] else !withCoverage;
+      withValgrind = { attr, withCoverage, ... }: if attr == "haskell" then [ false true ] else withCoverage != true;
       production = { attr, ... }: if attr == "c" then [ false true ] else null;
       env = { attr, ... }: if attr == "c" then [ "stdenv" "clangStdenv" ] else null;
       src = jsonConfig.gitCommits;

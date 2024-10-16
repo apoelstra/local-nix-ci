@@ -383,7 +383,7 @@ run_commands() {
         local existing_derivation_time=$(echo "$json_next_task" | jq -r '.[0].existing_derivation_time // empty')
         local repo_name=$(echo "$json_next_task" | jq -r '.[0].repo_name')
         local dot_git_path=$(echo "$json_next_task" | jq -r '.[0].dot_git_path')
-        local nixfile_path=$(echo "$json_next_task" | jq -r '.[0].nixfile_path')
+        local nixfile_path="$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/$(echo "$json_next_task" | jq -r '.[0].nixfile_path')"
 
         if [ -z "$dot_git_path" ]; then
             sleep 30
@@ -474,6 +474,7 @@ run_commands() {
 
                     # Set "SUCCESS" as the last step
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'SUCCESS', time_end = datetime('now') WHERE id = $next_execution_id;"
+                    send-text.sh "Merge of PR $pr_number succeeded. Derivation: $existing_derivation_path"
                 else
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
                     send-text.sh "Merge derivation of PR $pr_number failed: $existing_derivation_path"
@@ -498,20 +499,19 @@ run_commands() {
                 cd $(git rev-parse --show-toplevel)
                 git config githubmerge.testcmd "
                     set -e
-                    local commit_id=$(git rev-parse HEAD)
+                    commit=\"{ commit = \\\"\$(git rev-parse HEAD)\\\"; isTip = true; gitUrl = $dot_git_path; }\"
                     send-text.sh \"Starting merge PR $pr_number \$commit_id (instantiating)\"
 
                     # Do instantiation
-                    local derivation_path
                     if derivation_path=\$(time nix-instantiate \\
                         --arg jsonConfigFile false \\
                         --arg inlineJsonConfig \"{ gitDir = $dot_git_path; projectName = \\\"$repo_name\\\"; }\" \\
-                        --arg inlineCommitList \"[ \$commit_id ]\" \\
+                        --arg inlineCommitList \"[ \$commit ]\" \\
                         --argstr prNum \"$pr_number\" \\
                         -A checkPr \\
                         \"$nixfile_path\")
                     then
-                        local escaped_path=\${derivation_path//\'/\'\'}
+                        escaped_path=\${derivation_path//\'/\'\'}
                         sqlite3 \"$DB_FILE\" \"UPDATE derivations SET path = '\$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;\"
                     else
                         sqlite3 \"$DB_FILE\" \"UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;\"
