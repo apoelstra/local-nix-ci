@@ -9,6 +9,7 @@ set -euo pipefail
 
 command -v git >/dev/null 2>&1 || { echo "git is required but not installed. Aborting."; exit 1; }
 command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 is required but not installed. Aborting."; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed. Aborting."; exit 1; }
 command -v send-text.sh >/dev/null 2>&1 || { echo "send-text.sh is required but not installed. Aborting."; exit 1; }
 
 # Global setup
@@ -215,7 +216,7 @@ queue_pr() {
 
     # Then, obtain the list of commits
     local commits=($(git rev-list "$head_commit" --not "$merge_commit~"))
-    local escaped_diff="${LOCAL_CI_DIFF//\'/\'\'/g}"
+    local escaped_diff="${LOCAL_CI_DIFF//\'/\'\'}"
 
     echo "PR $pr_num has ${#commits[@]} commits"
     (
@@ -269,31 +270,13 @@ EOF
 
 run_commands() {
     while true; do
-        # This IFS/read -r/separator construction is due to ChatGPT 4o-preview 2024-10-16
-        # Note that if you rearrange/edit the SELECT statement you need to mirror it in the read -r call
-        #
-        # FURTHERMORE, if you edit this line or anything near it, you are likely to have problems
-        # until you commit, because the \x1F character will show up in the derivations.local_ci_diff
-        # column, confusing `read -r`. There probably is no good way to escape this because what
-        # we're doing here is inherently super weird (we have a script parsing its own diff from
-        # a database).
-        IFS=$'\x1F' read -r \
-            next_execution_id \
-            next_task_id \
-            task_type \
-            derivation_id \
-            pr_number \
-            local_ci_commit \
-            local_ci_diff \
-            existing_derivation_path \
-            existing_derivation_time \
-            repo_name \
-            dot_git_path \
-            nixfile_path \
-        <<< "$(sqlite3 -separator $'\x1F' "$DB_FILE" "
+        # Any changes to this SELECT must be mirrored below as a new local variable.
+        local json_next_task
+        json_next_task="$(sqlite3 -json "$DB_FILE" "
         SELECT
             tasks_executions.id AS execution_id,
             tasks_executions.task_id AS task_id,
+            tasks_executions.status AS status,
             tasks.task_type AS task_type,
             tasks.derivation_id AS derivation_id,
             tasks.pr_number AS pr_number,
@@ -311,6 +294,7 @@ run_commands() {
             JOIN repos ON tasks.repo_id = repos.id
         WHERE
             tasks_executions.status = 'QUEUED'
+            OR tasks_executions.status = 'IN PROGRESS'
         ORDER BY
             tasks_executions.time_queued
         DESC
@@ -318,22 +302,40 @@ run_commands() {
         ")"
 
         # Check if a task was found
-        if [ -z "$next_execution_id" ]; then
+        if [ -z "$json_next_task" ] || [ "$json_next_task" == "[]" ]; then
             # No queued tasks, sleep and continue
+            echo "(Nothing to do; sleeping 30 seconds.)"
             sleep 30
             continue
         fi
 
+        local next_execution_id=$(echo "$json_next_task" | jq -r '.[0].execution_id')
+        local next_task_id=$(echo "$json_next_task" | jq -r '.[0].task_id')
+        local next_task_status=$(echo "$json_next_task" | jq -r '.[0].status')
+        local task_type=$(echo "$json_next_task" | jq -r '.[0].task_type')
+        local derivation_id=$(echo "$json_next_task" | jq -r '.[0].derivation_idempty')
+        local pr_number=$(echo "$json_next_task" | jq -r '.[0].pr_number // empty')
+        local local_ci_commit=$(echo "$json_next_task" | jq -r '.[0].local_ci_commit // empty')
+        local existing_derivation_path=$(echo "$json_next_task" | jq -r '.[0].existing_derivation_path // empty')
+        local existing_derivation_time=$(echo "$json_next_task" | jq -r '.[0].existing_derivation_time // empty')
+        local repo_name=$(echo "$json_next_task" | jq -r '.[0].repo_name // empty')
+        local dot_git_path=$(echo "$json_next_task" | jq -r '.[0].dot_git_path // empty')
+        local nixfile_path=$(echo "$json_next_task" | jq -r '.[0].nixfile_path // empty')
+
         if [ -z "$dot_git_path" ]; then
-            echo "wtf"
             sleep 30
             continue
+        fi
+
+        if [ "$next_task_status" == "IN PROGRESS" ]; then
+            echo "WARNING: contining in-progress job for PR $pr_number"
+            echo "(Waiting 15 seconds to give time to Ctrl+C)"
+            sleep 15
         fi
 
         case "$task_type" in
             PR)
                 # From here on we are doing an execution.
-                set -x
                 sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
                 # 1. If there is no existing derivation, instantiate one.
                 if [ -z "$existing_derivation_path" ]; then
@@ -341,9 +343,8 @@ run_commands() {
                     # Check out local CI
                     pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
                     git reset --hard "$local_ci_commit"
-                    if [ -n "$local_ci_diff" ]; then
-                        echo "$local_ci_diff" | git apply --allow-empty
-                    fi
+                    echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' > patch.hmm
+                    echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
 
                     # Do instantiation
                     # FIXME for now we ignore the lockfiles and let nix figure it out
@@ -355,8 +356,9 @@ run_commands() {
                         isTip=false
                     done
                     if existing_derivation_path=$(time nix-instantiate \
-                        --arg jsonConfig "{ \"gitDir\": \"$dot_git_path\", \"repoName)\": \"$repo_name\" ]" \
-                        --arg commitList "[ $commits ]" \
+                        --arg jsonConfigFile false \
+                        --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
+                        --arg inlineCommitList "[ $commits ]" \
                         --argstr prNum "$pr_number" \
                         -A checkPr \
                         "$nixfile_path")
@@ -381,7 +383,7 @@ run_commands() {
                     --keep-derivations \
                     --keep-outputs \
                     --log-lines 100 \
-                    "$existing_derivation_path"
+                    "$existing_derivation_path" \
                     --log-format internal-json -v \
                     2> >(nom --json)
                 then
