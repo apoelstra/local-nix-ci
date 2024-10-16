@@ -2,11 +2,17 @@
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
 , jsonConfigFile
+, inlineJsonConfig ? null
+, inlineCommitList ? []
 , prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
-  jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
+  jsonConfig = if builtins.isNull inlineJsonConfig
+    then utils.parseRustConfig { inherit jsonConfigFile prNum; }
+    else inlineJsonConfig // {
+        gitCommits = map utils.srcFromCommit inlineCommitList;
+    };
   benchmarkSrc = builtins.fetchurl {
     url = "https://gist.githubusercontent.com/sanket1729/0bf92ab9b2d17895d4afdfe3a85bdf70/raw/a0c8cf0f08e07945d8fcc04640bf567a9ba9f368/jet_benches.json";
     sha256 = "1f2gdgvr5lfj3anzrs13hhcvdyfcz6dy2vy5p136hn5z3kzidnhk";
@@ -29,6 +35,7 @@ let
           else [ null "int128" "int128_struct" ]
         else null;
       withCoverage = { attr, ... }: if attr == "c" then [ false true ] else null;
+      withValgrind = { attr, withCoverage, ... }: if attr == "haskell" then [ false true ] else !withCoverage;
       production = { attr, ... }: if attr == "c" then [ false true ] else null;
       env = { attr, ... }: if attr == "c" then [ "stdenv" "clangStdenv" ] else null;
       src = jsonConfig.gitCommits;
@@ -41,6 +48,7 @@ let
       doCheck,
       wideMultiply,
       withCoverage,
+      withValgrind,
       production,
       env,
       srcName,
@@ -52,7 +60,6 @@ let
         drv = builtins.getAttr attr (import "${sourceDir}/default.nix" {
           inherit nixpkgs doCheck wideMultiply withCoverage production;
           withProfiler = withCoverage;
-          withValgrind = !withCoverage; # The coverage tool does some bad memory things so it must be exclusive with valgrind
           withTiming = false; # !withValgrind; # just leave at false since this is so flakey for me
         });
         diffDrv = if attr == "haskell"

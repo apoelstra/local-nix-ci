@@ -11,6 +11,7 @@ command -v git >/dev/null 2>&1 || { echo "git is required but not installed. Abo
 command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 is required but not installed. Aborting."; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed. Aborting."; exit 1; }
 command -v send-text.sh >/dev/null 2>&1 || { echo "send-text.sh is required but not installed. Aborting."; exit 1; }
+command -v github-merge.py >/dev/null 2>&1 || { echo "github-merge.py is required but not installed. Aborting."; exit 1; }
 
 # Global setup
 DB_FILE="$HOME/local-ci.db"
@@ -268,6 +269,66 @@ EOF
     ) | sqlite3 "$DB_FILE"
 }
 
+# Queue a new merge run
+queue_merge() {
+    locate_repo
+
+    # First, sanity-check the PR number
+    local pr_num="${1:-}"
+    case $pr_num in
+        '')
+            echo "PR number is required by queue-pr command"
+            exit 1
+            ;;
+        *[!0-9]*)
+            echo "PR number must be a number, not $pr_num"
+            exit 1
+            ;;
+    esac
+    shift
+
+    # In a merge run, unlike a PR run, there is no "comment" that we add. Any comments
+    # should have appeared as part of the ACK(s). The person running the merge script
+    # might not have even looked at the PR really.
+    #
+    # Also unlike a PR run, we don't grab the list of commits upfront. The merge script
+    # will create its own merge commit, compare this to pr/<n>/merge (Github's version),
+    # and look for ACKs.
+
+    # We check that the GH commits exist as a sanity check, but we don't actually
+    # use these values.
+    local head_commit
+    local merge_commit
+    if ! head_commit=$(git rev-parse "pr/$pr_num/head" 2>/dev/null); then
+        echo "No commit at rev pr/$pr_num/head. Perhaps you need to fetch?"
+        exit 1
+    fi
+    if ! merge_commit=$(git rev-parse "pr/$pr_num/merge" 2>/dev/null); then
+        echo "No commit at rev pr/$pr_num/merge. Perhaps this PR was already merged?"
+        exit 1
+    fi
+
+    # Then we just blindly stick the request in.
+    local escaped_diff="${LOCAL_CI_DIFF//\'/\'\'}"
+    echo "Queuing merge for PR $pr_num; head $head_commit merge (GH) $merge_commit"
+    (
+        cat <<EOF
+BEGIN TRANSACTION;
+
+INSERT INTO derivations (nixpkgs_commit, local_ci_commit, local_ci_diff, repo_id)
+    VALUES ('$NIXPKGS_COMMIT_ID', '$LOCAL_CI_COMMIT_ID', '$escaped_diff', $DB_REPO_ID);
+
+INSERT INTO tasks (task_type, pr_number, on_success, github_comment, repo_id, derivation_id)
+    SELECT 'MERGE', $pr_num, 'NONE', NULL, $DB_REPO_ID, id FROM derivations WHERE id = last_insert_rowid();
+
+INSERT INTO tasks_executions (task_id, time_queued)
+    SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
+
+COMMIT TRANSACTION;
+EOF
+    ) | sqlite3 "$DB_FILE"
+}
+
 run_commands() {
     while true; do
         # Any changes to this SELECT must be mirrored below as a new local variable.
@@ -299,14 +360,13 @@ run_commands() {
             OR tasks_executions.status = 'IN PROGRESS'
         ORDER BY
             tasks_executions.time_queued
-        DESC
         LIMIT 1;
         ")"
 
         # Check if a task was found
         if [ -z "$json_next_task" ] || [ "$json_next_task" == "[]" ]; then
             # No queued tasks, sleep and continue
-            echo "(Nothing to do; sleeping 30 seconds.)"
+            echo "([$(date +"%F %T")] Nothing to do; sleeping 30 seconds.)"
             sleep 30
             continue
         fi
@@ -315,7 +375,7 @@ run_commands() {
         local next_task_id=$(echo "$json_next_task" | jq -r '.[0].task_id')
         local next_task_status=$(echo "$json_next_task" | jq -r '.[0].status')
         local on_success=$(echo "$json_next_task" | jq -r '.[0].on_success')
-        local github_comment=$(echo "$json_next_task" | jq -r '.[0].github_comment')
+        local github_comment=$(echo "$json_next_task" | jq -r '.[0].github_comment // empty')
         local task_type=$(echo "$json_next_task" | jq -r '.[0].task_type')
         local derivation_id=$(echo "$json_next_task" | jq -r '.[0].derivation_id')
         local pr_number=$(echo "$json_next_task" | jq -r '.[0].pr_number // empty')
@@ -332,7 +392,7 @@ run_commands() {
         fi
 
         if [ "$next_task_status" == "IN PROGRESS" ]; then
-            echo "WARNING: contining in-progress job for PR $pr_number"
+            echo "WARNING: contining in-progress $task_type job $next_task_id for PR $pr_number"
             echo "(Waiting 15 seconds to give time to Ctrl+C)"
             sleep 15
         fi
@@ -353,11 +413,10 @@ run_commands() {
                 sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
                 # 1. If there is no existing derivation, instantiate one.
                 if [ -z "$existing_derivation_path" ]; then
-                    send-text.sh "Starting PR $pr_number (instantiating)."
+                    send-text.sh "Starting PR $pr_number (instantiating)"
                     # Check out local CI
                     pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
                     git reset --hard "$local_ci_commit"
-                    echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' > patch.hmm
                     echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
 
                     # Do instantiation
@@ -371,9 +430,11 @@ run_commands() {
                     then
                         local escaped_path=${existing_derivation_path//\'/\'\'}
                         sqlite3 "$DB_FILE" "UPDATE derivations SET path = '$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;"
+                        popd
                     else
                         sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
                         send-text.sh "Instantiation of PR $pr_number failed."
+                        popd
                         sleep 60 # sleep 60 seconds to give me time to react if I am online
                         continue
                     fi
@@ -393,11 +454,13 @@ run_commands() {
                     --log-format internal-json -v \
                     2> >(nom --json)
                 then
+                    send-text.sh "Merge derivation of PR $pr_number succeeded: $existing_derivation_path"
                     if [ -n "$github_comment" ]; then
                         message="successfully ran local tests; $github_comment"
                     else
                         message="successfully ran local tests"
                     fi
+                    pushd $dot_git_path;
                     case $on_success in
                         ACK)
                             gh pr review "$pr_number" -a -b "ACK ${commit_ids[0]}; $message"
@@ -408,14 +471,86 @@ run_commands() {
                         NONE)
                             ;;
                     esac
+                    popd
 
                     # Set "SUCCESS" as the last step
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'SUCCESS', time_end = datetime('now') WHERE id = $next_execution_id;"
                 else
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
-                    send-text.sh "Derivation of PR $pr_number failed: $existing_derivation_path"
+                    send-text.sh "Merge derivation of PR $pr_number failed: $existing_derivation_path"
                     sleep 60 # sleep 60 seconds to give me time to react if I am online
                     continue
+                fi
+                ;;
+            MERGE)
+                # With merges we need to run everything through the merge script, via testcmd.
+                # This is a bit racy but it's what we gotta do.
+                local old_testcmd=$(git config --get githubmerge.testcmd)
+
+                # First, outside of the test script, update the database and setup the local CI workspace
+                sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
+                # Check out local CI
+                pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
+                git reset --hard "$local_ci_commit"
+                echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
+                popd
+
+                pushd $dot_git_path;
+                git config githubmerge.testcmd "
+                    set -e
+                    local commit_id=$(git rev-parse HEAD)
+                    send-text.sh \"Starting merge PR $pr_number \$commit_id (instantiating)\"
+
+                    # Do instantiation
+                    local derivation_path
+                    if derivation_path=\$(time nix-instantiate \\
+                        --arg jsonConfigFile false \\
+                        --arg inlineJsonConfig \"{ gitDir = $dot_git_path; projectName = \\\"$repo_name\\\"; }\" \\
+                        --arg inlineCommitList \"[ \$commit_id ]\" \\
+                        --argstr prNum \"$pr_number\" \\
+                        -A checkPr \\
+                        \"$nixfile_path\")
+                    then
+                        local escaped_path=\${derivation_path//\'/\'\'}
+                        sqlite3 \"$DB_FILE\" \"UPDATE derivations SET path = '\$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;\"
+                    else
+                        sqlite3 \"$DB_FILE\" \"UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;\"
+                        send-text.sh \"Instantiation of merge for PR $pr_number failed.\"
+                        sleep 60 # sleep 60 seconds to give me time to react if I am online
+                        exit 1
+                    fi
+
+                    if time nix-build \\
+                        --builders-use-substitutes \\
+                        --no-build-output \\
+                        --no-out-link \\
+                        --keep-failed \\
+                        --keep-derivations \\
+                        --keep-outputs \\
+                        --log-lines 100 \\
+                        \"\$derivation_path\" \\
+                        --log-format internal-json -v \\
+                        2> >(nom --json)
+                    then
+                        send-text.sh \"Merge derivation of PR $pr_number succeeded: \$derivation_path\"
+                    else
+                        send-text.sh \"Merge derivation of PR $pr_number failed: \$derivation_path\"
+                        sleep 60 # sleep 60 seconds to give me time to react if I am online
+                        continue
+                    fi
+                "
+                # Ignore return value of github-merge
+                local result
+                if github-merge.py "$pr_number"; then
+                    result=SUCCESS
+                else
+                    result=FAILED
+                fi
+                sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = '$result', time_end = datetime('now') WHERE id = $next_execution_id;"
+                popd
+
+                if [ -n "$old_testcmd" ]; then
+                    git config githubmerge.testcmd "$old_testcmd"
                 fi
                 ;;
             *)
@@ -552,6 +687,9 @@ EOF
         ;;
     queue-pr)
         queue_pr "${ARG_COMMAND_ARGS[@]}"
+        ;;
+    queue-merge)
+        queue_merge "${ARG_COMMAND_ARGS[@]}"
         ;;
     run)
         run_commands
