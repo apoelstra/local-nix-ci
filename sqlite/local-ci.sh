@@ -694,6 +694,32 @@ EOF
     run)
         run_commands
         ;;
+    show-queue)
+	# Just output the raw json. It looks reasonable for human consumption
+	# and is useful for machine consumption.
+        sqlite3 -json "$DB_FILE" "
+        SELECT
+            tasks_executions.id AS id,
+            repos.name AS repo_name,
+            tasks.pr_number AS pr_number,
+            tasks.task_type AS task_type,
+            tasks_executions.status AS status,
+            tasks.on_success AS on_success,
+            tasks.github_comment AS github_comment,
+            tasks_executions.time_queued AS time_queued,
+            tasks_executions.time_start AS time_started
+        FROM
+            tasks_executions
+            JOIN tasks ON tasks_executions.task_id = tasks.id
+            JOIN derivations ON tasks.derivation_id = derivations.id
+            JOIN repos ON tasks.repo_id = repos.id
+        WHERE
+            tasks_executions.status = 'QUEUED'
+            OR tasks_executions.status = 'IN PROGRESS'
+        ORDER BY
+            tasks_executions.time_queued
+        " | jq
+        ;;
     *)
         echo "Usage: $0 {init-db | init-repo <repo-name> <nixfile-name> | queue-pr <pr #> [ACK] [comment] | run}"
         exit 1
