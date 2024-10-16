@@ -695,8 +695,9 @@ EOF
         run_commands
         ;;
     show-queue)
-	# Just output the raw json. It looks reasonable for human consumption
-	# and is useful for machine consumption.
+        adayago=$(date '+%F %T' -d '24 hours ago')
+        # Just output the raw json. It looks reasonable for human consumption
+        # and is useful for machine consumption.
         sqlite3 -json "$DB_FILE" "
         SELECT
             tasks_executions.id AS id,
@@ -707,7 +708,8 @@ EOF
             tasks.on_success AS on_success,
             tasks.github_comment AS github_comment,
             tasks_executions.time_queued AS time_queued,
-            tasks_executions.time_start AS time_started
+            tasks_executions.time_start AS time_started,
+            tasks_executions.time_end AS time_ended
         FROM
             tasks_executions
             JOIN tasks ON tasks_executions.task_id = tasks.id
@@ -716,6 +718,7 @@ EOF
         WHERE
             tasks_executions.status = 'QUEUED'
             OR tasks_executions.status = 'IN PROGRESS'
+            OR tasks_executions.time_end > '$adayago'
         ORDER BY
             tasks_executions.time_queued
         " | jq
