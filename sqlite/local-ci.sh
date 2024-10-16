@@ -6,7 +6,6 @@
 ###
 
 set -euo pipefail
-set -x
 
 command -v git >/dev/null 2>&1 || { echo "git is required but not installed. Aborting."; exit 1; }
 command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 is required but not installed. Aborting."; exit 1; }
@@ -460,7 +459,7 @@ run_commands() {
                     else
                         message="successfully ran local tests"
                     fi
-                    pushd $dot_git_path;
+                    pushd $dot_git_path/..;
                     case $on_success in
                         ACK)
                             gh pr review "$pr_number" -a -b "ACK ${commit_ids[0]}; $message"
@@ -495,7 +494,8 @@ run_commands() {
                 echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
                 popd
 
-                pushd $dot_git_path;
+                pushd $dot_git_path/..;
+                cd $(git rev-parse --show-toplevel)
                 git config githubmerge.testcmd "
                     set -e
                     local commit_id=$(git rev-parse HEAD)
