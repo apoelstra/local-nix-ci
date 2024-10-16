@@ -1,5 +1,7 @@
 { pkgs ? import <nixpkgs> { }
 , jsonConfigFile
+, inlineJsonConfig ? null
+, inlineCommitList ? []
 , prNum
 }:
 let
@@ -13,7 +15,11 @@ let
     ++ (if utils.rustcIsNightly rustc then [ [ "std" "unstable" "compiler" ] [ "no-std" "unstable" "compiler" ] ] else []);
 
   utils = import ./andrew-utils.nix { };
-  jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
+  jsonConfig = if builtins.isNull inlineJsonConfig
+    then utils.parseRustConfig { inherit jsonConfigFile prNum; }
+    else inlineJsonConfig // {
+        gitCommits = map utils.srcFromCommit inlineCommitList;
+    };
   fullMatrix = {
     inherit prNum;
     inherit (utils.standardRustMatrixFns jsonConfig)
