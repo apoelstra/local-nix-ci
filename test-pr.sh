@@ -58,10 +58,7 @@ OUT_FILE=$(
 	--show-trace \
 	--keep-outputs \
 	--log-lines 100 \
-	--arg jsonConfigFile "$JSON" \
-	--argstr prNum "$PRNUM" \
-	-A "$TARGET" \
-	"$GIT_DIR/../../check-pr.nix" \
+    "$DRV_FILE"
 	--log-format internal-json -v \
 	2> >(nom --json)
 )
