@@ -196,7 +196,7 @@ queue_pr() {
         fi
     fi
     local escaped_github_comment
-    if [ -z "$@" ]; then
+    if [ "${#@}" -eq 0 ]; then
         escaped_github_comment="NULL"
     else
         escaped_github_comment="'${@//\'/\'\'}'"
@@ -342,8 +342,10 @@ run_commands() {
                 # FIXME for now we ignore the lockfiles and let nix figure it out
                 local isTip=true;
                 commits=()
+                commit_ids=()
                 for commit in $(sqlite3 "$DB_FILE" "SELECT commit_id FROM task_commits WHERE task_id = $next_task_id"); do
                     commits+=("{ commit = \"$commit\"; isTip = $isTip; gitUrl = $dot_git_path; }")
+                    commit_ids+=("$commit")
                     isTip=false
                 done
 
@@ -398,10 +400,10 @@ run_commands() {
                     fi
                     case $on_success in
                         ACK)
-                            gh pr review "$pr_number" -a -b "ACK ${commits[0]}; $message"
+                            gh pr review "$pr_number" -a -b "ACK ${commit_ids[0]}; $message"
                             ;;
                         COMMENT)
-                            gh pr review "$pr_number" -c -b "On ${commits[0]} $message"
+                            gh pr review "$pr_number" -c -b "On ${commit_ids[0]} $message"
                             ;;
                         NONE)
                             ;;
