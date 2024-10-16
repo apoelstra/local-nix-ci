@@ -6,6 +6,7 @@
 ###
 
 set -euo pipefail
+set -x
 
 command -v git >/dev/null 2>&1 || { echo "git is required but not installed. Aborting."; exit 1; }
 command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 is required but not installed. Aborting."; exit 1; }
@@ -260,8 +261,7 @@ INSERT OR IGNORE INTO commit_lockfile (commit_id, lockfile_id)
 EOF
                 done
             else
-                echo "Commit ${commits[i]} has no lockfiles in it. Bailing out. FIXME implement lockfile overrides" >&2
-                exit 1
+                echo "WARNING: ${commits[i]} has no lockfiles in it. FIXME implement lockfile overrides" >&2
             fi
         done
 
