@@ -520,7 +520,7 @@ run_commands() {
                         exit 1
                     fi
 
-                    if time nix-build \\
+                    time nix-build \\
                         --builders-use-substitutes \\
                         --no-build-output \\
                         --no-out-link \\
@@ -531,19 +531,14 @@ run_commands() {
                         \"\$derivation_path\" \\
                         --log-format internal-json -v \\
                         2> >(nom --json)
-                    then
-                        send-text.sh \"Merge derivation of PR $pr_number succeeded: \$derivation_path\"
-                    else
-                        send-text.sh \"Merge derivation of PR $pr_number failed: \$derivation_path\"
-                        sleep 60 # sleep 60 seconds to give me time to react if I am online
-                        continue
-                    fi
                 "
                 # Ignore return value of github-merge
                 local result
                 if github-merge.py "$pr_number"; then
+                    send-text.sh "Merge of PR $pr_number succeeded."
                     result=SUCCESS
                 else
+                    send-text.sh "Merge of PR $pr_number failed."
                     result=FAILED
                 fi
                 sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = '$result', time_end = datetime('now') WHERE id = $next_execution_id;"
