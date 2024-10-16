@@ -218,7 +218,7 @@ queue_pr() {
     local commits=($(git rev-list "$head_commit" --not "$merge_commit~"))
     local escaped_diff="${LOCAL_CI_DIFF//\'/\'\'}"
 
-    echo "PR $pr_num has ${#commits[@]} commits"
+    echo "PR $pr_num has ${#commits[@]} commits; tip ${commits[0]}"
     (
         cat <<EOF
 BEGIN TRANSACTION;
@@ -277,6 +277,8 @@ run_commands() {
             tasks_executions.id AS execution_id,
             tasks_executions.task_id AS task_id,
             tasks_executions.status AS status,
+            tasks.on_success AS on_success,
+            tasks.github_comment AS github_comment,
             tasks.task_type AS task_type,
             tasks.derivation_id AS derivation_id,
             tasks.pr_number AS pr_number,
@@ -312,15 +314,17 @@ run_commands() {
         local next_execution_id=$(echo "$json_next_task" | jq -r '.[0].execution_id')
         local next_task_id=$(echo "$json_next_task" | jq -r '.[0].task_id')
         local next_task_status=$(echo "$json_next_task" | jq -r '.[0].status')
+        local on_success=$(echo "$json_next_task" | jq -r '.[0].on_success')
+        local github_comment=$(echo "$json_next_task" | jq -r '.[0].github_comment')
         local task_type=$(echo "$json_next_task" | jq -r '.[0].task_type')
-        local derivation_id=$(echo "$json_next_task" | jq -r '.[0].derivation_idempty')
+        local derivation_id=$(echo "$json_next_task" | jq -r '.[0].derivation_id')
         local pr_number=$(echo "$json_next_task" | jq -r '.[0].pr_number // empty')
-        local local_ci_commit=$(echo "$json_next_task" | jq -r '.[0].local_ci_commit // empty')
+        local local_ci_commit=$(echo "$json_next_task" | jq -r '.[0].local_ci_commit')
         local existing_derivation_path=$(echo "$json_next_task" | jq -r '.[0].existing_derivation_path // empty')
         local existing_derivation_time=$(echo "$json_next_task" | jq -r '.[0].existing_derivation_time // empty')
-        local repo_name=$(echo "$json_next_task" | jq -r '.[0].repo_name // empty')
-        local dot_git_path=$(echo "$json_next_task" | jq -r '.[0].dot_git_path // empty')
-        local nixfile_path=$(echo "$json_next_task" | jq -r '.[0].nixfile_path // empty')
+        local repo_name=$(echo "$json_next_task" | jq -r '.[0].repo_name')
+        local dot_git_path=$(echo "$json_next_task" | jq -r '.[0].dot_git_path')
+        local nixfile_path=$(echo "$json_next_task" | jq -r '.[0].nixfile_path')
 
         if [ -z "$dot_git_path" ]; then
             sleep 30
@@ -335,6 +339,14 @@ run_commands() {
 
         case "$task_type" in
             PR)
+                # FIXME for now we ignore the lockfiles and let nix figure it out
+                local isTip=true;
+                commits=()
+                for commit in $(sqlite3 "$DB_FILE" "SELECT commit_id FROM task_commits WHERE task_id = $next_task_id"); do
+                    commits+=("{ commit = \"$commit\"; isTip = $isTip; gitUrl = $dot_git_path; }")
+                    isTip=false
+                done
+
                 # From here on we are doing an execution.
                 sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
                 # 1. If there is no existing derivation, instantiate one.
@@ -347,14 +359,6 @@ run_commands() {
                     echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
 
                     # Do instantiation
-                    # FIXME for now we ignore the lockfiles and let nix figure it out
-
-                    local isTip=true;
-                    commits=()
-                    for commit in $(sqlite3 "$DB_FILE" "SELECT commit_id FROM task_commits WHERE task_id = $next_task_id"); do
-                        commits+=("{ commit = \"$commit\"; isTip = $isTip; gitUrl = $dot_git_path; }")
-                        isTip=false
-                    done
                     if existing_derivation_path=$(time nix-instantiate \
                         --arg jsonConfigFile false \
                         --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
@@ -387,6 +391,23 @@ run_commands() {
                     --log-format internal-json -v \
                     2> >(nom --json)
                 then
+                    if [ -n "$github_comment" ]; then
+                        message="successfully ran local tests; $github_comment"
+                    else
+                        message="successfully ran local tests"
+                    fi
+                    case $on_success in
+                        ACK)
+                            gh pr review "$pr_number" -a -b "ACK ${commits[0]}; $message"
+                            ;;
+                        COMMENT)
+                            gh pr review "$pr_number" -c -b "On ${commits[0]} $message"
+                            ;;
+                        NONE)
+                            ;;
+                    esac
+
+                    # Set "SUCCESS" as the last step
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'SUCCESS', time_end = datetime('now') WHERE id = $next_execution_id;"
                 else
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
