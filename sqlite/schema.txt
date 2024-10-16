@@ -1,0 +1,100 @@
+# Note that sqlite will ignore/drop blank lines and #-comments. However,
+# it will store any -- comments that appear between CREATE TABLE and ;
+# in the output of .schema.
+
+# This is needed at the top of every invocation of sqlite for 15+ year old backcompat reasons.
+PRAGMA foreign_keys = ON;
+
+#####
+# The "main" table, tasks_executions
+#####
+CREATE TABLE tasks_executions
+    -- tasks_executions tracks executions of tasks. This is the "main" table of this database.
+    ( id INTEGER PRIMARY KEY ASC
+    , task_id INTEGER REFERENCES tasks(id) NOT NULL -- Reference to the tasks table
+    , execution_number INTEGER NOT NULL DEFAULT 1 -- Tracks the number of times a task has been executed
+    , time_queued TEXT NOT NULL -- Time when the task was requested
+    , time_start TEXT           -- Time when the task was started
+    , time_end TEXT             -- Time when the task completed
+    , status TEXT NOT NULL DEFAULT 'QUEUED' CHECK(status in ('QUEUED', 'IN PROGRESS', 'FAILED', 'SUCCESS'))
+    , UNIQUE (task_id, execution_number) -- Ensures uniqueness per execution
+    );
+CREATE INDEX tasks_executions_task_id_index ON tasks_executions(task_id);
+CREATE INDEX tasks_executions_status_index ON tasks_executions(status);
+CREATE INDEX tasks_executions_time_queued_index ON tasks_executions(time_queued);
+
+#####
+# Then we have "data structure" tables for repos, tasks, lockfiles and derivations.
+#####
+CREATE TABLE tasks
+    -- Each row of tasks represents a task to be done.
+    ( id INTEGER PRIMARY KEY ASC
+    , task_type TEXT NOT NULL CHECK(task_type in ('PR', 'MERGE', 'OTHER'))
+    , on_success TEXT NOT NULL CHECK(on_success in ('ACK', 'COMMENT', 'NONE'))
+    , github_comment TEXT  -- Comment to post on GIthub if on_success is not NONE
+    , pr_number INTEGER    -- Github PR #, or NULL if this is not a PR task
+    , repo_id INTEGER REFERENCES repos(id) NOT NULL
+    , derivation_id INTEGER REFERENCES derivations(id) NOT NULL
+    );
+CREATE INDEX tasks_repo_id_index ON tasks(repo_id);
+CREATE INDEX tasks_derivation_id_index ON tasks(derivation_id);
+
+CREATE TABLE repos
+    -- Each row of repos represents a supported repository. This replaces the old repo.json files.
+    ( id INTEGER PRIMARY KEY ASC
+    , name TEXT NOT NULL         -- Name of the repo (for user display)
+    , url TEXT                   -- Github URL of the repo, if it has one
+    , dot_git_path TEXT NOT NULL -- Local path to the repo's .git directory
+    , nixfile_path TEXT NOT NULL -- Path to the repo's check-pr.nix file RELATIVE TO THE ROOT OF THE local-ci REPO
+    );
+CREATE INDEX repo_name ON repos(name);
+CREATE INDEX dot_git_path ON repos(dot_git_path);
+
+CREATE TABLE lockfiles
+    -- Each row of lockfiles describes a Rust lockfile.
+    ( id INTEGER PRIMARY KEY ASC
+    , full_text_sha2 TEXT NOT NULL UNIQUE -- SHA256 of the lockfile, used to avoid storing dupes
+    , name TEXT NOT NULL -- Name of the lockfile (for user display)
+    , blob_id TEXT       -- git ID of the lockfile itself, if the lockfile is in-repo
+    , full_text TEXT     -- full text of the lockfile, if it is not in the repo
+    , repo_id INTEGER REFERENCES repos(id) NOT NULL
+    , CHECK(blob_id IS NOT NULL OR full_text IS NOT NULL)
+    );
+CREATE INDEX lockfile_sha_index ON lockfiles(full_text_sha2);
+CREATE INDEX lockfile_repo_id_index ON lockfiles(repo_id);
+
+CREATE TABLE derivations
+    -- Each row of derivations represents a Nix derivation. The ultimate source of
+    -- truth is the derivation itself; but the database stores some auxiliary data
+    -- that should help in reproducing it.
+    ( id INTEGER PRIMARY KEY ASC
+    , path TEXT                     -- Path to the derivation in the Nix store,
+                                    -- or NULL if the derivation is not instantiated
+    , nixpkgs_commit TEXT NOT NULL  -- Commit ID of nixpkgs used in this derivation
+    , local_ci_commit TEXT NOT NULL -- Commit ID of local-ci used in this derivation
+    , local_ci_diff TEXT            -- Diff applied to local CI, if any
+    , time_instantiated TEXT        -- Time when the instantiation completed
+    , repo_id INTEGER REFERENCES repos(id) NOT NULL
+    );
+CREATE INDEX derivation_repo_id_index ON derivations(repo_id);
+
+#####
+# Finally we have a couple "list" tables which create one-to-many relationships.
+#####
+
+CREATE TABLE task_commits
+    ( task_id INTEGER NOT NULL REFERENCES tasks(id)
+    , commit_id TEXT NOT NULL -- git sha1 hash of the commit
+    , PRIMARY KEY (task_id, commit_id)
+    );
+CREATE INDEX task_commits_commit_id_index ON task_commits(commit_id);
+
+CREATE TABLE commit_lockfile
+    ( commit_id TEXT NOT NULL -- git sha1 hash of the commit
+    , lockfile_id INTEGER REFERENCES lockfiles(id) -- reference to Rust lockfiles, if any are used by the commit
+    , PRIMARY KEY (commit_id, lockfile_id)
+    );
+CREATE INDEX commit_lockfile_lockfile_id_index ON commit_lockfile(lockfile_id);
+
+
+
