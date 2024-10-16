@@ -198,7 +198,7 @@ queue_pr() {
     if [ -z "$@" ]; then
         escaped_github_comment="NULL"
     else
-        escaped_github_comment="'${@/\'/\'\'}'"
+        escaped_github_comment="'${@//\'/\'\'}'"
     fi
 
     local head_commit
@@ -215,19 +215,21 @@ queue_pr() {
 
     # Then, obtain the list of commits
     local commits=($(git rev-list "$head_commit" --not "$merge_commit~"))
+    local escaped_diff="${LOCAL_CI_DIFF//\'/\'\'/g}"
 
     echo "PR $pr_num has ${#commits[@]} commits"
     (
         cat <<EOF
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO derivations (nixpkgs_commit, local_ci_commit, local_ci_diff, repo_id)
-    VALUES ('$NIXPKGS_COMMIT_ID', '$LOCAL_CI_COMMIT_ID', '$LOCAL_CI_DIFF', $DB_REPO_ID);
+    VALUES ('$NIXPKGS_COMMIT_ID', '$LOCAL_CI_COMMIT_ID', '$escaped_diff', $DB_REPO_ID);
 
 INSERT INTO tasks (task_type, pr_number, on_success, github_comment, repo_id, derivation_id)
-    VALUES ('PR', $pr_num, '$on_success', $escaped_github_comment, $DB_REPO_ID, last_insert_rowid());
+    SELECT 'PR', $pr_num, '$on_success', $escaped_github_comment, $DB_REPO_ID, id FROM derivations WHERE id = last_insert_rowid();
 
-INSERT INTO tasks_executions (task_id, time_queued) VALUES (last_insert_rowid(), datetime('now'));
+INSERT INTO tasks_executions (task_id, time_queued)
+    SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
 EOF
 
         for ((i = 0; i < ${#commits[@]}; i++)); do
@@ -240,7 +242,7 @@ EOF
             local lockfiles=($(git ls-tree -r --name-only ${commits[i]} | grep -e 'Cargo.*lock'))
             if [ "${#lockfiles[@]}" -ne 0 ]; then
                 for ((j = 0; j < ${#lockfiles[@]}; j++)); do
-                    local escaped_lockfile_name=${lockfiles[j]/\'/\'\'}
+                    local escaped_lockfile_name=${lockfiles[j]//\'/\'\'}
                     local lockfile_content=$(git show "${commits[i]}":"${lockfiles[j]}")
                     local lockfile_gitid=$(git rev-parse "${commits[i]}":"${lockfiles[j]}")
                     local lockfile_sha256=$(echo -n "$lockfile_content" | sha256sum | cut -d' ' -f1)
@@ -248,7 +250,9 @@ EOF
 
                     # Insert the lockfile and its association with git commits
                     cat <<EOF
-INSERT OR IGNORE INTO lockfiles (blob_id, full_text_sha2, name, repo_id) VALUES ('$lockfile_gitid', '$lockfile_sha256', '$escaped_lockfile_name', $DB_REPO_ID);
+INSERT OR IGNORE INTO lockfiles (blob_id, full_text_sha2, name, repo_id)
+    VALUES ('$lockfile_gitid', '$lockfile_sha256', '$escaped_lockfile_name', $DB_REPO_ID);
+
 INSERT OR IGNORE INTO commit_lockfile (commit_id, lockfile_id)
     SELECT '${commits[i]}', id FROM lockfiles WHERE full_text_sha2 = '$lockfile_sha256';
 EOF
@@ -266,37 +270,51 @@ EOF
 run_commands() {
     while true; do
         # This IFS/read -r/separator construction is due to ChatGPT 4o-preview 2024-10-16
-        # Note that if you rearrange/edit the SELECT statement you need to mirror it in the read -r call.
-        IFS=$'\x1F' read -r next_execution_id next_task_id task_type derivation_id pr_number local_ci_commit local_ci_diff existing_derivation_path existing_derivation_time nixfile_path <<< "$(sqlite3 -separator $'\x1F' "$DB_FILE" "
-        BEGIN TRANSACTION;
-        WITH cte AS (
-            SELECT
-                tasks_executions.id AS execution_id,
-                tasks_executions.task_id AS task_id,
-                tasks_executions.task_type AS task_type,
-                tasks.derivation_id AS derivation_id,
-                tasks.pr_number AS pr_number,
-                derivations.local_ci_commit AS local_ci_commit,
-                derivations.local_ci_diff AS local_ci_diff,
-                derivations.path AS existing_derivation_path,
-                derivations.time_instantiated AS existing_derivation_time,
-                repos.nixfile_path AS nixfile_path
-            FROM
-                tasks_executions
-                JOIN tasks ON tasks_executions.task_id = tasks.id
-                JOIN derivations ON tasks.derivation_id = derivations.id
-                JOIN repos ON tasks.repo_id = repos.id
-            WHERE
-                tasks_executions.status = 'QUEUED'
-            ORDER BY
-                tasks_executions.time_queued
-            LIMIT 1
-        )
-        UPDATE tasks_executions
-            SET status = 'IN PROGRESS', time_start = datetime('now')
-            WHERE id = (SELECT execution_id FROM cte);
-        SELECT execution_id, task_id, derivation_id, local_ci_commit, local_ci_diff FROM cte;
-        COMMIT;
+        # Note that if you rearrange/edit the SELECT statement you need to mirror it in the read -r call
+        #
+        # FURTHERMORE, if you edit this line or anything near it, you are likely to have problems
+        # until you commit, because the \x1F character will show up in the derivations.local_ci_diff
+        # column, confusing `read -r`. There probably is no good way to escape this because what
+        # we're doing here is inherently super weird (we have a script parsing its own diff from
+        # a database).
+        IFS=$'\x1F' read -r \
+            next_execution_id \
+            next_task_id \
+            task_type \
+            derivation_id \
+            pr_number \
+            local_ci_commit \
+            local_ci_diff \
+            existing_derivation_path \
+            existing_derivation_time \
+            repo_name \
+            dot_git_path \
+            nixfile_path \
+        <<< "$(sqlite3 -separator $'\x1F' "$DB_FILE" "
+        SELECT
+            tasks_executions.id AS execution_id,
+            tasks_executions.task_id AS task_id,
+            tasks.task_type AS task_type,
+            tasks.derivation_id AS derivation_id,
+            tasks.pr_number AS pr_number,
+            derivations.local_ci_commit AS local_ci_commit,
+            derivations.local_ci_diff AS local_ci_diff,
+            derivations.path AS existing_derivation_path,
+            derivations.time_instantiated AS existing_derivation_time,
+            repos.name AS repo_name,
+            repos.dot_git_path AS dot_git_path,
+            repos.nixfile_path AS nixfile_path
+        FROM
+            tasks_executions
+            JOIN tasks ON tasks_executions.task_id = tasks.id
+            JOIN derivations ON tasks.derivation_id = derivations.id
+            JOIN repos ON tasks.repo_id = repos.id
+        WHERE
+            tasks_executions.status = 'QUEUED'
+        ORDER BY
+            tasks_executions.time_queued
+        DESC
+        LIMIT 1;
         ")"
 
         # Check if a task was found
@@ -306,12 +324,20 @@ run_commands() {
             continue
         fi
 
+        if [ -z "$dot_git_path" ]; then
+            echo "wtf"
+            sleep 30
+            continue
+        fi
+
         case "$task_type" in
             PR)
                 # From here on we are doing an execution.
                 set -x
+                sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
                 # 1. If there is no existing derivation, instantiate one.
                 if [ -z "$existing_derivation_path" ]; then
+                    send-text.sh "Starting PR $pr_number (instantiating)."
                     # Check out local CI
                     pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
                     git reset --hard "$local_ci_commit"
@@ -319,13 +345,23 @@ run_commands() {
                         echo "$local_ci_diff" | git apply --allow-empty
                     fi
 
+                    # Do instantiation
+                    # FIXME for now we ignore the lockfiles and let nix figure it out
+
+                    local isTip=true;
+                    commits=()
+                    for commit in $(sqlite3 "$DB_FILE" "SELECT commit_id FROM task_commits WHERE task_id = $next_task_id"); do
+                        commits+=("{ commit = \"$commit\"; isTip = $isTip; gitUrl = $dot_git_path; }")
+                        isTip=false
+                    done
                     if existing_derivation_path=$(time nix-instantiate \
-                        --arg jsonConfigFile "$JSON" \
+                        --arg jsonConfig "{ \"gitDir\": \"$dot_git_path\", \"repoName)\": \"$repo_name\" ]" \
+                        --arg commitList "[ $commits ]" \
                         --argstr prNum "$pr_number" \
                         -A checkPr \
                         "$nixfile_path")
                     then
-                        local escaped_path=${existing_derivation_path/\'/\'\'}
+                        local escaped_path=${existing_derivation_path//\'/\'\'}
                         sqlite3 "$DB_FILE" "UPDATE derivations SET path = '$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;"
                     else
                         sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
@@ -333,6 +369,8 @@ run_commands() {
                         sleep 60 # sleep 60 seconds to give me time to react if I am online
                         continue
                     fi
+                else
+                    send-text.sh "Starting PR $pr_number with existing drv $existing_derivation_path"
                 fi
                 # 2. Build the instantiated derivation
                 if time nix-build \

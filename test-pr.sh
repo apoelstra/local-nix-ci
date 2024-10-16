@@ -58,7 +58,7 @@ OUT_FILE=$(
 	--show-trace \
 	--keep-outputs \
 	--log-lines 100 \
-    "$DRV_FILE"
+        "$DRV_FILE" \
 	--log-format internal-json -v \
 	2> >(nom --json)
 )
