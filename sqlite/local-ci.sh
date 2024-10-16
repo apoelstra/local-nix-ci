@@ -426,6 +426,90 @@ if [ "$ARG_COMMAND" != "init-db" ]; then
 fi
 
 case "$ARG_COMMAND" in
+    clear-queue)
+        (cat <<EOF
+-- This entire blurb from ChatGPT 2024-10-16
+BEGIN TRANSACTION;
+
+-- Step 1: Create temporary tables to store identifiers of records to be deleted
+
+-- Temporary table for task_ids
+CREATE TEMPORARY TABLE temp_task_ids AS
+SELECT DISTINCT task_id FROM tasks_executions WHERE status IN ('QUEUED', 'IN PROGRESS');
+
+-- Temporary table for derivation_ids
+CREATE TEMPORARY TABLE temp_derivation_ids AS
+SELECT DISTINCT derivation_id FROM tasks WHERE id IN (SELECT task_id FROM temp_task_ids);
+
+-- Temporary table for commit_ids
+CREATE TEMPORARY TABLE temp_commit_ids AS
+SELECT DISTINCT commit_id FROM task_commits WHERE task_id IN (SELECT task_id FROM temp_task_ids);
+
+-- Temporary table for lockfile_ids
+CREATE TEMPORARY TABLE temp_lockfile_ids AS
+SELECT DISTINCT lockfile_id FROM commit_lockfile
+WHERE commit_id IN (SELECT commit_id FROM temp_commit_ids);
+
+-- Step 2: Delete child records first
+
+-- Delete from commit_lockfile
+DELETE FROM commit_lockfile
+WHERE commit_id IN (SELECT commit_id FROM temp_commit_ids);
+
+-- Delete from task_commits
+DELETE FROM task_commits
+WHERE task_id IN (SELECT task_id FROM temp_task_ids);
+
+-- Step 3: Delete parent records
+
+-- Delete from tasks_executions
+DELETE FROM tasks_executions
+WHERE task_id IN (SELECT task_id FROM temp_task_ids);
+
+-- Delete from tasks
+DELETE FROM tasks
+WHERE id IN (SELECT task_id FROM temp_task_ids);
+
+-- Delete from derivations
+DELETE FROM derivations
+WHERE id IN (SELECT derivation_id FROM temp_derivation_ids);
+
+-- Step 4: Clean up lockfiles that are no longer referenced
+
+-- Identify lockfiles no longer referenced
+CREATE TEMPORARY TABLE temp_unused_lockfile_ids AS
+SELECT id FROM lockfiles
+WHERE id IN (SELECT lockfile_id FROM temp_lockfile_ids)
+AND id NOT IN (SELECT lockfile_id FROM commit_lockfile);
+
+-- Delete from lockfiles
+DELETE FROM lockfiles
+WHERE id IN (SELECT id FROM temp_unused_lockfile_ids);
+
+-- Step 5: Clean up commits that are no longer referenced
+
+-- If you have a commits table and want to delete commits no longer referenced
+-- CREATE TEMPORARY TABLE temp_unused_commit_ids AS
+-- SELECT id FROM commits
+-- WHERE id IN (SELECT commit_id FROM temp_commit_ids)
+-- AND id NOT IN (SELECT commit_id FROM task_commits);
+
+-- DELETE FROM commits
+-- WHERE id IN (SELECT id FROM temp_unused_commit_ids);
+
+-- Step 6: Drop temporary tables
+
+DROP TABLE temp_task_ids;
+DROP TABLE temp_derivation_ids;
+DROP TABLE temp_commit_ids;
+DROP TABLE temp_lockfile_ids;
+DROP TABLE temp_unused_lockfile_ids;
+-- DROP TABLE temp_unused_commit_ids;  -- If used
+
+COMMIT;
+EOF
+) | sqlite3 "$DB_FILE"
+        ;;
     init-db)
         SCHEMA="$(dirname $(realpath "$0"))/schema.txt"
         if [ ! -f "$SCHEMA" ]; then
