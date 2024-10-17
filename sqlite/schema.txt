@@ -85,6 +85,7 @@ CREATE INDEX derivation_repo_id_index ON derivations(repo_id);
 CREATE TABLE task_commits
     ( task_id INTEGER NOT NULL REFERENCES tasks(id)
     , commit_id TEXT NOT NULL -- git sha1 hash of the commit
+    , is_tip INTEGER NOT NULL DEFAULT 0
     , PRIMARY KEY (task_id, commit_id)
     );
 CREATE INDEX task_commits_commit_id_index ON task_commits(commit_id);

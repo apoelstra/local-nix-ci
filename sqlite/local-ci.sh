@@ -234,12 +234,14 @@ INSERT INTO tasks_executions (task_id, time_queued)
     SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
 EOF
 
+        local isTip=1;
         for ((i = 0; i < ${#commits[@]}; i++)); do
             # Insert commit
             cat <<EOF
-INSERT INTO task_commits (task_id, commit_id)
-    SELECT id, '${commits[i]}' FROM tasks ORDER BY id DESC LIMIT 1;
+INSERT INTO task_commits (task_id, commit_id, is_tip)
+    SELECT id, '${commits[i]}', $isTip FROM tasks ORDER BY id DESC LIMIT 1;
 EOF
+            isTip=0
             # Insert its lockfiles
             local lockfiles=($(git ls-tree -r --name-only ${commits[i]} | grep -e 'Cargo.*lock'))
             if [ "${#lockfiles[@]}" -ne 0 ]; then
@@ -399,13 +401,13 @@ run_commands() {
         case "$task_type" in
             PR)
                 # FIXME for now we ignore the lockfiles and let nix figure it out
-                local isTip=true;
                 commits=()
                 commit_ids=()
-                for commit in $(sqlite3 "$DB_FILE" "SELECT commit_id FROM task_commits WHERE task_id = $next_task_id"); do
-                    commits+=("{ commit = \"$commit\"; isTip = $isTip; gitUrl = $dot_git_path; }")
+                for data in $(sqlite3 -separator '-' "$DB_FILE" "SELECT commit_id, is_tip FROM task_commits WHERE task_id = $next_task_id"); do
+                    local commit=$(echo $data | cut -d'-' -f1)
+                    local isTip=$(echo $data | cut -d'-' -f2)
+                    commits+=("{ commit = \"$commit\"; isTip = $isTip == 1; gitUrl = $dot_git_path; }")
                     commit_ids+=("$commit")
-                    isTip=false
                 done
 
                 # From here on we are doing an execution.
