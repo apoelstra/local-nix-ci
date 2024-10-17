@@ -474,10 +474,10 @@ run_commands() {
 
                     # Set "SUCCESS" as the last step
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'SUCCESS', time_end = datetime('now') WHERE id = $next_execution_id;"
-                    send-text.sh "Merge of PR $pr_number succeeded. Derivation: $existing_derivation_path"
+                    send-text.sh "Test of PR $pr_number succeeded. Derivation: $existing_derivation_path"
                 else
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
-                    send-text.sh "Merge derivation of PR $pr_number failed: $existing_derivation_path"
+                    send-text.sh "Test of PR $pr_number failed: $existing_derivation_path"
                     sleep 60 # sleep 60 seconds to give me time to react if I am online
                     continue
                 fi
