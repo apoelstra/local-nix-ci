@@ -331,6 +331,7 @@ EOF
 }
 
 run_commands() {
+    local backoff_sec=15
     while true; do
         # Any changes to this SELECT must be mirrored below as a new local variable.
         local json_next_task
@@ -367,9 +368,14 @@ run_commands() {
         # Check if a task was found
         if [ -z "$json_next_task" ] || [ "$json_next_task" == "[]" ]; then
             # No queued tasks, sleep and continue
-            echo "([$(date +"%F %T")] Nothing to do; sleeping 30 seconds.)"
-            sleep 30
+            echo "([$(date +"%F %T")] Nothing to do; sleeping $backoff_sec seconds.)"
+            sleep $backoff_sec
+            if [ "$backoff_sec" -lt 300 ]; then
+                backoff_sec=$((backoff_sec * 2))
+            fi
             continue
+        else
+            backoff_sec=15
         fi
 
         local next_execution_id=$(echo "$json_next_task" | jq -r '.[0].execution_id')
