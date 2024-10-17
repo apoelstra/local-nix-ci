@@ -700,6 +700,7 @@ EOF
             tasks.pr_number AS pr_number,
             tasks.task_type AS task_type,
             tasks_executions.status AS status,
+            derivations.path AS derivation_path,
             tasks.on_success AS on_success,
             tasks.github_comment AS github_comment,
             tasks_executions.time_queued AS time_queued,
