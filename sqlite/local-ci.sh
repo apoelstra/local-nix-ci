@@ -403,10 +403,16 @@ run_commands() {
                 # FIXME for now we ignore the lockfiles and let nix figure it out
                 commits=()
                 commit_ids=()
+                local tip_commit
                 for data in $(sqlite3 -separator '-' "$DB_FILE" "SELECT commit_id, is_tip FROM task_commits WHERE task_id = $next_task_id"); do
                     local commit=$(echo $data | cut -d'-' -f1)
                     local isTip=$(echo $data | cut -d'-' -f2)
-                    commits+=("{ commit = \"$commit\"; isTip = $isTip == 1; gitUrl = $dot_git_path; }")
+                    if [ "$isTip" -eq 1 ]; then
+                        commits+=("{ commit = \"$commit\"; isTip = true; gitUrl = $dot_git_path; }")
+                        tip_commit=$commit
+                    else
+                        commits+=("{ commit = \"$commit\"; isTip = false; gitUrl = $dot_git_path; }")
+                    fi
                     commit_ids+=("$commit")
                 done
 
@@ -464,10 +470,10 @@ run_commands() {
                     pushd $dot_git_path/..;
                     case $on_success in
                         ACK)
-                            gh pr review "$pr_number" -a -b "ACK ${commit_ids[0]}; $message"
+                            gh pr review "$pr_number" -a -b "ACK ${tip_commit}; $message"
                             ;;
                         COMMENT)
-                            gh pr review "$pr_number" -c -b "On ${commit_ids[0]} $message"
+                            gh pr review "$pr_number" -c -b "On ${tip_commit} $message"
                             ;;
                         NONE)
                             ;;
