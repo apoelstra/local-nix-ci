@@ -467,7 +467,6 @@ run_commands() {
                     --log-format internal-json -v \
                     2> >(nom --json)
                 then
-                    send-text.sh "Merge derivation of PR $pr_number succeeded: $existing_derivation_path"
                     if [ -n "$github_comment" ]; then
                         message="successfully ran local tests; $github_comment"
                     else
