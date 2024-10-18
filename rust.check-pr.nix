@@ -1,12 +1,13 @@
-{ fullMatrixOverride ? { pkgs, utils }: {} }:
 { pkgs ? import <nixpkgs> {}
-, inlineJsonConfig
+, utils ? import ./andrew-utils.nix {}
+, fullMatrixOverride ? {}
+}:
+{ inlineJsonConfig
 , inlineCommitList ? []
 , fallbackLockFiles ? []
 , prNum
 }:
 let
-  utils = import ./andrew-utils.nix { };
   jsonConfig = inlineJsonConfig // {
     inherit fallbackLockFiles;
     gitCommits = map utils.srcFromCommit inlineCommitList;
@@ -20,7 +21,7 @@ let
       runClippy
       runFmt
       runDocs;
-  } // fullMatrixOverride { inherit pkgs utils; };
+  } // fullMatrixOverride;
 
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";

@@ -1,1 +1,1 @@
-import ./rust.check-pr.nix ({pkgs, utils}: {})
+import ./rust.check-pr.nix {}

@@ -263,7 +263,7 @@ INSERT OR IGNORE INTO commit_lockfile (commit_id, lockfile_id)
 EOF
                 done
             else
-                echo "WARNING: ${commits[i]} has no lockfiles in it. FIXME implement lockfile overrides" >&2
+                echo "Warning: ${commits[i]} has no lockfiles in it. If needed, will use overrides found at runtime and not store them in db (fixme)" >&2
             fi
         done
 
@@ -399,8 +399,8 @@ run_commands() {
             continue
         fi
 
-	# FIXME can/should we do something smarter or more configurable here?
-	local fallbackLockFiles=("$dot_git_path"/../../*.lock) # note nullglob is on
+        # FIXME can/should we do something smarter or more configurable here?
+        local fallbackLockFiles=("$dot_git_path"/../../*.lock) # note nullglob is on
 
         if [ "$next_task_status" == "IN PROGRESS" ]; then
             echo "WARNING: contining in-progress $task_type job $next_task_id for PR $pr_number"

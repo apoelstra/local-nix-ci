@@ -1,4 +1,8 @@
-import ./rust.check-pr.nix ({ pkgs, utils }: {
+let
+  pkgs = import <nixpkgs> {};
+  utils = import ./andrew-utils.nix {};
+in import ./rust.check-pr.nix {
+  inherit pkgs utils;
   fullMatrixOverride = {
     secp256k1RevFile = { src, ... }: builtins.elemAt (builtins.split "\n"
       (builtins.readFile "${src.src}/secp256k1-zkp-sys/depend/secp256k1-HEAD-revision.txt"))
@@ -27,4 +31,4 @@ import ./rust.check-pr.nix ({ pkgs, utils }: {
         popd
       '';
   };
-})
+}
