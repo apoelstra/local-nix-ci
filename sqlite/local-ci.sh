@@ -6,6 +6,7 @@
 ###
 
 set -euo pipefail
+shopt -s nullglob
 
 command -v git >/dev/null 2>&1 || { echo "git is required but not installed. Aborting."; exit 1; }
 command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 is required but not installed. Aborting."; exit 1; }
@@ -398,6 +399,9 @@ run_commands() {
             continue
         fi
 
+	# FIXME can/should we do something smarter or more configurable here?
+	local fallbackLockFiles=("$dot_git_path"/../../*.lock) # note nullglob is on
+
         if [ "$next_task_status" == "IN PROGRESS" ]; then
             echo "WARNING: contining in-progress $task_type job $next_task_id for PR $pr_number"
             echo "(Waiting 15 seconds to give time to Ctrl+C)"
@@ -406,7 +410,7 @@ run_commands() {
 
         case "$task_type" in
             PR)
-                # FIXME for now we ignore the lockfiles and let nix figure it out
+                # FIXME for now we ignore the lockfiles attached to each commit in the DB, and let nix search for them itself
                 commits=()
                 commit_ids=()
                 local tip_commit
@@ -434,11 +438,10 @@ run_commands() {
 
                     # Do instantiation
                     if existing_derivation_path=$(time nix-instantiate \
-                        --arg jsonConfigFile false \
                         --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
                         --arg inlineCommitList "[ $commits ]" \
+                        --arg fallbackLockFiles "[ $fallbackLockFiles ]" \
                         --argstr prNum "$pr_number" \
-                        -A checkPr \
                         "$nixfile_path")
                     then
                         local escaped_path=${existing_derivation_path//\'/\'\'}
@@ -517,11 +520,10 @@ run_commands() {
 
                     # Do instantiation
                     if derivation_path=\$(time nix-instantiate \\
-                        --arg jsonConfigFile false \\
                         --arg inlineJsonConfig \"{ gitDir = $dot_git_path; projectName = \\\"$repo_name\\\"; }\" \\
                         --arg inlineCommitList \"[ \$commit ]\" \\
+                        --arg fallbackLockFiles \"[ $fallbackLockFiles ]\" \
                         --argstr prNum \"$pr_number\" \\
-                        -A checkPr \\
                         \"$nixfile_path\")
                     then
                         escaped_path=\${derivation_path//\'/\'\'}
@@ -687,7 +689,6 @@ EOF
             echo "Please move it out of the way first."
             exit 1
         fi
-        set -x
         sqlite3 "$DB_FILE" < "$SCHEMA"
         ;;
     init-repo)
