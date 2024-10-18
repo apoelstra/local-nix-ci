@@ -167,6 +167,71 @@ init_repo() {
     echo "Repository '$repo_name' initialized."
 }
 
+# Queue a run on a specific commit
+queue_commit() {
+    locate_repo
+
+    # First, sanity-check the PR number
+    local ref="${1:-}"
+    if [ -z "$ref" ]; then
+        echo "git ref is required by queue-pr command"
+        exit 1
+    fi
+
+    local commit
+    if ! commit=$(git rev-parse "$ref" 2>/dev/null); then
+        echo "No commit at ref $ref."
+        exit 1
+    fi
+    shift
+
+    local escaped_diff="${LOCAL_CI_DIFF//\'/\'\'}"
+
+    echo "Queuing ref $ref; commit $commit"
+    (
+        cat <<EOF
+BEGIN TRANSACTION;
+
+INSERT INTO derivations (nixpkgs_commit, local_ci_commit, local_ci_diff, repo_id)
+    VALUES ('$NIXPKGS_COMMIT_ID', '$LOCAL_CI_COMMIT_ID', '$escaped_diff', $DB_REPO_ID);
+
+INSERT INTO tasks (task_type, on_success, github_comment, repo_id, derivation_id)
+    SELECT 'PR', 'NONE', '', $DB_REPO_ID, id FROM derivations WHERE id = last_insert_rowid();
+
+INSERT INTO tasks_executions (task_id, time_queued)
+    SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
+
+INSERT INTO task_commits (task_id, commit_id, is_tip)
+    SELECT id, '$commit', 1 FROM tasks ORDER BY id DESC LIMIT 1;
+EOF
+
+        # Insert its lockfiles
+        local lockfiles=($(git ls-tree -r --name-only $commit | grep -e 'Cargo.*lock'))
+        if [ "${#lockfiles[@]}" -ne 0 ]; then
+            for ((j = 0; j < ${#lockfiles[@]}; j++)); do
+                local escaped_lockfile_name=${lockfiles[j]//\'/\'\'}
+                local lockfile_content=$(git show "${commits[i]}":"${lockfiles[j]}")
+                local lockfile_gitid=$(git rev-parse "${commits[i]}":"${lockfiles[j]}")
+                local lockfile_sha256=$(echo -n "$lockfile_content" | sha256sum | cut -d' ' -f1)
+                # Because the lockfile is in git, we don't need to store its contents in the db
+
+                # Insert the lockfile and its association with git commits
+                cat <<EOF
+INSERT OR IGNORE INTO lockfiles (blob_id, full_text_sha2, name, repo_id)
+    VALUES ('$lockfile_gitid', '$lockfile_sha256', '$escaped_lockfile_name', $DB_REPO_ID);
+
+INSERT OR IGNORE INTO commit_lockfile (commit_id, lockfile_id)
+    SELECT '${commits[i]}', id FROM lockfiles WHERE full_text_sha2 = '$lockfile_sha256';
+EOF
+            done
+        else
+            echo "Warning: $commit has no lockfiles in it. If needed, will use overrides found at runtime and not store them in db (fixme)" >&2
+        fi
+
+        echo "COMMIT TRANSACTION;"
+    ) | sqlite3 "$DB_FILE"
+}
+
 # Queue a new PR run
 queue_pr() {
     locate_repo
@@ -694,6 +759,9 @@ EOF
     init-repo)
         init_repo "${ARG_COMMAND_ARGS[@]}"
         ;;
+    queue-commit)
+        queue_commit "${ARG_COMMAND_ARGS[@]}"
+        ;;
     queue-pr)
         queue_pr "${ARG_COMMAND_ARGS[@]}"
         ;;
@@ -734,7 +802,7 @@ EOF
         " | jq
         ;;
     *)
-        echo "Usage: $0 {init-db | init-repo <repo-name> <nixfile-name> | queue-pr <pr #> [ACK] [comment] | run}"
+        echo "Usage: $0 {init-db | init-repo <repo-name> <nixfile-name> | queue-commit <ref> | queue-pr <pr #> [ACK] [comment] | run}"
         exit 1
         ;;
 esac
