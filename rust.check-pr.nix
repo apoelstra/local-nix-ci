@@ -1,4 +1,4 @@
-{ fullMatrixOverride ? {} }:
+{ fullMatrixOverride ? { pkgs, utils }: {} }:
 { pkgs ? import <nixpkgs> {}
 , inlineJsonConfig
 , inlineCommitList ? []
@@ -20,7 +20,7 @@ let
       runClippy
       runFmt
       runDocs;
-  } // fullMatrixOverride;
+  } // fullMatrixOverride { inherit pkgs utils; };
 
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";

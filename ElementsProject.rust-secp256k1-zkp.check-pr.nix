@@ -1,26 +1,5 @@
-{ pkgs ? import <nixpkgs> { }
-, lib ? pkgs.lib
-, jsonConfigFile
-, inlineJsonConfig ? null
-, inlineCommitList ? []
-, prNum
-}:
-let
-  utils = import ./andrew-utils.nix { };
-  jsonConfig = if builtins.isNull inlineJsonConfig
-    then utils.parseRustConfig { inherit jsonConfigFile prNum; }
-    else inlineJsonConfig // {
-        gitCommits = map utils.srcFromCommit inlineCommitList;
-    };
-  fullMatrix = {
-    inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig)
-      projectName src rustc msrv
-      lockFile srcName mtxName
-      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml 
-      features
-      runClippy runDocs runFmt;#runCheckPublicApi;
-
+import ./rust.check-pr.nix ({ pkgs, utils }: {
+  fullMatrixOverride = {
     secp256k1RevFile = { src, ... }: builtins.elemAt (builtins.split "\n"
       (builtins.readFile "${src.src}/secp256k1-zkp-sys/depend/secp256k1-HEAD-revision.txt"))
       2;
@@ -31,7 +10,7 @@ let
     };
 
     extraTestPostRun = { isMainLockFile, workspace, rustc, secp256k1Src, ... }:
-      lib.optionalString (isMainLockFile && workspace == "secp256k1-zkp-sys" && utils.rustcIsNightly rustc) ''
+      pkgs.lib.optionalString (isMainLockFile && workspace == "secp256k1-zkp-sys" && utils.rustcIsNightly rustc) ''
         # Check whether C code is consistent with upstream
         pushd secp256k1-zkp-sys
         patchShebangs ./vendor-libsecp.sh
@@ -48,16 +27,4 @@ let
         popd
       '';
   };
-
-  checkData = rec {
-    name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
-    argsMatrix = fullMatrix;
-    singleCheckDrv = utils.crate2nixSingleCheckDrv;
-    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
-    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
-  };
-in
-{
-  checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr checkData;
-}
+})
