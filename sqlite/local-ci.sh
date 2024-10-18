@@ -505,7 +505,7 @@ run_commands() {
                     if existing_derivation_path=$(time nix-instantiate \
                         --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
                         --arg inlineCommitList "[ $commits ]" \
-                        --arg fallbackLockFiles "[ $fallbackLockFiles ]" \
+                        --arg fallbackLockFiles "[ ${fallbackLockFiles[@]} ]" \
                         --argstr prNum "$pr_number" \
                         "$nixfile_path")
                     then
@@ -587,7 +587,7 @@ run_commands() {
                     if derivation_path=\$(time nix-instantiate \\
                         --arg inlineJsonConfig \"{ gitDir = $dot_git_path; projectName = \\\"$repo_name\\\"; }\" \\
                         --arg inlineCommitList \"[ \$commit ]\" \\
-                        --arg fallbackLockFiles \"[ $fallbackLockFiles ]\" \
+                        --arg fallbackLockFiles \"[ ${fallbackLockFiles[@]} ]\" \
                         --argstr prNum \"$pr_number\" \\
                         \"$nixfile_path\")
                     then

@@ -1,27 +1,5 @@
-{ pkgs ? import <nixpkgs> { }
-, jsonConfigFile
-, inlineJsonConfig ? null
-, inlineCommitList ? []
-, prNum
-}:
-let
-  utils = import ./andrew-utils.nix { };
-  jsonConfig = if builtins.isNull inlineJsonConfig
-    then utils.parseRustConfig { inherit jsonConfigFile prNum; }
-    else inlineJsonConfig // {
-        gitCommits = map utils.srcFromCommit inlineCommitList;
-    };
-
-  fullMatrix = {
-    inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig)
-      projectName src rustc msrv lockFile srcName mtxName
-      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
-      features # Must be overridden if there are any exceptional feature combinations
-      runClippy
-      runFmt
-      runDocs;
-
+import ./rust.check-pr.nix {
+  fullMatrixOverride = {
     clippyExtraArgs = "-A clippy::doc_lazy_continuation"; # https://github.com/rust-bitcoin/rust-secp256k1/pull/705
 
     secp256k1RevFile = { src, ... }: builtins.elemAt (builtins.split "\n"
@@ -67,16 +45,4 @@ let
       ''
       else "";
   };
-
-  checkData = rec {
-    name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
-    argsMatrix = fullMatrix;
-    singleCheckDrv = utils.crate2nixSingleCheckDrv;
-    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
-    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
-  };
-in
-{
-  checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr checkData;
 }
