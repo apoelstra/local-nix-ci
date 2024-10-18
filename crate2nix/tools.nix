@@ -11,6 +11,9 @@
 ## ("allow deps to have workspaces", merged as #166) as well as some extra "override
 ## lockfile" functionality (which I could not convince kolloch was worth upstreaming).
 ##
+## On 2024-10-18 changed to 0c9668f3018e9d51e22189c218a4de9bbc8182ae which is my PR
+## 365, which fixes a problem with rust-secp-zkp that was introduced by 357.
+##
 
 #
 # Some tools that might be useful in builds.
@@ -28,7 +31,8 @@ let
   crate2nixRepo = fetchGit {
     url = "https://github.com/kolloch/crate2nix";
     ref = "master";
-    rev = "236f6addfd452a48be805819e3216af79e988fd5"; # master at 2024-10-06
+    allRefs = true; # only needed when using a PR
+    rev = "0c9668f3018e9d51e22189c218a4de9bbc8182ae"; # pr 365
   };
   cargoNix = pkgs.callPackage "${crate2nixRepo}/crate2nix/Cargo.nix" { inherit strictDeprecation; };
   crate2nix = cargoNix.rootCrate.build;
