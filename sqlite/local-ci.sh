@@ -466,6 +466,7 @@ run_commands() {
 
         # FIXME can/should we do something smarter or more configurable here?
         local fallbackLockFiles=("$dot_git_path"/../../*.lock) # note nullglob is on
+	fallbackLockFiles="${fallbackLockFiles[@]}" # convert to string
 
         if [ "$next_task_status" == "IN PROGRESS" ]; then
             echo "WARNING: contining in-progress $task_type job $next_task_id for PR $pr_number"
@@ -505,7 +506,7 @@ run_commands() {
                     if existing_derivation_path=$(time nix-instantiate \
                         --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
                         --arg inlineCommitList "[ $commits ]" \
-                        --arg fallbackLockFiles "[ ${fallbackLockFiles[@]} ]" \
+                        --arg fallbackLockFiles "[ $fallbackLockFiles ]" \
                         --argstr prNum "$pr_number" \
                         "$nixfile_path")
                     then
@@ -587,7 +588,7 @@ run_commands() {
                     if derivation_path=\$(time nix-instantiate \\
                         --arg inlineJsonConfig \"{ gitDir = $dot_git_path; projectName = \\\"$repo_name\\\"; }\" \\
                         --arg inlineCommitList \"[ \$commit ]\" \\
-                        --arg fallbackLockFiles \"[ ${fallbackLockFiles[@]} ]\" \
+                        --arg fallbackLockFiles \"[ $fallbackLockFiles ]\" \
                         --argstr prNum \"$pr_number\" \\
                         \"$nixfile_path\")
                     then
