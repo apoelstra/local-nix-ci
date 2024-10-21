@@ -20,7 +20,9 @@ let
       features # Must be overridden if there are any exceptional feature combinations
       runClippy
       runFmt
-      runDocs;
+      runDocs
+      releaseMode # Should override with false for slow crates!
+      ;
   } // fullMatrixOverride;
 
   checkData = rec {
