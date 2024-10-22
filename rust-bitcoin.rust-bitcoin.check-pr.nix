@@ -3,7 +3,7 @@ let
 in import ./rust.check-pr.nix {
   inherit utils;
   fullMatrixOverride = {
-    #runClippy = false;
+    #runClippy = false; # needed for 0.32 backports
     runFmt = false;
 
     features = { src, cargoToml, workspace, ... }:
