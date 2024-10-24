@@ -5,6 +5,7 @@ in import ./rust.check-pr.nix {
   fullMatrixOverride = {
     #runClippy = false; # needed for 0.32 backports
     runFmt = false;
+    releaseMode = false; # ungodly slow
 
     features = { src, cargoToml, workspace, ... }:
       if workspace == "bitcoin"
