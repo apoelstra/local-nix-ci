@@ -1,7 +1,7 @@
 { pkgs ? import <nixpkgs> { }
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
-, jsonConfigFile
+, jsonConfigFile ? null
 , inlineJsonConfig ? null
 , inlineCommitList ? []
 , prNum

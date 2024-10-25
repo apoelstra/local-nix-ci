@@ -503,15 +503,17 @@ run_commands() {
                     echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
 
                     # Do instantiation
-                    if existing_derivation_path=$(time nix-instantiate \
+                    if existing_derivation_paths=$(time nix-instantiate \
                         --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
                         --arg inlineCommitList "[ $commits ]" \
                         --arg fallbackLockFiles "[ $fallbackLockFiles ]" \
                         --argstr prNum "$pr_number" \
                         "$nixfile_path")
                     then
-                        local escaped_path=${existing_derivation_path//\'/\'\'}
-                        sqlite3 "$DB_FILE" "UPDATE derivations SET path = '$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;"
+                        for existing_derivation_path in $existing_derivation_paths; do
+                            local escaped_path=${existing_derivation_path//\'/\'\'}
+                            sqlite3 "$DB_FILE" "UPDATE derivations SET path = '$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;"
+                        done
                         popd
                     else
                         sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
