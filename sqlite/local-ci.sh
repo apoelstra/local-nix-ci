@@ -397,7 +397,9 @@ EOF
 }
 
 run_commands() {
-    local backoff_sec=15
+    local backoff_sec=30
+    local sleep_secs=$backoff_sec
+
     while true; do
         # Any changes to this SELECT must be mirrored below as a new local variable.
         local json_next_task
@@ -434,11 +436,21 @@ run_commands() {
         # Check if a task was found
         if [ -z "$json_next_task" ] || [ "$json_next_task" == "[]" ]; then
             # No queued tasks, sleep and continue
-            echo "([$(date +"%F %T")] Nothing to do; sleeping $backoff_sec seconds.)"
-            sleep $backoff_sec
-            if [ "$backoff_sec" -lt 300 ]; then
-                backoff_sec=$((backoff_sec * 2))
+            if [ "$sleep_secs" -ge "$backoff_sec" ]; then
+                # Will max out at 480, 960, 1920, etc., whichever is greater than
+                # the number written here.
+                if [ "$backoff_sec" -lt 600 ]; then
+                    backoff_sec=$((backoff_sec * 2))
+                    sleep_secs=0
+                fi
+
+                echo "([$(date +"%F %T")] Nothing to do. (Next message in $((backoff_sec / 60)) minutes.)"
+                sleep_secs=0;
             fi
+
+            sleep 5
+            sleep_secs=$((sleep_secs + 5))
+
             continue
         else
             backoff_sec=15
@@ -466,7 +478,7 @@ run_commands() {
 
         # FIXME can/should we do something smarter or more configurable here?
         local fallbackLockFiles=("$dot_git_path"/../../*.lock) # note nullglob is on
-	fallbackLockFiles="${fallbackLockFiles[@]}" # convert to string
+        fallbackLockFiles="${fallbackLockFiles[@]}" # convert to string
 
         if [ "$next_task_status" == "IN PROGRESS" ]; then
             echo "WARNING: contining in-progress $task_type job $next_task_id for PR $pr_number"
