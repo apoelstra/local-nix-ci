@@ -429,7 +429,8 @@ run_commands() {
             tasks_executions.status = 'QUEUED'
             OR tasks_executions.status = 'IN PROGRESS'
         ORDER BY
-            tasks_executions.time_queued
+            tasks.task_type DESC,
+            tasks_executions.time_queued ASC
         LIMIT 1;
         ")"
 
@@ -813,7 +814,8 @@ EOF
             OR tasks_executions.status = 'IN PROGRESS'
             OR tasks_executions.time_end > '$adayago'
         ORDER BY
-            tasks_executions.time_queued
+            tasks.task_type DESC,
+            tasks_executions.time_queued ASC
         " | jq
         ;;
     *)
