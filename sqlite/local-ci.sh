@@ -250,17 +250,25 @@ queue_pr() {
     esac
     shift
 
-    local on_success="COMMENT"
+    local on_success
     if [ -n "${1:-}" ]; then
         if [ "$1" == "ACK" ]; then
             on_success="ACK"
+            shift
+        elif [ "$1" == "COMMENT" ]; then
+            echo "Warning: not ACKing PR."
+            on_success="COMMENT"
             shift
         elif [ "$1" == "NOCOMMENT" ]; then
             on_success="NONE"
             shift
         else
-            echo "Warning: not ACKing PR."
+            echo "You must say ACK, COMMENT, or NOCOMMENT before your comment."
+            exit 1
         fi
+    else
+        echo "You must say ACK, COMMENT, or NOCOMMENT (then optionally a comment)."
+        exit 1
     fi
     local escaped_github_comment
     if [ "${#@}" -eq 0 ]; then
