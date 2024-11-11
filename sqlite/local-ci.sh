@@ -210,8 +210,8 @@ EOF
         if [ "${#lockfiles[@]}" -ne 0 ]; then
             for ((j = 0; j < ${#lockfiles[@]}; j++)); do
                 local escaped_lockfile_name=${lockfiles[j]//\'/\'\'}
-                local lockfile_content=$(git show "${commits[i]}":"${lockfiles[j]}")
-                local lockfile_gitid=$(git rev-parse "${commits[i]}":"${lockfiles[j]}")
+                local lockfile_content=$(git show "$commit":"${lockfiles[j]}")
+                local lockfile_gitid=$(git rev-parse "$commit":"${lockfiles[j]}")
                 local lockfile_sha256=$(echo -n "$lockfile_content" | sha256sum | cut -d' ' -f1)
                 # Because the lockfile is in git, we don't need to store its contents in the db
 
@@ -221,7 +221,7 @@ INSERT OR IGNORE INTO lockfiles (blob_id, full_text_sha2, name, repo_id)
     VALUES ('$lockfile_gitid', '$lockfile_sha256', '$escaped_lockfile_name', $DB_REPO_ID);
 
 INSERT OR IGNORE INTO commit_lockfile (commit_id, lockfile_id)
-    SELECT '${commits[i]}', id FROM lockfiles WHERE full_text_sha2 = '$lockfile_sha256';
+    SELECT '$commit', id FROM lockfiles WHERE full_text_sha2 = '$lockfile_sha256';
 EOF
             done
         else
