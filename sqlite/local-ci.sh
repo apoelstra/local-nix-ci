@@ -408,7 +408,19 @@ run_commands() {
     local backoff_sec=30
     local sleep_secs=$backoff_sec
 
+    local afk="";
     while true; do
+        local last_afk=$afk
+        local afk=$(echo "SELECT afk FROM config" | sqlite3 "$DB_FILE")
+        if [ "$afk" != "$last_afk" ]; then
+            echo "Away-from-keyboard: $afk"
+        fi
+
+        if [ "$afk" = "AFK" ]; then
+            local extra_order_by="tasks.task_type DESC,"
+        else
+            local extra_order_by=""
+        fi
         # Any changes to this SELECT must be mirrored below as a new local variable.
         local json_next_task
         json_next_task="$(sqlite3 -json "$DB_FILE" "
@@ -437,7 +449,7 @@ run_commands() {
             tasks_executions.status = 'QUEUED'
             OR tasks_executions.status = 'IN PROGRESS'
         ORDER BY
-            tasks.task_type DESC,
+            $extra_order_by
             tasks_executions.time_queued ASC
         LIMIT 1;
         ")"
@@ -683,6 +695,16 @@ if [ "$ARG_COMMAND" != "init-db" ]; then
 fi
 
 case "$ARG_COMMAND" in
+    afk)
+        AFK=$(echo "SELECT afk FROM config" | sqlite3 "$DB_FILE")
+        echo "Setting away-from-keyboard to AFK (was $AFK)."
+        echo "UPDATE config SET afk = 'AFK'" | sqlite3 "$DB_FILE"
+        ;;
+   back)
+        AFK=$(echo "SELECT afk FROM config" | sqlite3 "$DB_FILE")
+        echo "Setting away-from-keyboard to BACK (was $AFK)."
+        echo "UPDATE config SET afk = 'BACK'" | sqlite3 "$DB_FILE"
+        ;;
     clear-queue)
         (cat <<EOF
 -- This entire blurb from ChatGPT 2024-10-16
@@ -796,6 +818,14 @@ EOF
         run_commands
         ;;
     show-queue)
+        AFK=$(echo "SELECT afk FROM config" | sqlite3 "$DB_FILE")
+        echo "Away-from-keyboard: $AFK"
+        if [ "$AFK" = "AFK" ]; then
+            extra_order_by="tasks.task_type DESC,"
+        else
+            extra_order_by=""
+        fi
+
         adayago=$(date '+%F %T' -d '24 hours ago')
         # Just output the raw json. It looks reasonable for human consumption
         # and is useful for machine consumption.
@@ -822,7 +852,7 @@ EOF
             OR tasks_executions.status = 'IN PROGRESS'
             OR tasks_executions.time_end > '$adayago'
         ORDER BY
-            tasks.task_type DESC,
+            $extra_order_by
             tasks_executions.time_queued ASC
         " | jq
         ;;

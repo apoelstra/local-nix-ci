@@ -97,5 +97,5 @@ CREATE TABLE commit_lockfile
     );
 CREATE INDEX commit_lockfile_lockfile_id_index ON commit_lockfile(lockfile_id);
 
-
-
+CREATE TABLE config
+    ( afk TEXT NOT NULL CHECK(task_type in ('AFK', 'BACK')) );
