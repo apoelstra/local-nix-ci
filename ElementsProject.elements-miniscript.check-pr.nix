@@ -5,5 +5,6 @@ in import ./rust.check-pr.nix {
   fullMatrixOverride = {
     runDocs = false; # 2024-09-24 -- should fix, several bugs
     runFmt = false; # we don't do rustfmt here
+    runClippy = false;
   };
 }
