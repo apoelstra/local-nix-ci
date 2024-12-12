@@ -516,6 +516,7 @@ rec {
     }:
     generatedCargoNix:
     let
+      cargoNixPath = "${generatedCargoNix}";
       releaseModeName = if releaseMode then "release" else "debug";
       memoName = builtins.unsafeDiscardStringContext
         "${projectName}-called-cargo-nix-${builtins.toString prNum}-${src.shortId}-${lockFile}-${rustc.version}-${releaseModeName}";
@@ -550,6 +551,7 @@ rec {
               preUnpack = ''
                 set +x
                 echo "[buildRustCrate override for crate ${crate.crateName} (root)]"
+                echo 'Cargo.nix: ${cargoNixPath}'
                 echo 'Project name: ${projectName}'
                 echo 'PR number: ${builtins.toString prNum}'
                 echo 'rustc: ${builtins.toString rustc}'
