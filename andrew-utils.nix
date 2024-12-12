@@ -535,29 +535,38 @@ rec {
         # `callPackage` call so we can't even use laziness to refer to yet-undetermined
         # values.
         buildRustCrateForPkgs = pkgs: crate:
-          if builtins.elem crate.crateName rootCrateIds
-          # need to force msrv in here because of https://github.com/NixOS/nixpkgs/pull/274440#pullrequestreview-2350593987
-          then (pkgs.buildRustCrate (crate // { rust-version = msrv; })).override {
-            preUnpack = ''
-              set +x
-              echo "[buildRustCrate override for crate ${crate.crateName} (root)]"
-              echo 'Project name: ${projectName}'
-              echo 'PR number: ${builtins.toString prNum}'
-              echo 'rustc: ${builtins.toString rustc}'
-              echo 'lockFile: ${lockFile}'
-              echo 'Source commit: ${builtins.toString src.commitId}'
-              echo 'Source: ${builtins.toString src.src}'
-            '';
-            rust = rustc;
-          }
-          else (pkgs.buildRustCrate (crate // { rust-version = msrv; })).override {
-            preUnpack = ''
-              set +x
-              echo "[buildRustCrate override for crate ${crate.crateName} (dependency)]"
-              echo 'rustc: ${builtins.toString rustc}'
-            '';
-            rust = rustc;
+          # Unsure where this ought to live. Arguably in nixpkgs itself.
+          let buildRustCrate = pkgs.buildRustCrate.override {
+            defaultCrateOverrides = pkgs.defaultCrateOverrides // {
+              hidapi = attrs: {
+                buildInputs = [ pkgs.pkg-config pkgs.hidapi pkgs.udev ];
+              };
+            };
           };
+          in
+            if builtins.elem crate.crateName rootCrateIds
+            # need to force msrv in here because of https://github.com/NixOS/nixpkgs/pull/274440#pullrequestreview-2350593987
+            then (buildRustCrate (crate // { rust-version = msrv; })).override {
+              preUnpack = ''
+                set +x
+                echo "[buildRustCrate override for crate ${crate.crateName} (root)]"
+                echo 'Project name: ${projectName}'
+                echo 'PR number: ${builtins.toString prNum}'
+                echo 'rustc: ${builtins.toString rustc}'
+                echo 'lockFile: ${lockFile}'
+                echo 'Source commit: ${builtins.toString src.commitId}'
+                echo 'Source: ${builtins.toString src.src}'
+              '';
+              rust = rustc;
+            }
+            else (buildRustCrate (crate // { rust-version = msrv; })).override {
+              preUnpack = ''
+                set +x
+                echo "[buildRustCrate override for crate ${crate.crateName} (dependency)]"
+                echo 'rustc: ${builtins.toString rustc}'
+              '';
+              rust = rustc;
+            };
         release = releaseMode;
       };
       rootCrateIds =
@@ -651,8 +660,12 @@ rec {
         testPostRun = ''
             set -x
             pwd
-            export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin
+            export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin:${pkgs.pkg-config}/bin
             export NIXES_GENERATED_DIR=${generatedCargoNix}/
+            # FIXME these two lines properly belong to icboc -- should add some config
+            # field for this stuff. (Needed for `cargo test` to run with a hidapi depenedncy)
+            export PKG_CONFIG_PATH=${pkgs.udev.dev}/lib/pkgconfig
+            export CFLAGS="$NIX_CFLAGS_COMPILE -isystem ${pkgs.udev.dev}/include"
 
             export CARGO_TARGET_DIR=$PWD/target
             pushd ${generatedCargoNix}/crate
