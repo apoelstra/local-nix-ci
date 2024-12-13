@@ -821,9 +821,9 @@ EOF
         AFK=$(echo "SELECT afk FROM config" | sqlite3 "$DB_FILE")
         echo "Away-from-keyboard: $AFK"
         if [ "$AFK" = "AFK" ]; then
-            extra_order_by="tasks.task_type DESC,"
+            extra_order_by="tasks.task_type"
         else
-            extra_order_by=""
+            extra_order_by="''"
         fi
 
         adayago=$(date '+%F %T' -d '24 hours ago')
@@ -848,12 +848,24 @@ EOF
             JOIN derivations ON tasks.derivation_id = derivations.id
             JOIN repos ON tasks.repo_id = repos.id
         WHERE
-            tasks_executions.status = 'QUEUED'
-            OR tasks_executions.status = 'IN PROGRESS'
-            OR tasks_executions.time_end > '$adayago'
+            status = 'QUEUED'
+            OR status = 'IN PROGRESS'
+            OR time_end > '$adayago'
         ORDER BY
-            $extra_order_by
-            tasks_executions.time_queued ASC
+            CASE
+                WHEN status IN ('SUCCESS', 'FAILED') THEN 0
+                WHEN status = 'IN PROGRESS' THEN 1
+                ELSE 2
+            END,
+            CASE
+                WHEN status = 'IN PROGRESS' THEN $extra_order_by
+                ELSE ''
+            END DESC,
+            CASE
+                WHEN status IN ('SUCCESS', 'FAILED') THEN time_ended
+                WHEN status = 'IN PROGRESS' THEN time_started
+                ELSE time_queued
+            END ASC
         " | jq
         ;;
     *)
