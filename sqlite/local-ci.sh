@@ -511,7 +511,6 @@ run_commands() {
             PR)
                 # FIXME for now we ignore the lockfiles attached to each commit in the DB, and let nix search for them itself
                 commits=()
-                commit_ids=()
                 local tip_commit
                 for data in $(sqlite3 -separator '-' "$DB_FILE" "SELECT commit_id, is_tip FROM task_commits WHERE task_id = $next_task_id"); do
                     local commit=$(echo $data | cut -d'-' -f1)
@@ -522,7 +521,6 @@ run_commands() {
                     else
                         commits+=("{ commit = \"$commit\"; isTip = false; gitUrl = $dot_git_path; }")
                     fi
-                    commit_ids+=("$commit")
                 done
 
                 # From here on we are doing an execution.
@@ -536,9 +534,10 @@ run_commands() {
                     echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
 
                     # Do instantiation
+		    local strcommits="${commits[@]}"
                     if existing_derivation_paths=$(time nix-instantiate \
                         --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
-                        --arg inlineCommitList "[ $commits ]" \
+                        --arg inlineCommitList "[ $strcommits ]" \
                         --arg fallbackLockFiles "[ $fallbackLockFiles ]" \
                         --argstr prNum "$pr_number" \
                         "$nixfile_path")

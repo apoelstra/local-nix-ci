@@ -23,7 +23,9 @@ for commit in "$OUTPUT_DIR"/*; do
             \"fmt/clippy/docs/check-api\": (.checkPrRunFmt + \"/\" + .checkPrRunClippy + \"/\" + .checkPrRunDocs + \"/\" + .checkPrRunCheckPublicApi),
             \"workspace\": .checkPrWorkspace,
             \"features\": .checkPrFeatures,
-            \"rustc\": .checkPrRustc
+            \"rustc\": .checkPrRustc,
+            \"commit\": .checkPrSrc,
+            \"derivation\": \"$deriver\"
         }" | sed 's/^/  /'
         #nix show-derivation "$deriver" | jq -Ccr ".\"$deriver\" | .env"
         echo
