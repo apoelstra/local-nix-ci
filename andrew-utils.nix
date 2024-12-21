@@ -34,11 +34,36 @@ rec {
   # Laziness means this is only called when used
   tools-nix = overlaidPkgs.callPackage tools-nix-path {};
 
+  # Support for old elementsd and bitcoind. Modern nixpkgs have dropped
+  # boost 1.75, and its versions of db 4.8 don't link with ancient versions
+  # of gcc, and probably there are other problems. Easier to just use this
+  # old nixpkgs.
+  ancientNixpkgs = import (builtins.fetchTarball {
+    url = "https://releases.nixos.org/nixos/21.05/nixos-21.05.993.93963c27b93/nixexprs.tar.xz";
+    sha256 = "sha256:024ryxx9ndsxf13w9gmcm5n942kpa4nrgc53jjjiq3lnicw3g4yk";
+  }) {};
+  elementsDotNix = builtins.fetchGit {
+    url = "https://github.com/roconnor-blockstream/elements-nix";
+  };
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
-  bitcoinSrc = (nixpkgs.callPackage /store/home/apoelstra/code/bitcoin/bitcoin/default.nix {}).bitcoin24;
+  bitcoinSrc = (nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
+    miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
+    withSource = fetchGit {
+      url = "https://github.com/bitcoin/bitcoin";
+      ref = "refs/tags/v24.2";
+    };
+  });
   # Similar, for rust-elements.
-  elementsSrc = (nixpkgs.callPackage /store/home/apoelstra/code/ElementsProject/elements/default.nix {}).elements21;
+  elementsSrc = (ancientNixpkgs.callPackage "${elementsDotNix}/elements.nix" {
+    stdenv = ancientNixpkgs.gcc11Stdenv;
+    boost = ancientNixpkgs.boost175;
+    doCheck = false;
+    withSource = fetchGit {
+      url = "https://github.com/ElementsProject/elements";
+      ref = "refs/tags/elements-0.21.0.2";
+    };
+  });
   # See comment near usage for what this is for.
   rustcLdLibraryPath = "${stdenv.cc.cc.lib}/lib/";
 
