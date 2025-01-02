@@ -16,15 +16,14 @@ command -v github-merge.py >/dev/null 2>&1 || { echo "github-merge.py is require
 
 # Global setup
 DB_FILE="$HOME/local-ci.db"
-OUT_DIR=/nix/var/nix/gcroots/per-user/apoelstra/ci-output
 NIX_PIN_PATH="$HOME/code/NixOS/nixpkgs/local-ci-pin/"
 
 export NIX_PATH=nixpkgs=$NIX_PIN_PATH
 NIXPKGS_COMMIT_ID=$(cd "$NIX_PIN_PATH/" && git rev-parse HEAD)
-LOCAL_CI_PATH="$(cd $(dirname $(realpath "$0")); git rev-parse --show-toplevel)"
+LOCAL_CI_PATH="$(cd "$(dirname "$(realpath "$0")")"; git rev-parse --show-toplevel)"
 LOCAL_CI_WORKTREE="../local-ci-worktree"
-LOCAL_CI_COMMIT_ID="$(cd $(dirname $(realpath "$0")); git rev-parse HEAD)"
-LOCAL_CI_DIFF="$(cd $(dirname $(realpath "$0")); git diff)"
+LOCAL_CI_COMMIT_ID="$(cd "$(dirname "$(realpath "$0")")"; git rev-parse HEAD)"
+LOCAL_CI_DIFF="$(cd "$(dirname "$(realpath "$0")")"; git diff)"
 
 # Arguments (will be populated by parse_arguments)
 ARG_COMMAND=
@@ -65,7 +64,7 @@ parse_arguments() {
 locate_repo() {
     # First, find repo's git dir, by reading the command-line --repo-name and
     # otherwise just looking at the current git directory.
-    if [ ! -z "$ARG_REPO_NAME" ]; then
+    if [ -z "$ARG_REPO_NAME" ]; then
         local escaped_repo_name="${ARG_REPO_NAME//\'/\'\'}"
         local num_results=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM repos WHERE name = '$escaped_repo_name';")
         if [ "$num_results" -eq 0 ]; then
@@ -124,7 +123,7 @@ init_repo() {
     if [ -z "$nixfile_path" ]; then
         echo "Error: Nix file path is required. Available files:"
         pushd "$LOCAL_CI_PATH"
-            ls *check-pr.nix
+            ls ./*check-pr.nix
         popd
         exit 1
     fi
@@ -132,7 +131,7 @@ init_repo() {
     if [ ! -f "$LOCAL_CI_PATH/$nixfile_path" ]; then
         echo "Error: Nix file path does not appear to be a file. Available files:"
         pushd "$LOCAL_CI_PATH"
-            ls *check-pr.nix
+            ls ./*check-pr.nix
         popd
         exit 1
     fi
@@ -144,7 +143,6 @@ init_repo() {
 
     # Escape variables for SQL
     local escaped_repo_name="${repo_name//\'/\'\'}"
-    local escaped_nixfile_path="${nixfile_path//\'/\'\'}"
     local escaped_git_path="${dot_git_path//\'/\'\'}"
 
     # Check if it is already in database
