@@ -825,7 +825,11 @@ EOF
             extra_order_by="''"
         fi
 
-        adayago=$(date '+%F %T' -d '24 hours ago')
+        if [ -n "$1" ]
+        then adayago=$(date '+%F %T' -d "$1 hours ago")
+        else adayago=$(date '+%F %T' -d "24 hours ago")
+        fi
+
         # Just output the raw json. It looks reasonable for human consumption
         # and is useful for machine consumption.
         sqlite3 -json "$DB_FILE" "
