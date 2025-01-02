@@ -823,7 +823,7 @@ EOF
             extra_order_by="''"
         fi
 
-        if [ -n "$2" ]
+        if [ -n "${2:-}" ]
         then adayago=$(date '+%F %T' -d "$2 hours ago")
         else adayago=$(date '+%F %T' -d "24 hours ago")
         fi
