@@ -64,7 +64,7 @@ parse_arguments() {
 locate_repo() {
     # First, find repo's git dir, by reading the command-line --repo-name and
     # otherwise just looking at the current git directory.
-    if [ -z "$ARG_REPO_NAME" ]; then
+    if [ -n "$ARG_REPO_NAME" ]; then
         local escaped_repo_name="${ARG_REPO_NAME//\'/\'\'}"
         local num_results=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM repos WHERE name = '$escaped_repo_name';")
         if [ "$num_results" -eq 0 ]; then
