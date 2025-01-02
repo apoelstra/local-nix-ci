@@ -254,18 +254,18 @@ queue_pr() {
             on_success="ACK"
             shift
         elif [ "$1" == "COMMENT" ]; then
-            echo "Warning: not ACKing PR."
+            echo "Warning: not ACKing PR." >&2
             on_success="COMMENT"
             shift
         elif [ "$1" == "NOCOMMENT" ]; then
             on_success="NONE"
             shift
         else
-            echo "You must say ACK, COMMENT, or NOCOMMENT before your comment."
+            echo "You must say ACK, COMMENT, or NOCOMMENT before your comment." >&2
             exit 1
         fi
     else
-        echo "You must say ACK, COMMENT, or NOCOMMENT (then optionally a comment)."
+        echo "You must say ACK, COMMENT, or NOCOMMENT (then optionally a comment)." >&2
         exit 1
     fi
     local escaped_github_comment
@@ -411,7 +411,7 @@ run_commands() {
         local last_afk=$afk
         local afk=$(echo "SELECT afk FROM config" | sqlite3 "$DB_FILE")
         if [ "$afk" != "$last_afk" ]; then
-            echo "Away-from-keyboard: $afk"
+            echo "Away-from-keyboard: $afk" >&2
         fi
 
         if [ "$afk" = "AFK" ]; then
@@ -816,7 +816,7 @@ EOF
         ;;
     show-queue)
         AFK=$(echo "SELECT afk FROM config" | sqlite3 "$DB_FILE")
-        echo "Away-from-keyboard: $AFK"
+        echo "Away-from-keyboard: $AFK" >&2
         if [ "$AFK" = "AFK" ]; then
             extra_order_by="tasks.task_type"
         else
