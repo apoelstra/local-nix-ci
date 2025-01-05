@@ -91,6 +91,12 @@ let
                 done
                 rm ./*.[ch]
 
+                ./dist/build/GenDecodeJet/GenDecodeJet
+                for inc in *.inc; do
+                    diff "$inc" "${sourceDir}/C/$inc"
+                done
+                rm ./*.inc
+
                 echo "Checking benchmarks. WARNING whitelisting GeNegate which has made-up value"
                 if grep -q rawBenchmark Haskell-Generate/GenPrimitive.hs; then
                     # head -c -1 is trick to eat the trailing newline from the heredoc
