@@ -816,6 +816,7 @@ EOF
         ;;
     show-queue)
         AFK=$(echo "SELECT afk FROM config" | sqlite3 "$DB_FILE")
+        TIME="${ARG_COMMAND_ARGS[0]:-24 hours ago}"
         echo "Away-from-keyboard: $AFK" >&2
         if [ "$AFK" = "AFK" ]; then
             extra_order_by="tasks.task_type"
@@ -823,10 +824,7 @@ EOF
             extra_order_by="''"
         fi
 
-        if [ -n "${2:-}" ]
-        then adayago=$(date '+%F %T' -d "$2 hours ago")
-        else adayago=$(date '+%F %T' -d "24 hours ago")
-        fi
+        adayago=$(date '+%F %T' -d "$TIME")
 
         # Just output the raw json. It looks reasonable for human consumption
         # and is useful for machine consumption.
