@@ -93,7 +93,18 @@ let
 
                 ./dist/build/GenDecodeJet/GenDecodeJet
                 for inc in *.inc; do
-                    diff "$inc" "${sourceDir}/C/$inc"
+                    case $inc in
+                    decodeCoreJets.inc)
+                        diff "$inc" "${sourceDir}/C/$inc"
+                        ;;
+                    decodeElementsJets.inc)
+                        diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
+                        ;;
+                    *)
+                        echo "Unexpected output $inc from GenDecodeJet"
+                        exit 1
+                        ;;
+                    esac
                 done
                 rm ./*.inc
 
