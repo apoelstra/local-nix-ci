@@ -93,6 +93,7 @@ CREATE INDEX task_commits_commit_id_index ON task_commits(commit_id);
 CREATE TABLE commit_lockfile
     ( commit_id TEXT NOT NULL -- git sha1 hash of the commit
     , lockfile_id INTEGER REFERENCES lockfiles(id) -- reference to Rust lockfiles, if any are used by the commit
+    , cargo_nix
     , PRIMARY KEY (commit_id, lockfile_id)
     );
 CREATE INDEX commit_lockfile_lockfile_id_index ON commit_lockfile(lockfile_id);

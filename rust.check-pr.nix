@@ -4,18 +4,16 @@
 }:
 { inlineJsonConfig
 , inlineCommitList ? []
-, fallbackLockFiles ? []
 , prNum
 }:
 let
   jsonConfig = inlineJsonConfig // {
-    inherit fallbackLockFiles;
     gitCommits = map utils.srcFromCommit inlineCommitList;
   };
   fullMatrix = {
     inherit prNum;
     inherit (utils.standardRustMatrixFns jsonConfig)
-      projectName src msrv rustc lockFile srcName mtxName
+      projectName src msrv rustc cargoNix lockFile srcName mtxName
       isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
       features # Must be overridden if there are any exceptional feature combinations
       runClippy

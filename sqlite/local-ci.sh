@@ -160,6 +160,63 @@ init_repo() {
     echo "Repository '$repo_name' initialized."
 }
 
+echo_insert_rust_lockfiles() {
+    local commit_id=$1
+    if [ "$(git cat-file -t "$commit_id" 2>/dev/null)" != "commit" ]; then
+        echo "echo_insert_rust_lockfiles: got bad commit ID $commit_id" >&2
+        exit 2
+    fi
+
+    # Try using any lockfiles in the root of the repo. If there are none, try using
+    # fallbacks found in the directory above the root.
+    local lockfiles=($(git ls-tree --name-only ${commits[i]} | grep '^Cargo.*\.lock$'))
+    if [ "${#lockfiles[@]}" == 0 ]; then
+        lockfiles=("$dot_git_path"/../../*.lock); # note nullglob is on
+        # If we have fallbacks, post a warning for each one. If not, no output -- we
+        # will assume this isn't a Rust repo. If it is, the result may be a silently
+        # empty test matrix. But we this is not the place to try to detect that.
+        for ((i = 0; i < ${#lockfiles[@]}; i++)); do
+            echo "$commit_id: Warning: using fallback lockfile ${lockfiles[i]}"
+        done
+    fi
+
+    for ((i = 0; i < ${#lockfiles[@]}; i++)); do
+        local escaped_lockfile_name=${lockfiles[i]//\'/\'\'}
+        local lockfile_content
+        local lockfile_gitid
+        local lockfile_sha256
+        local nixfile
+
+        if lockfile_gitid=$(git rev-parse --verify --quiet "$commit_id:${lockfiles[i]}" 2>/dev/null); then
+            lockfile_content= #  not used
+            lockfile_sha256=$(git show "$lockfile_gitid" | sha256sum | cut -d' ' -f1)
+        else
+            lockfile_content=$(cat "${lockfiles[i]}")
+            lockfile_sha256=$(echo -n "$lockfile_content" | sha256sum | cut -d' ' -f1)
+        fi
+
+        nixfile=$("$LOCAL_CI_PATH/sqlite/create-cargo-nix.sh" \
+          "$(git rev-parse --show-toplevel)" \
+          "$commit_id" \
+          "${lockfiles[i]}")
+        if [ -z "$nixfile" ]
+        then nixfile=NULL
+        else nixfile="'$nixfile'"
+        fi
+
+        # Insert the lockfile and its association with git commits. Note use of INSERT OR IGNORE,
+        # which in conjunction with the uniqueness constraint on `full_text_sha2`, will avoid
+        # storing too much stuff
+        cat <<EOF
+INSERT OR IGNORE INTO lockfiles (blob_id, full_text_sha2, full_text, name, repo_id)
+    VALUES ('$lockfile_gitid', '$lockfile_sha256', '$lockfile_content', '$escaped_lockfile_name', $DB_REPO_ID);
+
+INSERT OR IGNORE INTO commit_lockfile (commit_id, lockfile_id, cargo_nix)
+    SELECT '$commit_id', id, $nixfile FROM lockfiles WHERE full_text_sha2 = '$lockfile_sha256';
+EOF
+    done
+}
+
 # Queue a run on a specific commit
 queue_commit() {
     locate_repo
@@ -197,30 +254,7 @@ INSERT INTO tasks_executions (task_id, time_queued)
 INSERT INTO task_commits (task_id, commit_id, is_tip)
     SELECT id, '$commit', 1 FROM tasks ORDER BY id DESC LIMIT 1;
 EOF
-
-        # Insert its lockfiles
-        local lockfiles=($(git ls-tree -r --name-only $commit | grep -e 'Cargo.*lock'))
-        if [ "${#lockfiles[@]}" -ne 0 ]; then
-            for ((j = 0; j < ${#lockfiles[@]}; j++)); do
-                local escaped_lockfile_name=${lockfiles[j]//\'/\'\'}
-                local lockfile_content=$(git show "$commit":"${lockfiles[j]}")
-                local lockfile_gitid=$(git rev-parse "$commit":"${lockfiles[j]}")
-                local lockfile_sha256=$(echo -n "$lockfile_content" | sha256sum | cut -d' ' -f1)
-                # Because the lockfile is in git, we don't need to store its contents in the db
-
-                # Insert the lockfile and its association with git commits
-                cat <<EOF
-INSERT OR IGNORE INTO lockfiles (blob_id, full_text_sha2, name, repo_id)
-    VALUES ('$lockfile_gitid', '$lockfile_sha256', '$escaped_lockfile_name', $DB_REPO_ID);
-
-INSERT OR IGNORE INTO commit_lockfile (commit_id, lockfile_id)
-    SELECT '$commit', id FROM lockfiles WHERE full_text_sha2 = '$lockfile_sha256';
-EOF
-            done
-        else
-            echo "Warning: $commit has no lockfiles in it. If needed, will use overrides found at runtime and not store them in db (fixme)" >&2
-        fi
-
+        echo_insert_rust_lockfiles "$commit"
         echo "COMMIT TRANSACTION;"
     ) | sqlite3 "$DB_FILE"
 }
@@ -308,29 +342,8 @@ EOF
 INSERT INTO task_commits (task_id, commit_id, is_tip)
     SELECT id, '${commits[i]}', $isTip FROM tasks ORDER BY id DESC LIMIT 1;
 EOF
+            echo_insert_rust_lockfiles "${commits[i]}"
             isTip=0
-            # Insert its lockfiles
-            local lockfiles=($(git ls-tree -r --name-only ${commits[i]} | grep -e 'Cargo.*lock'))
-            if [ "${#lockfiles[@]}" -ne 0 ]; then
-                for ((j = 0; j < ${#lockfiles[@]}; j++)); do
-                    local escaped_lockfile_name=${lockfiles[j]//\'/\'\'}
-                    local lockfile_content=$(git show "${commits[i]}":"${lockfiles[j]}")
-                    local lockfile_gitid=$(git rev-parse "${commits[i]}":"${lockfiles[j]}")
-                    local lockfile_sha256=$(echo -n "$lockfile_content" | sha256sum | cut -d' ' -f1)
-                    # Because the lockfile is in git, we don't need to store its contents in the db
-
-                    # Insert the lockfile and its association with git commits
-                    cat <<EOF
-INSERT OR IGNORE INTO lockfiles (blob_id, full_text_sha2, name, repo_id)
-    VALUES ('$lockfile_gitid', '$lockfile_sha256', '$escaped_lockfile_name', $DB_REPO_ID);
-
-INSERT OR IGNORE INTO commit_lockfile (commit_id, lockfile_id)
-    SELECT '${commits[i]}', id FROM lockfiles WHERE full_text_sha2 = '$lockfile_sha256';
-EOF
-                done
-            else
-                echo "Warning: ${commits[i]} has no lockfiles in it. If needed, will use overrides found at runtime and not store them in db (fixme)" >&2
-            fi
         done
 
         echo "COMMIT TRANSACTION;"
@@ -391,9 +404,9 @@ INSERT INTO tasks (task_type, pr_number, on_success, github_comment, repo_id, de
 
 INSERT INTO tasks_executions (task_id, time_queued)
     SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
-
-COMMIT TRANSACTION;
 EOF
+        echo_insert_rust_lockfiles "$commit"
+        echo "COMMIT TRANSACTION;"
     ) | sqlite3 "$DB_FILE"
 }
 
@@ -490,30 +503,52 @@ run_commands() {
             continue
         fi
 
-        # FIXME can/should we do something smarter or more configurable here?
-        local fallbackLockFiles=("$dot_git_path"/../../*.lock) # note nullglob is on
-        fallbackLockFiles="${fallbackLockFiles[@]}" # convert to string
-
         if [ "$next_task_status" == "IN PROGRESS" ]; then
             echo "WARNING: contining in-progress $task_type job $next_task_id for PR $pr_number"
             echo "(Waiting 15 seconds to give time to Ctrl+C)"
             sleep 15
         fi
 
+        echo_commit_str() {
+            local commit_id=$1
+            local isTip=$2
+
+            local lockfile_data
+            lockfile_data="$(sqlite3 -json "$DB_FILE" "
+            SELECT
+                name,
+                cargo_nix
+            FROM
+                lockfiles
+                JOIN commit_lockfile ON commit_lockfile.lockfile_id = lockfiles.id
+            WHERE
+                commit_lockfile.commit_id = '$commit_id'
+            ")"
+
+            cat <<EOF
+{
+    commit = "$commit_id";
+    isTip = $isTip;
+    gitUrl = $dot_git_path;
+    cargoNixes = { $(echo "$lockfile_data" | jq -r '.[] | "\"" + .name + "\" = " + .cargo_nix + ";"') };
+}
+EOF
+        }
+
         case "$task_type" in
             PR)
-                # FIXME for now we ignore the lockfiles attached to each commit in the DB, and let nix search for them itself
                 commits=()
                 local tip_commit
                 for data in $(sqlite3 -separator '-' "$DB_FILE" "SELECT commit_id, is_tip FROM task_commits WHERE task_id = $next_task_id"); do
-                    local commit=$(echo $data | cut -d'-' -f1)
-                    local isTip=$(echo $data | cut -d'-' -f2)
-                    if [ "$isTip" -eq 1 ]; then
-                        commits+=("{ commit = \"$commit\"; isTip = true; gitUrl = $dot_git_path; }")
-                        tip_commit=$commit
-                    else
-                        commits+=("{ commit = \"$commit\"; isTip = false; gitUrl = $dot_git_path; }")
+                    local commit_id
+                    local isTip=false
+
+                    commit_id=$(echo "$data" | cut -d'-' -f1)
+                    if [ "$(echo "$data" | cut -d'-' -f2)" == "1" ]; then
+                      tip_commit=$commit_id
+                      isTip=true
                     fi
+                    commits+=("$(echo_commit_str "$commit_id" "$isTip")")
                 done
 
                 # From here on we are doing an execution.
@@ -527,11 +562,10 @@ run_commands() {
                     echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
 
                     # Do instantiation
-		    local strcommits="${commits[@]}"
+		    local strcommits="${commits[*]}"
                     if existing_derivation_paths=$(time nix-instantiate \
                         --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
                         --arg inlineCommitList "[ $strcommits ]" \
-                        --arg fallbackLockFiles "[ $fallbackLockFiles ]" \
                         --argstr prNum "$pr_number" \
                         "$nixfile_path")
                     then
@@ -544,6 +578,7 @@ run_commands() {
                         sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
                         send-text.sh "Instantiation of PR $pr_number failed."
                         popd
+                        echo "(Waiting 60 seconds to give time to react, in case I am online.)"
                         sleep 60 # sleep 60 seconds to give me time to react if I am online
                         continue
                     fi
@@ -568,7 +603,7 @@ run_commands() {
                     else
                         message="successfully ran local tests"
                     fi
-                    pushd $dot_git_path/..;
+                    pushd "$dot_git_path/..";
                     case $on_success in
                         ACK)
                             gh pr review "$pr_number" -a -b "ACK ${tip_commit}; $message"
@@ -604,18 +639,17 @@ run_commands() {
                 echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
                 popd
 
-                pushd $dot_git_path/..;
-                cd $(git rev-parse --show-toplevel)
+                pushd "$dot_git_path/..";
+                cd "$(git rev-parse --show-toplevel)"
                 git config githubmerge.testcmd "
                     set -e
-                    commit=\"{ commit = \\\"\$(git rev-parse HEAD)\\\"; isTip = true; gitUrl = $dot_git_path; }\"
+                    commit=\"$(echo_commit_str "$commit_id" true)\"
                     send-text.sh \"Starting merge PR $pr_number \$commit_id (instantiating)\"
 
                     # Do instantiation
                     if derivation_path=\$(time nix-instantiate \\
                         --arg inlineJsonConfig \"{ gitDir = $dot_git_path; projectName = \\\"$repo_name\\\"; }\" \\
                         --arg inlineCommitList \"[ \$commit ]\" \\
-                        --arg fallbackLockFiles \"[ $fallbackLockFiles ]\" \
                         --argstr prNum \"$pr_number\" \\
                         \"$nixfile_path\")
                     then

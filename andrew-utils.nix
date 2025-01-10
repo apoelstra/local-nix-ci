@@ -94,17 +94,6 @@ rec {
   # Determines whether a given rustc is a nightly rustc.
   rustcIsNightly = rustc: !builtins.isNull (builtins.match ".*nightly-([0-9]+-[0-9]+-[0-9]+).*" rustc.version);
 
-  # Takes a `src` object (as returned from `srcFromCommit`) and determines
-  # the set of lockfiles to test it with.
-  lockFilesForSrc = { src, fallbackLockFiles }:
-    let
-      listIfExists = x: if builtins.pathExists x then [ x ] else [];
-      srcLockFiles = (listIfExists "${src.src}/Cargo-minimal.lock")
-        ++ (listIfExists "${src.src}/Cargo-recent.lock")
-        ++ (listIfExists "${src.src}/Cargo.lock");
-    in
-      if srcLockFiles == [] then fallbackLockFiles else srcLockFiles;
-
   # Given a list of features
   featuresForSrc = { needsNoStd ? false, include ? [], exclude ? [] }: { src, cargoToml, ... }:
     let
@@ -213,11 +202,6 @@ rec {
   standardRustMatrixFns =
   let
     lib = nixpkgs.lib;
-    allLockFiles = { src, jsonConfig }: lockFilesForSrc {
-      inherit src;
-      fallbackLockFiles = jsonConfig.fallbackLockFiles;
-    };
-    lockFileName = path: builtins.unsafeDiscardStringContext (builtins.baseNameOf path);
     featuresName = features: "feat-" + builtins.substring
       0 8
       (builtins.hashString "sha256" (builtins.concatStringsSep "," features));
@@ -225,6 +209,19 @@ rec {
   in jsonConfig: {
     projectName = jsonConfig.projectName;
     src = jsonConfig.gitCommits;
+    # FIXME on the command line we are passed, as value, a path to a .nix file
+    #  in the Nix store. This .nix file in theory can be evaluated from in the
+    #  source directory of `src` and in theory we can do this at evaluation
+    #  time and thereby avoid IFD.
+    #
+    # However, I am struggling to get this working, so am using the old IFD logic
+    # and only using the `name` of the passed cargo.nix file (and that name I'm
+    # abusing as a lockfile path).
+    #
+    # See block comment on crate2nixMemoGeneratedCargoNix
+    cargoNix = { src, ... }: lib.mapAttrsToList
+      (name: value: { inherit name; })
+      src.cargoNixes;
 
     mainCargoToml = { src, ... }: lib.trivial.importTOML "${src.src}/Cargo.toml";
     workspace = { mainCargoToml, ... }:
@@ -247,11 +244,11 @@ rec {
         else builtins.trace "warning - no clippy.toml, using 1.56.1 as MSRV" "1.56.1";
 
     rustc = { src, msrv, ... }: rustcsForSrc { inherit src; msrvVersion = msrv; };
-    lockFile = { src, ...}: allLockFiles { inherit src jsonConfig; };
+    lockFile = { src, cargoNix, ...}: if builtins.substring 0 1 cargoNix.name == "/" then cargoNix.name else "${src.src}/${cargoNix.name}";
     srcName = { src, ... }: src.commitId;
-    mtxName = { src, rustc, workspace, features, lockFile, ... }: "${src.shortId}-${rustc.name}${if isNull workspace then "" else "-" + workspace}-${lockFileName lockFile}-${featuresName features}${if src.isTip then "-tip" else ""}";
+    mtxName = { src, rustc, workspace, features, cargoNix, ... }: "${src.shortId}-${rustc.name}${if isNull workspace then "" else "-" + workspace}-${cargoNix.name}-${featuresName features}${if src.isTip then "-tip" else ""}";
 
-    isMainLockFile = { src, lockFile, ... }: lockFile == builtins.head (allLockFiles { inherit src jsonConfig; });
+    isMainLockFile = { src, cargoNix, ... }: cargoNix.name == builtins.head (builtins.attrNames src.cargoNixes);
     isMainWorkspace = { mainCargoToml, workspace, ... }:
       (workspace == null || workspace == builtins.head mainCargoToml.workspace.members);
 
@@ -259,7 +256,6 @@ rec {
     runClippy = fullTip;
     runDocs = fullTip;
     runFmt = fullTip;
-    runCheckPublicApi = fullTip;
     # This more-than-doubles the build time (vs not including it, in which case
     # we default to false). So this should be inherited in crates where the total
     # runtime is otherwise really fast, but probably not worthwhile otherwise.
@@ -273,6 +269,7 @@ rec {
     { commit
     , isTip
     , gitUrl
+    , cargoNixes ? {}
     }:
     assert builtins.isString commit;
     assert builtins.isBool isTip;
@@ -296,6 +293,7 @@ rec {
       inherit isTip;
 
       # Rust-specific stuff.
+      inherit cargoNixes;
       clippyToml = if builtins.pathExists "${src}/clippy.toml" then
         nixpkgs.lib.trivial.importTOML "${src}/clippy.toml"
       else null;
@@ -515,7 +513,6 @@ rec {
     , runClippy ? true
     , runDocs ? true
     , runFmt ? false
-    , runCheckPublicApi ? false
     # We have some should_panic tests in rust-bitcoin that fail in release mode
     , releaseMode ? false
     , extraTestPostRun ? ""
@@ -552,7 +549,6 @@ rec {
           echo "Nightly: ${boolString (rustcIsNightly rustc)}"
           echo "Run clippy: ${boolString runClippy}"
           echo "Run docs: ${boolString runDocs}"
-          echo "Run check-api: ${boolString runCheckPublicApi}"
           echo "Release mode: ${boolString releaseMode}"
 
           # Always pull these in; though it is usually not needed.
@@ -601,8 +597,6 @@ rec {
             cargo fmt --all -- --check
           '' + lib.optionalString (rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz) ''
             echo "Ran fuzztests: ${fuzzDrv}"
-          '' + lib.optionalString runCheckPublicApi ''
-            echo "Ran check-public-api: ${publicApiDrv}"
           '' + ''
             popd
           '' + extraTestPostRun;
@@ -612,9 +606,6 @@ rec {
           (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
         fuzzDrv = cargoFuzzDrv {
           inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
-        };
-        publicApiDrv = cargoPublicApiDrv {
-          inherit projectName rustc src lockFile generatedCargoNix;
         };
       in
         # If test derivations seem to be very slow to instantiate, uncomment
@@ -635,59 +626,8 @@ rec {
           checkPrRunFmt = boolString runFmt;
           checkPrRunClippy = boolString runClippy;
           checkPrRunDocs = boolString runDocs;
-          checkPrRunCheckPublicApi = boolString runCheckPublicApi;
           checkPrIsTip = boolString src.isTip;
         });
-
-  cargoPublicApiDrv = {
-    projectName
-  , rustc
-  , src
-  , lockFile
-  , generatedCargoNix
-  }: let
-    publicApiDrv = stdenv.mkDerivation {
-      name = "${projectName}-check-public-api";
-      src = src.src;
-
-      phases = [ "unpackPhase" "buildPhase" ];
-      buildInputs = [
-        rustc
-        (import ./cargo-public-api.nix {
-          nixpkgs = import <nixpkgs> {
-            overlays = [ (self: super: { inherit rustc; }) ];
-          };
-        })
-      ];
-
-      buildPhase = ''
-        set -x
-        export CARGO_HOME=${generatedCargoNix}/cargo
-        export CHECK_SCRIPT=./contrib/check-for-api-changes.sh
-
-        ${rustc}/bin/rustc -V
-        ${rustc}/bin/cargo -V
-        ${rustc}/bin/cargo public-api --version
-
-        mv api/ old-api/
-        mkdir api/
-        # Edit out the git-based check_for_changes and the git-based directory finding.
-        sed -i "s/REPO_DIR=.*/REPO_DIR=./" "$CHECK_SCRIPT"
-        sed -i "s/API=.*/API_DIR=.\/api\//" "$CHECK_SCRIPT"
-        sed -i "s/check_for_changes$//" "$CHECK_SCRIPT"
-        sed -i "s/+\"\$NIGHTLY\"//" "$CHECK_SCRIPT"
-        patchShebangs "$CHECK_SCRIPT"
-
-        # See comment in cargoFuzzDrv for why this cp line is needed.
-        cp ${lockFile} Cargo.lock
-        "$CHECK_SCRIPT"
-        # Then manually check for changes.
-        diff -r old-api/ api/
-
-        touch $out;
-      '';
-    };
-  in publicApiDrv;
 
   # Derivation that runs cargo-hfuzz on a series of targets found in fuzz/Cargo.toml.
   cargoFuzzDrv = {
