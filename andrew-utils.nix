@@ -67,46 +67,6 @@ rec {
   # See comment near usage for what this is for.
   rustcLdLibraryPath = "${stdenv.cc.cc.lib}/lib/";
 
-  # Takes a JSON configuration file which should have the keys:
-  #
-  #   `gitDir`: a path to a *local* .git directory to be used as a commit db
-  #   `gitURL`: (optional) a URL to download the actual commits from
-  #   `repoName`: name of the repository, used in various outputs
-  #   `lockFiles`: (optional) array of paths to fixed lockfiles.
-  #
-  # Will attempt to use lockfiles from within the repository itself (looking
-  # for Cargo.lock, Cargo-recent.lock, Cargo-minimal.lock, and using all the
-  # ones it finds). *Only if none are present*, will use the `lockFiles` JSON
-  # key.
-  parseRustConfig =
-    { jsonConfigFile
-    , prNum
-    }:
-    let
-      lib = nixpkgs.lib;
-      jsonConfig = lib.trivial.importJSON jsonConfigFile;
-
-      _1 = assert jsonConfig ? gitDir && builtins.pathExists (/. + jsonConfig.gitDir); "gitDir must be present and be a local path";
-      _2 = assert (jsonConfig ? gitUrl) -> builtins.isString jsonConfig.gitUrl; "gitUrl must be a string";
-      _3 = assert jsonConfig ? repoName && builtins.isString jsonConfig.repoName; "repoName must be present and be a string";
-      _4 = assert (jsonConfig ? lockFiles) -> builtins.isList jsonConfig.lockFiles; "lockFiles must be a list";
-    in
-    {
-      projectName = jsonConfig.repoName;
-      fallbackLockFiles = map (x: /. + x) jsonConfig.lockFiles or [];
-      gitCommits = githubPrSrcs {
-        gitDir = /. + jsonConfig.gitDir;
-        # Setting gitUrl is intended to provide an alternate source for
-        # git repos, which when building remotely results in a large
-        # speedup. But it also means that we can't test commits that
-        # only exist on the local machine (e.g. git merges). Eventually
-        # we should detect this case, but for now just disable the
-        # feature.
-        #gitUrl = jsonConfig.gitUrl or jsonConfig.gitDir;
-        inherit prNum;
-      };
-    };
-
   # Takes a `src` object (as returned from `srcFromCommit`) and determines
   # the set of rustcs to test it with.
   rustcsForSrc = { src, nightlyVersion ? null, msrvVersion ? null }:
@@ -303,68 +263,6 @@ rec {
     releaseMode = [ false true ];
   };
 
-  # Given a git directory (the .git directory) and a PR number, obtain a list of
-  # commits corresponding to that PR. Assumes that the refs pr/${prNum}/head and
-  # pr/${prNum}/merge both exist.
-  #
-  # Ex.
-  # let
-  # pr1207 = import (andrew.githubPrCommits {
-  #   gitDir = ../../bitcoin/secp256k1/master/.git;
-  #   prNum = 1207;
-  # }) {};
-  # in
-  #   pr1207.gitCommits
-  #
-  githubPrCommits =
-    { gitDir
-    , prNum
-    }:
-    stdenv.mkDerivation {
-      name = "get-git-commits";
-      buildInputs = [ nixpkgs.git ];
-
-      preferLocalBuild = true;
-      phases = [ "buildPhase" ];
-
-      buildPhase = ''
-        set -e
-        export GIT_DIR="${gitDir}"
-
-        HEAD_COMMIT="pr/${builtins.toString prNum}/head"
-        if ! git rev-parse --verify --quiet "$HEAD_COMMIT^{commit}"; then
-          echo "Head commit $HEAD_COMMIT not found in git dir $GIT_DIR."
-
-          BARE_COMMIT="${builtins.toString prNum}"
-          if ! git rev-parse --verify --quiet "$BARE_COMMIT^{commit}"; then
-            echo "Bare $BARE_COMMIT also does not appear to be a commit ID."
-            exit 1
-          fi
-
-          mkdir -p "$out"
-          BARE_COMMIT=$(git rev-parse "$BARE_COMMIT^{commit}")
-          echo "pkgs: { gitCommits = [ \"$BARE_COMMIT\" ]; }" > "$out/default.nix";
-          exit 0
-        fi
-
-        MERGE_COMMIT="pr/${builtins.toString prNum}/merge"
-        if ! git rev-parse --verify --quiet "$MERGE_COMMIT^{commit}"; then
-          echo "Merge commit $MERGE_COMMIT not found in git dir $GIT_DIR."
-          exit 1
-        fi
-
-        mkdir -p "$out"
-
-        echo 'pkgs: { gitCommits = [' >> "$out/default.nix"
-        REVS=$(git rev-list "$HEAD_COMMIT" --not "$MERGE_COMMIT~")
-        for rev in $REVS;
-          do echo " \"$rev\"" >> "$out/default.nix"
-        done
-
-        echo ']; }' >> "$out/default.nix"
-      '';
-    };
-
   # Given a commit ID, fetch it and obtain relevant data for the CI system.
   #
   # Throughout this code, a "src" refers to the set returned by this function.
@@ -396,30 +294,6 @@ rec {
         builtins.readFile "${src}/nightly-version"
       else null;
     };
-
-  # Wrapper of githubPrCommits that actually calls the derivation to obtain the list of
-  # git commits, then calls fetchGit on everything in the list
-  #
-  # If gitUrl is provided, it is used to fetch the actual commits. This is provided
-  # to assist with remote building: githubPrCommits is always run locally, so it is
-  # fastest to provide it with a local git checkout via gitDir. But this just gets
-  # a list of commit IDs. To fetch the actual commits, which will happen remotely,
-  # it may be faster to provide a github URL (so the remote machine can directly
-  # connect to github rather than copying over the local derivation)
-  githubPrSrcs =
-    { gitDir
-    , prNum
-    , gitUrl ? gitDir
-    }:
-    let
-      bareCommits = (import (githubPrCommits { inherit gitDir prNum; }) { }).gitCommits;
-    in
-    map
-      (commit: srcFromCommit {
-        inherit commit gitUrl;
-        isTip = (commit == builtins.head bareCommits);
-#        ref = "refs/pull/${builtins.toString prNum}/head";
-      }) bareCommits;
 
   derivationName = drv:
     builtins.unsafeDiscardStringContext (builtins.baseNameOf (builtins.toString drv));
