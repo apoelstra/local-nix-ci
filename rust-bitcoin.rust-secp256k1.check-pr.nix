@@ -6,7 +6,6 @@ import ./rust.check-pr.nix {
       (builtins.readFile "${src.src}/secp256k1-sys/depend/secp256k1-HEAD-revision.txt"))
       2;
     secp256k1Src = { secp256k1RevFile, ... }: builtins.fetchGit {
-      allRefs = true;
       url = "https://github.com/bitcoin-core/secp256k1/";
       rev = secp256k1RevFile;
     };
