@@ -42,14 +42,14 @@ rec {
     url = "https://releases.nixos.org/nixos/21.05/nixos-21.05.993.93963c27b93/nixexprs.tar.xz";
     sha256 = "sha256:024ryxx9ndsxf13w9gmcm5n942kpa4nrgc53jjjiq3lnicw3g4yk";
   }) {};
-  elementsDotNix = builtins.fetchGit {
+  elementsDotNix = pkgs.fetchGit {
     url = "https://github.com/roconnor-blockstream/elements-nix";
   };
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
   bitcoinSrc = (nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
     miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
-    withSource = fetchGit {
+    withSource = pkgs.fetchGit {
       url = "https://github.com/bitcoin/bitcoin";
       ref = "refs/tags/v24.2";
     };
@@ -59,7 +59,7 @@ rec {
     stdenv = ancientNixpkgs.gcc11Stdenv;
     boost = ancientNixpkgs.boost175;
     doCheck = false;
-    withSource = fetchGit {
+    withSource = pkgs.fetchGit {
       url = "https://github.com/ElementsProject/elements";
       ref = "refs/tags/elements-0.21.0.2";
     };
@@ -270,14 +270,23 @@ rec {
     { commit
     , isTip
     , gitUrl
-    , ref ? "master"
     }:
+    assert builtins.isString commit;
+    assert builtins.isBool isTip;
+    assert builtins.isPath gitURL || builtins.isString gitURL;
     rec {
       src = builtins.fetchGit {
         url = gitUrl;
-        inherit ref;
+        # nb using ref rather than rev would be a bit more flexible. Experimentally,
+        # this allows using short hashes, branch or tag names, etc. But since we
+        # intend only to call this function with full commit IDs, we get better
+        # error messages with `rev`.
+        #
+        # BTW, there is a lot of discussion about Nix not supporting checkouts of
+        # individual commits in https://github.com/NixOS/nix/issues/4760 and in a
+        # comment in nixpkgs/build-support/fetchgit/default.nix which still exists
+        # today (as of bdfccb2c88b683979b99eec8f91003a89aba7878 Jan 2025).
         rev = commit;
-        allRefs = true;
       };
       commitId = commit;
       shortId = builtins.substring 0 8 commit;
