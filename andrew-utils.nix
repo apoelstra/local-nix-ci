@@ -44,6 +44,7 @@ rec {
   }) {};
   elementsDotNix = nixpkgs.fetchgit {
     url = "https://github.com/roconnor-blockstream/elements-nix";
+    outputHash = "sha256-pDfSPhn2LTCsTVyP9ZlcC1bgW2e7IEcHBzFopeQU0Tk=";
   };
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
@@ -51,7 +52,8 @@ rec {
     miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/bitcoin/bitcoin";
-      ref = "refs/tags/v24.2";
+      rev = "v24.2";
+      outputHash = "sha256-WCbh/6WfQdbCPdRQK/WAMzR42s/HxE4eM1Cf/4mrafM=";
     };
   });
   # Similar, for rust-elements.
@@ -61,7 +63,8 @@ rec {
     doCheck = false;
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/ElementsProject/elements";
-      ref = "refs/tags/elements-0.21.0.2";
+      rev = "elements-0.21.0.2";
+      outputHash = "sha256-VcfJu7svpoXGGDMfIHofqCd43eTmvGOABtFwbkb6kU0=";
     };
   });
   # See comment near usage for what this is for.
