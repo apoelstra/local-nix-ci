@@ -42,14 +42,14 @@ rec {
     url = "https://releases.nixos.org/nixos/21.05/nixos-21.05.993.93963c27b93/nixexprs.tar.xz";
     sha256 = "sha256:024ryxx9ndsxf13w9gmcm5n942kpa4nrgc53jjjiq3lnicw3g4yk";
   }) {};
-  elementsDotNix = pkgs.fetchGit {
+  elementsDotNix = nixpkgs.fetchgit {
     url = "https://github.com/roconnor-blockstream/elements-nix";
   };
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
   bitcoinSrc = (nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
     miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
-    withSource = pkgs.fetchGit {
+    withSource = nixpkgs.fetchgit {
       url = "https://github.com/bitcoin/bitcoin";
       ref = "refs/tags/v24.2";
     };
@@ -59,7 +59,7 @@ rec {
     stdenv = ancientNixpkgs.gcc11Stdenv;
     boost = ancientNixpkgs.boost175;
     doCheck = false;
-    withSource = pkgs.fetchGit {
+    withSource = nixpkgs.fetchgit {
       url = "https://github.com/ElementsProject/elements";
       ref = "refs/tags/elements-0.21.0.2";
     };
@@ -273,7 +273,7 @@ rec {
     }:
     assert builtins.isString commit;
     assert builtins.isBool isTip;
-    assert builtins.isPath gitURL || builtins.isString gitURL;
+    assert builtins.isPath gitUrl || builtins.isString gitUrl;
     rec {
       src = builtins.fetchGit {
         url = gitUrl;
