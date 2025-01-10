@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
 
-###
-### When stopping on 2024-10-15 -- try regenning db file (schema has changed) then continue working on run_command
-### which is currently in the middle of implementing lookups of data
-###
-
 set -euo pipefail
 shopt -s nullglob
 
