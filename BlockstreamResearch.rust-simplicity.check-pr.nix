@@ -1,21 +1,5 @@
-{ pkgs ? import <nixpkgs> { }
-, jsonConfigFile
-, prNum
-}:
-let
-  utils = import ./andrew-utils.nix { };
-  jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
-
-  fullMatrix = {
-    inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig)
-      projectName src rustc msrv lockFile srcName mtxName
-      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
-      features # Must be overridden if there are any exceptional feature combinations
-      runClippy
-      runFmt
-      runDocs;
-
+import ./rust.check-pr.nix {
+  fullMatrixOverride = {
     simplicityRevFile = { src, ... }: builtins.elemAt (builtins.split "\n"
       (builtins.readFile "${src.src}/simplicity-sys/depend/simplicity-HEAD-revision.txt"))
       2;
@@ -49,30 +33,6 @@ let
           set -x
           diff -r -x simplicity_alloc.h ${simplicitySrc}/C depend/simplicity/
         ''
-      else ''
-        # This code predates the 2024-05 cleanup of the local CI script.
-        # As near as I can tell it was never called, since it was in the
-        # `else` clause of a check of `workspace` that could never be hit.
-        #
-
-        #export CARGO_HOME=$NIXES_GENERATED_DIR/cargo
-        #pushd "$NIXES_GENERATED_DIR/crate/jets-bench"
-        #  cargo clippy --locked -- -D warnings
-        #  cargo test --locked
-        #  cargo criterion --locked --no-run
-        #popd
-     '';
+      else "";
   };
-
-  checkData = rec {
-    name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
-    argsMatrix = fullMatrix;
-    singleCheckDrv = utils.crate2nixSingleCheckDrv;
-    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
-    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
-  };
-in
-{
-  checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr checkData;
 }
