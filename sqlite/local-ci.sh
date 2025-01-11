@@ -405,7 +405,7 @@ INSERT INTO tasks (task_type, pr_number, on_success, github_comment, repo_id, de
 INSERT INTO tasks_executions (task_id, time_queued)
     SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
 EOF
-        echo_insert_rust_lockfiles "$commit"
+        echo_insert_rust_lockfiles "$merge_commit"
         echo "COMMIT TRANSACTION;"
     ) | sqlite3 "$DB_FILE"
 }
@@ -578,7 +578,7 @@ EOF
                         sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
                         send-text.sh "Instantiation of PR $pr_number failed."
                         popd
-                        echo "(Waiting 60 seconds to give time to react, in case I am online.)"
+                        echo "(Waiting 60 seconds (from $(date)) to give time to react.)"
                         sleep 60 # sleep 60 seconds to give me time to react if I am online
                         continue
                     fi

@@ -176,6 +176,11 @@ rec {
           let
             evaluateValue = s: v: if builtins.isFunction v then v s else v;
             expandValue = v: if builtins.isList v then v else [ v ];
+            valueAsList = s: k: v:
+              let res = expandValue (evaluateValue s v); in
+              assert lib.assertMsg (res != []) "Key ${k} has empty list for value, zeroing out whole matrix.";
+                #builtins.trace "Key ${k} has ${builtins.toString (builtins.length res)} values." res;
+                res;
             # We want to choose the next attribute such that, if it is a function,
             # then all of its inputs have already been evaluated.
             availableKeys = builtins.filter (k:
@@ -191,7 +196,7 @@ rec {
             nextVal = origSet.${nextKey};
             newSets = builtins.concatMap (s: map
                 (v: appendKeyVal s nextKey v)
-                (expandValue (evaluateValue s nextVal))
+                (valueAsList s nextKey nextVal)
               ) currentSets;
           in
           addNames newSets (prevNames ++ [ nextKey ]) origSet;
@@ -221,7 +226,7 @@ rec {
     # See block comment on crate2nixMemoGeneratedCargoNix
     cargoNix = { src, ... }: lib.mapAttrsToList
       (name: value: { inherit name; })
-      src.cargoNixes;
+      (builtins.trace src.cargoNixes src.cargoNixes);
 
     mainCargoToml = { src, ... }: lib.trivial.importTOML "${src.src}/Cargo.toml";
     workspace = { mainCargoToml, ... }:
@@ -351,7 +356,8 @@ rec {
     ,
     }:
     let
-      mtxs = matrix argsMatrix;
+      mtxs' = matrix argsMatrix;
+      mtxs = builtins.trace "Full matrix has size ${builtins.toString (builtins.length mtxs')}" mtxs';
       # This twisty memoAndLinks logic is due to roconnor. It avoids recomputing
       # memo.value (which is potentially expensive), which would be needed
       # if we first computing memoTable "normally" and then later indexed into
