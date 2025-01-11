@@ -28,6 +28,11 @@ rec {
       (import (fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz"))
     ];
   };
+  # Re-export crate2nix tools.nix path so that I don't need to worry about its
+  # exact vaule in more than one place.
+  tools-nix-path = ./crate2nix/tools.nix;
+  # Laziness means this is only called when used
+  tools-nix = overlaidPkgs.callPackage tools-nix-path {};
 
   # Support for old elementsd and bitcoind. Modern nixpkgs have dropped
   # boost 1.75, and its versions of db 4.8 don't link with ancient versions
@@ -215,7 +220,7 @@ rec {
     #
     # See block comment on crate2nixMemoGeneratedCargoNix
     cargoNix = { src, ... }: lib.mapAttrsToList
-      (name: value: { inherit name; nixFile = value; })
+      (name: value: { inherit name; })
       src.cargoNixes;
 
     mainCargoToml = { src, ... }: lib.trivial.importTOML "${src.src}/Cargo.toml";
@@ -391,22 +396,21 @@ rec {
     { projectName
     , prNum
     , lockFile
-    , cargoNix
     , src
     , ...
     }:
     let
       memoName = builtins.unsafeDiscardStringContext
         "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}-${lockFile}";
+      generatedCargoNix = tools-nix.generatedCargoNix {
+        name = memoName;
+        src = src.src;
+        overrideLockFile = lockFile;
+      };
     in
     {
       name = memoName;
-      value = builtins.trace "Evaluating generated ${memoName}" "${(nixpkgs.runCommand "overlayed-src" { } ''
-        mkdir -p $out
-        cp -r ${src.src}/* $out
-        cp ${lockFile} $out/Cargo.lock
-        cp ${cargoNix.nixFile} $out/Cargo.nix
-      '')}/Cargo.nix";
+      value = builtins.trace "Evaluating generated ${memoName}" generatedCargoNix;
     };
 
   crate2nixMemoCalledCargoNix =
