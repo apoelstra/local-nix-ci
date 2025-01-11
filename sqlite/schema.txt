@@ -17,6 +17,7 @@ CREATE TABLE tasks_executions
     , time_start TEXT           -- Time when the task was started
     , time_end TEXT             -- Time when the task completed
     , status TEXT NOT NULL DEFAULT 'QUEUED' CHECK(status in ('QUEUED', 'IN PROGRESS', 'FAILED', 'SUCCESS'))
+    , priority INTEGER DEFAULT 0 NOT NULL
     , UNIQUE (task_id, execution_number) -- Ensures uniqueness per execution
     );
 CREATE INDEX tasks_executions_task_id_index ON tasks_executions(task_id);

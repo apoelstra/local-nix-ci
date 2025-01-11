@@ -25,6 +25,7 @@ ARG_COMMAND=
 ARG_COMMAND_ARGS=()
 ARG_REPO_NAME=
 ARG_ALLOW_DIRTY_LOCAL_CI="no"
+QUEUE_PRIORITY=0
 
 DB_REPO_ID=
 
@@ -42,6 +43,13 @@ parse_arguments() {
     for ((i = 0; i < ${#args[@]}; i++)); do
         if [[ "${args[i]}" == "--repo" ]] && (( i + 1 < ${#args[@]} )); then
             ARG_REPO_NAME="${args[i+1]}"
+            ((i++)) # Skip next item since it's the directory
+        elif [[ "${args[i]}" == "--priority" ]] && (( i + 1 < ${#args[@]} )); then
+            QUEUE_PRIORITY="${args[i+1]}"
+            if [[ ! "$QUEUE_PRIORITY" =~ ^[+-]?[1-9][0-9]$ ]]; then
+                echo "Priority $QUEUE_PRIORITY must be an integer without leading 0s."
+                exit 2
+            fi
             ((i++)) # Skip next item since it's the directory
         elif [[ "${args[i]}" == "--allow-dirty-local-ci" ]]; then
             ARG_ALLOW_DIRTY_LOCAL_CI="yes"
@@ -248,8 +256,8 @@ INSERT INTO derivations (nixpkgs_commit, local_ci_commit, local_ci_diff, repo_id
 INSERT INTO tasks (task_type, on_success, github_comment, repo_id, derivation_id)
     SELECT 'PR', 'NONE', '', $DB_REPO_ID, id FROM derivations WHERE id = last_insert_rowid();
 
-INSERT INTO tasks_executions (task_id, time_queued)
-    SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
+INSERT INTO tasks_executions (task_id, time_queued, priority)
+    SELECT id, datetime('now'), $QUEUE_PRIORITY FROM tasks WHERE id = last_insert_rowid();
 
 INSERT INTO task_commits (task_id, commit_id, is_tip)
     SELECT id, '$commit', 1 FROM tasks ORDER BY id DESC LIMIT 1;
@@ -331,8 +339,8 @@ INSERT INTO derivations (nixpkgs_commit, local_ci_commit, local_ci_diff, repo_id
 INSERT INTO tasks (task_type, pr_number, on_success, github_comment, repo_id, derivation_id)
     SELECT 'PR', $pr_num, '$on_success', $escaped_github_comment, $DB_REPO_ID, id FROM derivations WHERE id = last_insert_rowid();
 
-INSERT INTO tasks_executions (task_id, time_queued)
-    SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
+INSERT INTO tasks_executions (task_id, time_queued, priority)
+    SELECT id, datetime('now'), $QUEUE_PRIORITY FROM tasks WHERE id = last_insert_rowid();
 EOF
 
         local isTip=1;
@@ -417,8 +425,8 @@ INSERT INTO derivations (nixpkgs_commit, local_ci_commit, local_ci_diff, repo_id
 INSERT INTO tasks (task_type, pr_number, on_success, github_comment, repo_id, derivation_id)
     SELECT 'MERGE', $pr_num, 'NONE', NULL, $DB_REPO_ID, id FROM derivations WHERE id = last_insert_rowid();
 
-INSERT INTO tasks_executions (task_id, time_queued)
-    SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
+INSERT INTO tasks_executions (task_id, time_queued, priority)
+    SELECT id, datetime('now'), $QUEUE_PRIORITY FROM tasks WHERE id = last_insert_rowid();
 
 INSERT INTO task_commits (task_id, commit_id, is_tip)
     SELECT id, '$merge_commit', 1 FROM tasks ORDER BY id DESC LIMIT 1;
@@ -474,6 +482,7 @@ run_commands() {
             OR tasks_executions.status = 'IN PROGRESS'
         ORDER BY
             $extra_order_by
+            tasks_executions.priority DESC,
             tasks_executions.time_queued ASC
         LIMIT 1;
         ")"
@@ -673,10 +682,12 @@ EOF
                         echo \"Queued merge commit has tree \$gh_tree\" >&2
                         echo \"This 'merge' commit has tree \$our_tree\" >&2
                         echo >&2
-                        echo \"Requeuing.\" >&2
+                        echo \"Requeuing with priority $((QUEUE_PRIORITY + 1)).\" >&2
                         echo >&2
 
-                        local-ci.sh queue-merge $pr_number \$commit_id
+                        # Queue with one-higher priority than its initial priority, which should
+                        # roughly match the 'do this next' semnatics the user expects.
+                        local-ci.sh queue-merge $pr_number \$commit_id --priority $((QUEUE_PRIORITY + 1))
                         exit 1
                     fi
 
@@ -921,9 +932,10 @@ EOF
                 ELSE 2
             END,
             CASE
-                WHEN status = 'IN PROGRESS' THEN $extra_order_by
+                WHEN status = 'QUEUED' THEN $extra_order_by
                 ELSE ''
             END DESC,
+            tasks_executions.priority DESC,
             CASE
                 WHEN status IN ('SUCCESS', 'FAILED') THEN time_ended
                 WHEN status = 'IN PROGRESS' THEN time_started
