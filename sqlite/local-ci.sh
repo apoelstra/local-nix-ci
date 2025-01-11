@@ -667,6 +667,15 @@ EOF
                     gh_tree=\$(git rev-parse $tip_commit^{tree})
                     if [ \"\$our_tree\" != \"\$gh_tree\" ]; then
                         send-text.sh \"PR $pr_number: queued merge of $tip_commit but the actual commit is \$commit_id. Requeuing.\"
+                        echo >&2
+                        echo \"PR $pr_number\" >&2
+                        echo \"Queued merge of $tip_commit; actual commit is \$commit_id.\" >&2
+                        echo \"Queued merge commit has tree \$gh_tree\" >&2
+                        echo \"This 'merge' commit has tree \$our_tree\" >&2
+                        echo >&2
+                        echo \"Requeuing.\" >&2
+                        echo >&2
+
                         local-ci.sh queue-merge $pr_number \$commit_id
                         exit 1
                     fi
