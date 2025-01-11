@@ -169,9 +169,9 @@ echo_insert_rust_lockfiles() {
 
     # Try using any lockfiles in the root of the repo. If there are none, try using
     # fallbacks found in the directory above the root.
-    local lockfiles=($(git ls-tree --name-only ${commits[i]} | grep '^Cargo.*\.lock$'))
+    local lockfiles=($(git ls-tree --name-only $commit_id | grep '^Cargo.*\.lock$'))
     if [ "${#lockfiles[@]}" == 0 ]; then
-        lockfiles=("$dot_git_path"/../../*.lock); # note nullglob is on
+        lockfiles=("$GIT_DIR"/../../*.lock); # note nullglob is on
         # If we have fallbacks, post a warning for each one. If not, no output -- we
         # will assume this isn't a Rust repo. If it is, the result may be a silently
         # empty test matrix. But we this is not the place to try to detect that.
@@ -641,9 +641,30 @@ EOF
 
                 pushd "$dot_git_path/..";
                 cd "$(git rev-parse --show-toplevel)"
+                # This quote is pretty frustrating -- it has a bunch of copies of other code and
+                # functions in this script, but we can't include them directly because there isn't
+                # a way to bring a function "into scope" of another script expressed as a string.
                 git config githubmerge.testcmd "
                     set -e
-                    commit=\"$(echo_commit_str "$commit_id" true)\"
+
+                    local lockfile_data
+                    lockfile_data="$(sqlite3 -json "$DB_FILE" "
+                    SELECT
+                        name,
+                        cargo_nix
+                    FROM
+                        lockfiles
+                        JOIN commit_lockfile ON commit_lockfile.lockfile_id = lockfiles.id
+                    WHERE
+                        commit_lockfile.commit_id = '$commit_id'
+                    ")"
+
+                    commit=\"{
+                        commit = "$(git rev-parse HEAD)";
+                        isTip = true;
+                        gitUrl = $dot_git_path;
+                        cargoNixes = { $(echo "$lockfile_data" | jq -r '.[] | "\"" + .name + "\" = " + .cargo_nix + ";"') };
+                    }\"
                     send-text.sh \"Starting merge PR $pr_number \$commit_id (instantiating)\"
 
                     # Do instantiation
