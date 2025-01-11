@@ -183,30 +183,33 @@ echo_insert_rust_lockfiles() {
         # If we have fallbacks, post a warning for each one. If not, no output -- we
         # will assume this isn't a Rust repo. If it is, the result may be a silently
         # empty test matrix. But we this is not the place to try to detect that.
-        for ((i = 0; i < ${#lockfiles[@]}; i++)); do
-            echo "$commit_id: Warning: using fallback lockfile ${lockfiles[i]}"
+        for ((j = 0; j < ${#lockfiles[@]}; j++)); do
+            echo "$commit_id: Warning: using fallback lockfile ${lockfiles[j]}"
         done
     fi
 
-    for ((i = 0; i < ${#lockfiles[@]}; i++)); do
-        local escaped_lockfile_name=${lockfiles[i]//\'/\'\'}
+    echo "Commit $commit_id has ${#lockfiles[@]} lockfiles." >&2
+    for ((j = 0; j < ${#lockfiles[@]}; j++)); do
+        echo "Inserting lockfile $j: ${#lockfiles[j]}" >&2
+
+        local escaped_lockfile_name=${lockfiles[j]//\'/\'\'}
         local lockfile_content
         local lockfile_gitid
         local lockfile_sha256
         local nixfile
 
-        if lockfile_gitid=$(git rev-parse --verify --quiet "$commit_id:${lockfiles[i]}" 2>/dev/null); then
+        if lockfile_gitid=$(git rev-parse --verify --quiet "$commit_id:${lockfiles[j]}" 2>/dev/null); then
             lockfile_content= #  not used
             lockfile_sha256=$(git show "$lockfile_gitid" | sha256sum | cut -d' ' -f1)
         else
-            lockfile_content=$(cat "${lockfiles[i]}")
+            lockfile_content=$(cat "${lockfiles[j]}")
             lockfile_sha256=$(echo -n "$lockfile_content" | sha256sum | cut -d' ' -f1)
         fi
 
         nixfile=$("$LOCAL_CI_PATH/sqlite/create-cargo-nix.sh" \
           "$(git rev-parse --show-toplevel)" \
           "$commit_id" \
-          "${lockfiles[i]}")
+          "${lockfiles[j]}")
         if [ -z "$nixfile" ]
         then nixfile=NULL
         else nixfile="'$nixfile'"
@@ -345,6 +348,7 @@ EOF
 
         local isTip=1;
         for ((i = 0; i < ${#commits[@]}; i++)); do
+            echo "Adding commit $i: ${commits[i]}" >&2
             # Insert commit
             cat <<EOF
 INSERT INTO task_commits (task_id, commit_id, is_tip)
