@@ -190,7 +190,7 @@ echo_insert_rust_lockfiles() {
 
     echo "Commit $commit_id has ${#lockfiles[@]} lockfiles." >&2
     for ((j = 0; j < ${#lockfiles[@]}; j++)); do
-        echo "Inserting lockfile $j: ${#lockfiles[j]}" >&2
+        echo "Inserting lockfile $j: ${lockfiles[j]}" >&2
 
         local escaped_lockfile_name=${lockfiles[j]//\'/\'\'}
         local lockfile_content
