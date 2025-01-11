@@ -356,6 +356,7 @@ queue_merge() {
 
     # First, sanity-check the PR number
     local pr_num="${1:-}"
+    local merge_commit="${2:-}"
     case $pr_num in
         '')
             echo "PR number is required by queue-pr command"
@@ -376,16 +377,30 @@ queue_merge() {
     # will create its own merge commit, compare this to pr/<n>/merge (Github's version),
     # and look for ACKs.
 
-    # We check that the GH commits exist as a sanity check, but we don't actually
-    # use these values.
+    # We check that the GH "head" commit exists as a sanity check. If the user has specified
+    # an alternate merge commit, we check that the head is a parent of it. Otherwise we use
+    # the GH merge commit.
     local head_commit
-    local merge_commit
     if ! head_commit=$(git rev-parse "pr/$pr_num/head" 2>/dev/null); then
         echo "No commit at rev pr/$pr_num/head. Perhaps you need to fetch?"
         exit 1
     fi
-    if ! merge_commit=$(git rev-parse "pr/$pr_num/merge" 2>/dev/null); then
-        echo "No commit at rev pr/$pr_num/merge. Perhaps this PR was already merged?"
+    if [ -z "$merge_commit" ]; then
+        if ! merge_commit=$(git rev-parse "pr/$pr_num/merge" 2>/dev/null); then
+            echo "No commit at rev pr/$pr_num/merge. Perhaps this PR was already merged?"
+            exit 1
+        fi
+    fi
+
+    if [ "$(git rev-parse "$head_commit")" != "$(git rev-parse "$merge_commit^2")" ]; then
+        echo "Merge commit $merge_commit does not appear to be a merge of head commit $head_commit".
+        echo "The second parent of $merge_commit is $(git rev-parse "$merge_commit^2")."
+        echo
+        echo "The head commit is pr/$pr_num/head"
+        if [ -n "${2:-}" ]
+        then echo "The merge commit was passed on the command-line."
+        else echo "The merge commit is pr/$pr_num/merge."
+        fi
         exit 1
     fi
 
@@ -652,7 +667,7 @@ EOF
                     gh_tree=\$(git rev-parse $tip_commit^{tree})
                     if [ \"\$our_tree\" != \"\$gh_tree\" ]; then
                         send-text.sh \"PR $pr_number: queued merge of $tip_commit but the actual commit is \$commit_id. Requeuing.\"
-                        local-ci.sh queue_merge $pr_number \$commit_id
+                        local-ci.sh queue-merge $pr_number \$commit_id
                         exit 1
                     fi
 
