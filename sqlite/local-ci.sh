@@ -404,6 +404,9 @@ INSERT INTO tasks (task_type, pr_number, on_success, github_comment, repo_id, de
 
 INSERT INTO tasks_executions (task_id, time_queued)
     SELECT id, datetime('now') FROM tasks WHERE id = last_insert_rowid();
+
+INSERT INTO task_commits (task_id, commit_id, is_tip)
+    SELECT id, '$merge_commit', 1 FROM tasks ORDER BY id DESC LIMIT 1;
 EOF
         echo_insert_rust_lockfiles "$merge_commit"
         echo "COMMIT TRANSACTION;"
@@ -535,24 +538,25 @@ run_commands() {
 EOF
         }
 
+        commits=()
+        local tip_commit
+        for data in $(sqlite3 -separator '-' "$DB_FILE" "SELECT commit_id, is_tip FROM task_commits WHERE task_id = $next_task_id"); do
+            local commit_id
+            local isTip=false
+
+            commit_id=$(echo "$data" | cut -d'-' -f1)
+            if [ "$(echo "$data" | cut -d'-' -f2)" == "1" ]; then
+              tip_commit=$commit_id
+              isTip=true
+            fi
+            commits+=("$(echo_commit_str "$commit_id" "$isTip")")
+        done
+        sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
+        local strcommits="${commits[*]}"
+
         case "$task_type" in
             PR)
-                commits=()
-                local tip_commit
-                for data in $(sqlite3 -separator '-' "$DB_FILE" "SELECT commit_id, is_tip FROM task_commits WHERE task_id = $next_task_id"); do
-                    local commit_id
-                    local isTip=false
-
-                    commit_id=$(echo "$data" | cut -d'-' -f1)
-                    if [ "$(echo "$data" | cut -d'-' -f2)" == "1" ]; then
-                      tip_commit=$commit_id
-                      isTip=true
-                    fi
-                    commits+=("$(echo_commit_str "$commit_id" "$isTip")")
-                done
-
                 # From here on we are doing an execution.
-                sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
                 # 1. If there is no existing derivation, instantiate one.
                 if [ -z "$existing_derivation_path" ]; then
                     send-text.sh "Starting PR $pr_number (instantiating)"
@@ -562,7 +566,6 @@ EOF
                     echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
 
                     # Do instantiation
-		    local strcommits="${commits[*]}"
                     if existing_derivation_paths=$(time nix-instantiate \
                         --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
                         --arg inlineCommitList "[ $strcommits ]" \
@@ -631,8 +634,6 @@ EOF
                 # This is a bit racy but it's what we gotta do.
                 local old_testcmd=$(git config --get githubmerge.testcmd)
 
-                # First, outside of the test script, update the database and setup the local CI workspace
-                sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
                 # Check out local CI
                 pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
                 git reset --hard "$local_ci_commit"
@@ -641,36 +642,25 @@ EOF
 
                 pushd "$dot_git_path/..";
                 cd "$(git rev-parse --show-toplevel)"
-                # This quote is pretty frustrating -- it has a bunch of copies of other code and
-                # functions in this script, but we can't include them directly because there isn't
-                # a way to bring a function "into scope" of another script expressed as a string.
+
+                strcommits=$(echo "$strcommits" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
                 git config githubmerge.testcmd "
                     set -e
 
-                    local lockfile_data
-                    lockfile_data="$(sqlite3 -json "$DB_FILE" "
-                    SELECT
-                        name,
-                        cargo_nix
-                    FROM
-                        lockfiles
-                        JOIN commit_lockfile ON commit_lockfile.lockfile_id = lockfiles.id
-                    WHERE
-                        commit_lockfile.commit_id = '$commit_id'
-                    ")"
+                    commit_id=\$(git rev-parse HEAD)
+                    our_tree=\$(git rev-parse HEAD^{tree})
+                    gh_tree=\$(git rev-parse $tip_commit^{tree})
+                    if [ \"\$our_tree\" != \"\$gh_tree\" ]; then
+                        send-text.sh \"PR $pr_number: queued merge of $tip_commit but the actual commit is \$commit_id. Requeuing.\"
+                        local-ci.sh queue_merge $pr_number \$commit_id
+                        exit 1
+                    fi
 
-                    commit=\"{
-                        commit = "$(git rev-parse HEAD)";
-                        isTip = true;
-                        gitUrl = $dot_git_path;
-                        cargoNixes = { $(echo "$lockfile_data" | jq -r '.[] | "\"" + .name + "\" = " + .cargo_nix + ";"') };
-                    }\"
                     send-text.sh \"Starting merge PR $pr_number \$commit_id (instantiating)\"
-
                     # Do instantiation
                     if derivation_path=\$(time nix-instantiate \\
                         --arg inlineJsonConfig \"{ gitDir = $dot_git_path; projectName = \\\"$repo_name\\\"; }\" \\
-                        --arg inlineCommitList \"[ \$commit ]\" \\
+                        --arg inlineCommitList \"[ $strcommits ]\" \
                         --argstr prNum \"$pr_number\" \\
                         \"$nixfile_path\")
                     then
