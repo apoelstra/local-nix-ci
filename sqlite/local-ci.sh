@@ -209,7 +209,7 @@ echo_insert_rust_lockfiles() {
         nixfile=$("$LOCAL_CI_PATH/sqlite/create-cargo-nix.sh" \
           "$(git rev-parse --show-toplevel)" \
           "$commit_id" \
-          "${lockfiles[j]}")
+          "$commit_id:${lockfiles[j]}")
         if [ -z "$nixfile" ]
         then nixfile=NULL
         else nixfile="'$nixfile'"

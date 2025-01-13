@@ -40,7 +40,7 @@ fi
 
 # Finally, for LOCKFILE we have a few choices
 
-# 1. It can be a blob in the repo.
+# 1. It can be a (ref to a) blob in the repo.
 if [ "$(git cat-file -t "$LOCKFILE" 2>/dev/null)" == "blob" ]; then
   TEMPDIR=$(mktemp -d)
   git show "$LOCKFILE" > "$TEMPDIR/Cargo.lock"
