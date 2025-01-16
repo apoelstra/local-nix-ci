@@ -46,7 +46,7 @@ parse_arguments() {
             ((i++)) # Skip next item since it's the directory
         elif [[ "${args[i]}" == "--priority" ]] && (( i + 1 < ${#args[@]} )); then
             QUEUE_PRIORITY="${args[i+1]}"
-            if [[ ! "$QUEUE_PRIORITY" =~ ^[+-]?[1-9][0-9]$ ]]; then
+            if [[ ! "$QUEUE_PRIORITY" =~ ^[+-]?[1-9][0-9]*$ ]]; then
                 echo "Priority $QUEUE_PRIORITY must be an integer without leading 0s."
                 exit 2
             fi
