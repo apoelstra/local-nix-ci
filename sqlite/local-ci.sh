@@ -496,8 +496,8 @@ run_commands() {
             # No queued tasks, sleep and continue
             if [ "$sleep_secs" -ge "$backoff_sec" ]; then
                 # Will max out at 480, 960, 1920, etc., whichever is greater than
-                # the number written here.
-                if [ "$backoff_sec" -lt 600 ]; then
+                # the number written here. (32 minutes apparently.)
+                if [ "$backoff_sec" -lt 1200 ]; then
                     backoff_sec=$((backoff_sec * 2))
                     sleep_secs=0
                 fi
