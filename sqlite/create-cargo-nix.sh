@@ -51,7 +51,7 @@ elif [ -f "$LOCKFILE" ]; then
 else
   echo "Lockfile does not appear to be a git blob or a path to an ordinary file." >&2
   echo "If it is a relative path, it must be with respect to the repo directory." >&2
-  echo "Repo directory: $REPO_DIR" >&2
+  echo "Repo directory: $REPO_PATH" >&2
   echo "Purported lockfile: $LOCKFILE" >&2
   echo >&2
   usage

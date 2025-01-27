@@ -249,7 +249,7 @@ rec {
         else builtins.trace "warning - no clippy.toml, using 1.56.1 as MSRV" "1.56.1";
 
     rustc = { src, msrv, ... }: rustcsForSrc { inherit src; msrvVersion = msrv; };
-    lockFile = { src, cargoNix, ...}: if builtins.substring 0 1 cargoNix.name == "/" then cargoNix.name else "${src.src}/${cargoNix.name}";
+    lockFile = { src, cargoNix, ...}: if builtins.substring 0 1 cargoNix.name == "/" then /. + cargoNix.name else "${src.src}/${cargoNix.name}";
     srcName = { src, ... }: src.commitId;
     mtxName = { src, rustc, workspace, features, cargoNix, ... }: "${src.shortId}-${rustc.name}${if isNull workspace then "" else "-" + workspace}-${cargoNix.name}-${featuresName features}${if src.isTip then "-tip" else ""}";
 

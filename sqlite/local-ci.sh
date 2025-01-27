@@ -184,7 +184,7 @@ echo_insert_rust_lockfiles() {
         # will assume this isn't a Rust repo. If it is, the result may be a silently
         # empty test matrix. But we this is not the place to try to detect that.
         for ((j = 0; j < ${#lockfiles[@]}; j++)); do
-            echo "$commit_id: Warning: using fallback lockfile ${lockfiles[j]}"
+            echo "$commit_id: Warning: using fallback lockfile ${lockfiles[j]}" >&2
         done
     fi
 
@@ -195,21 +195,24 @@ echo_insert_rust_lockfiles() {
         local escaped_lockfile_name=${lockfiles[j]//\'/\'\'}
         local lockfile_content
         local lockfile_gitid
+        local lockfile_gitpath
         local lockfile_sha256
         local nixfile
 
         if lockfile_gitid=$(git rev-parse --verify --quiet "$commit_id:${lockfiles[j]}" 2>/dev/null); then
             lockfile_content= #  not used
             lockfile_sha256=$(git show "$lockfile_gitid" | sha256sum | cut -d' ' -f1)
+            lockfile_gitpath="$commit_id:${lockfiles[j]}"
         else
             lockfile_content=$(cat "${lockfiles[j]}")
             lockfile_sha256=$(echo -n "$lockfile_content" | sha256sum | cut -d' ' -f1)
+            lockfile_gitpath="${lockfiles[j]}"
         fi
 
         nixfile=$("$LOCAL_CI_PATH/sqlite/create-cargo-nix.sh" \
           "$(git rev-parse --show-toplevel)" \
           "$commit_id" \
-          "$commit_id:${lockfiles[j]}")
+          "$lockfile_gitpath")
         if [ -z "$nixfile" ]
         then nixfile=NULL
         else nixfile="'$nixfile'"
