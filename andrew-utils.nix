@@ -39,12 +39,15 @@ rec {
   # of gcc, and probably there are other problems. Easier to just use this
   # old nixpkgs.
   ancientNixpkgs = import (builtins.fetchTarball {
-    url = "https://releases.nixos.org/nixos/21.05/nixos-21.05.993.93963c27b93/nixexprs.tar.xz";
-    sha256 = "sha256:024ryxx9ndsxf13w9gmcm5n942kpa4nrgc53jjjiq3lnicw3g4yk";
+    # I believe 24.05 is the last one with boost 1.75. Though I did not try 24.11.
+    # But it is definitely true that in early 2025 it's missing.
+    url = "https://releases.nixos.org/nixos/24.05/nixos-24.05.7376.b134951a4c9f/nixexprs.tar.xz";
+    sha256 = "sha256:1f8j7fh0nl4qmqlxn6lis8zf7dnckm6jri4rwmj0qm1qivhr58lv";
   }) {};
   elementsDotNix = nixpkgs.fetchgit {
     url = "https://github.com/roconnor-blockstream/elements-nix";
-    outputHash = "sha256-pDfSPhn2LTCsTVyP9ZlcC1bgW2e7IEcHBzFopeQU0Tk=";
+    rev = "refs/heads/coverage";
+    outputHash = "sha256-3XBXqnyy5ZiWpVmScNEY1SuDC5ZGsUAd2thyaSjyROQ=";
   };
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
@@ -55,11 +58,27 @@ rec {
       rev = "v24.2";
       outputHash = "sha256-WCbh/6WfQdbCPdRQK/WAMzR42s/HxE4eM1Cf/4mrafM=";
     };
+    withGCC13Patches = false;
   });
   # Similar, for rust-elements.
-  elementsSrc = (ancientNixpkgs.callPackage "${elementsDotNix}/elements.nix" {
-    stdenv = ancientNixpkgs.gcc11Stdenv;
+  elementsSrc = (nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
+    # Can probably increase gcc past 13; haven't tried. But heads up that we are on borrowed
+    # time here, because the glibc in modern nixpkgs is not compatible with the glibc that
+    # came with gcc <13, meaning that even if we pin nixpkgs to a super old version, the
+    # binary we build won't run inside the crate2nix derivation that was built with the
+    # modern nixpkgs.
+    #
+    # To compile with gcc 13, we apply two patches which are included in elements.nix. But
+    # over time we will be forced to update gcc until small patches won't cut it. We need
+    # to get off of elements 0.21!
+    #
+    # Curiously, compiling with gcc 14 works but then I get rust-elements test failures...
+    # don't care to investigate anymore.
+    stdenv = ancientNixpkgs.gcc13Stdenv;
     boost = ancientNixpkgs.boost175;
+    db48 = ancientNixpkgs.db48;
+    miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
+    libevent = ancientNixpkgs.libevent;
     doCheck = false;
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/ElementsProject/elements";
