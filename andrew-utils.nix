@@ -673,7 +673,7 @@ rec {
       name = "fuzz-${fuzzTarget}";
       src = src.src;
       buildInputs = [
-        overlaidPkgs.rust-bin.stable."1.64.0".default
+        overlaidPkgs.rust-bin.stable."1.70.0".default
         (import ./honggfuzz-rs.nix { inherit honggfuzzVersion; })
         # Need to use libopcodes 2.38 because of https://github.com/rust-fuzz/honggfuzz-rs/issues/68
         nixpkgs.libopcodes_2_38  # for dis-asm.h and bfd.h
