@@ -607,7 +607,7 @@ rec {
 
             # We need to manually run cargo test because the runTests run will not.
             # See https://github.com/nix-community/crate2nix/issues/194
-            cargo test --locked --doc
+            cargo test --all-features --locked --doc
           '' + lib.optionalString runClippy ''
             # Nightly clippy
             cargo clippy --all-features --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
