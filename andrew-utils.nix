@@ -46,8 +46,8 @@ rec {
   }) {};
   elementsDotNix = nixpkgs.fetchgit {
     url = "https://github.com/roconnor-blockstream/elements-nix";
-    rev = "refs/heads/coverage";
-    outputHash = "sha256-3XBXqnyy5ZiWpVmScNEY1SuDC5ZGsUAd2thyaSjyROQ=";
+    rev = "8f55670c4d78d6ffc1dd25fbbfa61d1c95d32f59";
+    outputHash = "sha256-Rtni7YRLB7aXMtrLuiKbmQR9Yx6b39Az+rLS8Jki0QE=";
   };
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
@@ -61,7 +61,7 @@ rec {
     withGCC13Patches = false;
   });
   # Similar, for rust-elements.
-  elementsSrc = (nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
+  elementsSrc021 = nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
     # Can probably increase gcc past 13; haven't tried. But heads up that we are on borrowed
     # time here, because the glibc in modern nixpkgs is not compatible with the glibc that
     # came with gcc <13, meaning that even if we pin nixpkgs to a super old version, the
@@ -80,12 +80,32 @@ rec {
     miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
     libevent = ancientNixpkgs.libevent;
     doCheck = false;
+    withGCC13Patches = true;
+
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/ElementsProject/elements";
       rev = "elements-0.21.0.2";
       outputHash = "sha256-VcfJu7svpoXGGDMfIHofqCd43eTmvGOABtFwbkb6kU0=";
     };
-  });
+  };
+  elementsSrc22 = nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
+    miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
+    withSource = nixpkgs.fetchgit {
+      url = "https://github.com/ElementsProject/elements";
+      rev = "elements-22.1.1";
+      outputHash = "sha256-bkqDuJeDq2QwzTUP0KT6IB5wpC7LIPpLIbeO4fwkUYA=";
+    };
+  };
+  elementsSrc = nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
+    #sanitizers = [ "address" ]; # cool idea but causes 60s+ timeouts in tests
+    doFunctionalTests = false; # four tests are failing
+    miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
+    withSource = nixpkgs.fetchgit {
+      url = "https://github.com/ElementsProject/elements";
+      rev = "elements-23.2.4";
+      outputHash = "sha256-OTX6we88fALSz0COKqjWV62pm8qro29eHl9qdiUxNdI=";
+    };
+  };
   # See comment near usage for what this is for.
   rustcLdLibraryPath = "${stdenv.cc.cc.lib}/lib/";
 
