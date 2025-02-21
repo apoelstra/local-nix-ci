@@ -6,7 +6,10 @@ in import ./rust.check-pr.nix {
   fullMatrixOverride = {
     features = { workspace, src, cargoToml, ... }:
     let
-      normalFeatures = utils.featuresForSrc {} { inherit src cargoToml; };
+      normalFeatures = utils.featuresForSrc {} {
+        inherit src cargoToml;
+        exclude = [ "download" ]; # naturally we cannot download from in Nix
+      };
     in
       if workspace == "corepc-node"
       then builtins.filter has_numeric_feature normalFeatures
