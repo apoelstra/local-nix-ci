@@ -465,6 +465,8 @@ rec {
     , rustc
     , msrv
     , src
+    , workspace
+    , features
     , releaseMode ? false
     , ...
     }:
@@ -512,6 +514,8 @@ rec {
                 echo 'lockFile: ${lockFile}'
                 echo 'Source commit: ${builtins.toString src.commitId}'
                 echo 'Source: ${builtins.toString src.src}'
+                echo 'Workspace: ${if isNull workspace then "[no workspaces]" else workspace}'
+                echo 'Features: ${builtins.toJSON features}'
               '';
               rust = rustc;
             }
