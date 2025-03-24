@@ -321,6 +321,7 @@ rec {
     rec {
       src = builtins.fetchGit {
         url = gitUrl;
+        allRefs = true;
         # nb using ref rather than rev would be a bit more flexible. Experimentally,
         # this allows using short hashes, branch or tag names, etc. But since we
         # intend only to call this function with full commit IDs, we get better
