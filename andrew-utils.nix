@@ -53,6 +53,7 @@ rec {
   # detecting whether this is needed, we just always pull it in.
   bitcoinSrc = (nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
     miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
+    doFunctionalTests = false; # intermittent failures on 32-core machine
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/bitcoin/bitcoin";
       rev = "v24.2";
