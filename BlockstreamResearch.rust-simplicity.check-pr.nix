@@ -10,6 +10,8 @@ import ./rust.check-pr.nix {
     };
 
     extraTestPostRun = { workspace, simplicitySrc, ... }:
+      # For old versions of rust-simplicity you've gotta disable this since simplicitySrc won't build
+      #if workspace == "." && false
       if workspace == "."
         then ''
           # Check whether jets are consistent with upstream
