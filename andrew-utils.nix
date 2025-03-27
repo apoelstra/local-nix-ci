@@ -646,7 +646,9 @@ rec {
           '' + lib.optionalString runFmt ''
             cargo fmt --all -- --check
           '' + lib.optionalString (rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz) ''
-            echo "Ran fuzztests: ${fuzzDrv}"
+            echo "Ran fuzztests (cargo-fuzz): ${fuzzHonggfuzzDrv}"
+          '' + lib.optionalString (rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
+            echo "Ran fuzztests (honggfuzz): ${fuzzLibfuzzerDrv}"
           '' + ''
             popd
           '' + extraTestPostRun;
@@ -654,7 +656,10 @@ rec {
         fuzzTargets = map
           (bin: bin.name)
           (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
-        fuzzDrv = cargoFuzzDrv {
+        fuzzHonggfuzzDrv = cargoFuzzHonggfuzzDrv {
+          inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
+        };
+        fuzzLibfuzzerDrv = cargoFuzzLibfuzzerDrv {
           inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
         };
       in
@@ -680,7 +685,7 @@ rec {
         });
 
   # Derivation that runs cargo-hfuzz on a series of targets found in fuzz/Cargo.toml.
-  cargoFuzzDrv = {
+  cargoFuzzHonggfuzzDrv = {
     projectName
   , src
   , cargoToml
@@ -694,7 +699,7 @@ rec {
         honggfuzz = (builtins.filter (x: x.name == "honggfuzz") lockToml.package);
       in (builtins.elemAt honggfuzz 0).version;
 
-    singleFuzzDrv = fuzzTarget: stdenv.mkDerivation {
+    singleFuzzHonggfuzzDrv = fuzzTarget: stdenv.mkDerivation {
       name = "fuzz-${fuzzTarget}";
       src = src.src;
       buildInputs = [
@@ -752,13 +757,74 @@ rec {
         touch $out
       '';
     };
-    fuzzDrv = overlaidPkgs.linkFarm
+    fuzzHonggfuzzDrv = overlaidPkgs.linkFarm
       "${projectName}-${src.shortId}-fuzz"
       (map (x: rec {
         name = "fuzz-${path.name}";
-        path = singleFuzzDrv x;
+        path = singleFuzzHonggfuzzDrv x;
       }) fuzzTargets);
-    in fuzzDrv;
+    in fuzzHonggfuzzDrv;
+
+  # Derivation that runs cargo-fuzz on a series of targets found in fuzz/Cargo.toml.
+  cargoFuzzLibfuzzerDrv = {
+    projectName
+  , src
+  , cargoToml
+  , lockFile
+  , generatedCargoNix
+  , fuzzTargets
+  }: let
+    singleFuzzLibfuzzerDrv = fuzzTarget: stdenv.mkDerivation {
+      name = "cargo-fuzz-${fuzzTarget}";
+      src = src.src;
+      buildInputs = [
+        # cargo-fuzz needs a nightly compiler to run since it invokes rustc with -Z
+        # Pick an arbitrary nightly; don't blindly use latest because that'll be unreliable. But
+        # it's probably worth updating this pin from time to time.
+        (overlaidPkgs.rust-bin.fromRustupToolchain { channel = "nightly-2025-03-20"; })
+        overlaidPkgs.cargo-fuzz
+      ];
+
+      phases = [ "unpackPhase" "buildPhase" ];
+
+      buildPhase = ''
+        set -x
+
+        # As of 65e3279c9602375037cb3aaabd3209c5b746375c cargo-fuzz is hardcoded
+        # to do a mkdir of artifacts/ in its --fuzz-dir argument. It does this
+        # even if you override the artifacts/ directory.
+        #
+        # See https://github.com/rust-fuzz/cargo-fuzz/issues/406
+        #
+        # This means we have to do honggfuzz-like BS to copy the entire source
+        # directory somewhere we can write to.
+
+        export CARGO_TARGET_DIR=$PWD/target
+        export CARGO_HOME=${generatedCargoNix}/cargo
+
+        mkdir "$out"
+        cp -r ${generatedCargoNix}/crate "$out"
+        pushd "$out/crate/fuzz"
+        chmod -R +w .
+
+        cargo -V
+        cargo fuzz -V
+        echo "Source: ${src.commitId}"
+        echo "Fuzz target: ${fuzzTarget}"
+        echo "Output directory: $out"
+
+        cargo fuzz run "${fuzzTarget}" -- -max_total_time=60
+
+        popd
+      '';
+    };
+   fuzzLibFuzzerDrv = overlaidPkgs.linkFarm
+      "${projectName}-${src.shortId}-fuzz"
+      (map (x: rec {
+        name = "fuzz-${path.name}";
+        path = singleFuzzLibfuzzerDrv x;
+      }) fuzzTargets);
+    in fuzzLibFuzzerDrv;
 }
 
 
