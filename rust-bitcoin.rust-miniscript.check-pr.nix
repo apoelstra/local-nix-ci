@@ -8,6 +8,9 @@ in import ./rust.check-pr.nix {
   inherit utils;
   fullMatrixOverride = {
     features = utils.featuresForSrc { needsNoStd = true; };
+# for old versions pr 12.x -- will also need to disable the assertion in andrew-utils.nix that prevents using empty sets to zero out (part of) the matrix
+#    features = { workspace, ... } @ args: if workspace == "bitcoind-tests" then [] else utils.featuresForSrc { needsNoStd = true; } args;
+
 # for old versions pr 11.x
 #    features = oldFeatures;
     # For 10.x and below
