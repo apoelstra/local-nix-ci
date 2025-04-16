@@ -20,9 +20,10 @@ let
     inherit prNum;
 
     srcName = { src, ... }: src.commitId;
-    mtxName = { src, withBench, withWallet, withDebug, check }:
+    mtxName = { src, withBench, withWallet, withDebug, check, ... }:
       "elements-PR-${prNum}-${src.shortId}-${builtins.toString withBench}-${builtins.toString withWallet}-${builtins.toString withDebug}-${check}";
 
+    check = [ "" "check" "fuzz" ];
     withBench = [ true false ];
     withWallet = [ true false ];
     withDebug = [ true false ];
@@ -36,6 +37,7 @@ let
 
     singleCheckDrv = {
       projectName,
+      prNum,
       srcName,
       mtxName,
       withBench,
@@ -43,14 +45,16 @@ let
       withDebug,
       check,
       src
-    }: dummy:
+    }:
+    dummy1:  # generated cargo.nix
+    dummy2:  # called cargo.nix
     let
       drv = stdenv.mkDerivation {
         name = "${projectName}-${src.shortId}";
         src = src.src;
 
         nativeBuildInputs = [
-          pkgs.pkgconfig
+          pkgs.pkg-config
           pkgs.autoreconfHook
           pkgs.sqlite
         ] ++ lib.optionals (check != "") [
@@ -99,6 +103,9 @@ let
         makeFlags = [ "VERBOSE=true" ];
 
         enableParallelBuilding = true;
+        patches = [
+          ./patches/elements-001.patch # https://github.com/bitcoin/bitcoin/pull/29823
+        ];
 
         postInstall = if check == "fuzz"
         then ''

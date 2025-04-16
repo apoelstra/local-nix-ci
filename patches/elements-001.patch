@@ -1,0 +1,9 @@
+diff --git a/test/sanitizer_suppressions/ubsan b/test/sanitizer_suppressions/ubsan
+index 380d980b4e..0d995284df 100644
+--- a/test/sanitizer_suppressions/ubsan
++++ b/test/sanitizer_suppressions/ubsan
+@@ -100,3 +100,4 @@ unsigned-integer-overflow:simplicity/secp256k1/group_impl.h
+ shift-base:simplicity/frame.c
+ # See comment in simplicity/primitive/elements/env.c line 303
+ unsigned-integer-overflow:simplicity/primitive/elements/env.c
++invalid-shift-exponent:minisketch/ # real bug, fixed by https://github.com/bitcoin/bitcoin/pull/29823
