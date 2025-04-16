@@ -1,46 +1,39 @@
-{
-  pkgs ? import <nixpkgs> {}
+{ pkgs ? import <nixpkgs> {}
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
-, jsonConfigFile
+, utils ? import ./andrew-utils.nix {}
+, fullMatrixOverride ? {}
+}:
+{ inlineJsonConfig
+, inlineCommitList ? []
 , prNum
-# Only used by checkHEad, not checkPr
-, singleRev ? prNum
 }:
 let
-  utils = import ./andrew-utils.nix { };
-  jsonConfig = lib.trivial.importJSON jsonConfigFile;
-  gitCommits = utils.githubPrSrcs {
-    # This must be a .git directory, not a URL or anything, since githubPrCommits
-    # well set the GIT_DIR env variable to it before calling git commands. The
-    # intention is for this to be run locally.
-    gitDir = /. + jsonConfig.gitDir;
-    gitUrl = jsonConfig.gitUrl;
-    inherit prNum;
+  jsonConfig = inlineJsonConfig // {
+    gitCommits = map utils.srcFromCommit inlineCommitList;
   };
-  boost = pkgs.boost175;
   qa-assets = builtins.fetchGit {
     url = "https://github.com/ElementsProject/qa-assets/";
-#    ref = "master";
-    allRefs = true;
-    rev = "26fd9bbf76e30d4566e135141f0385a5470fe88b";
+    ref = "master";
   };
+  fullMatrix = {
+    projectName = "elements";
+    inherit prNum;
+
+    srcName = { src, ... }: src.commitId;
+    mtxName = { src, withBench, withWallet, withDebug, check }:
+      "elements-PR-${prNum}-${src.shortId}-${builtins.toString withBench}-${builtins.toString withWallet}-${builtins.toString withDebug}-${check}";
+
+    withBench = [ true false ];
+    withWallet = [ true false ];
+    withDebug = [ true false ];
+
+    src = jsonConfig.gitCommits;
+  } // fullMatrixOverride;
+
   checkData = rec {
-    name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
-
-    argsMatrx = {
-      projectName = "elements";
-      srcName = self: self.src.commitId;
-      mtxName = self: "${self.projectName}-PR-${prNum}-${self.src.shortId}-${builtins.toString self.withBench}-${builtins.toString self.withWallet}-${builtins.toString self.withDebug}-${self.check}";
-
-      withBench = [ true false ];
-      withWallet = [ true false ];
-#      withWallet = [ true ];
-      withDebug = [ true false ];
-      check = [ "" "check" "fuzz" ];
-
-      src = gitCommits;
-    };
+    name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
+    argsMatrix = fullMatrix;
 
     singleCheckDrv = {
       projectName,
@@ -69,7 +62,7 @@ let
 
         buildInputs = [
           pkgs.db48
-          boost  # NOT pkgs.boost
+          pkgs.boost
           pkgs.zlib
           pkgs.zeromq
           pkgs.miniupnpc
@@ -80,7 +73,7 @@ let
         ];
 
         configureFlags = [
-          "--with-boost-libdir=${boost.out}/lib"
+          "--with-boost-libdir=${pkgs.boost.out}/lib"
           "--with-sqlite-libdir=${pkgs.sqlite.out}/lib"
           "--with-sqlite=yes"
         ] ++ lib.optionals (!withBench) [
@@ -142,24 +135,7 @@ let
         checkPrSrc = builtins.toJSON src;
       });
     in taggedDrv;
+    
   };
 in
-{
-  checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr (checkData // {
-    argsMatrices = map
-      (argsMtx: argsMtx // {
-        src = rec {
-          src = builtins.fetchGit {
-            allRefs = true;
-            url = jsonConfig.gitDir;
-            rev = singleRev;
-          };
-          name = builtins.toString prNum;
-          shortId = name;
-          commitId = shortId;
-        };
-      })
-      checkData.argsMatrices;
-  });
-}
+  utils.checkPr checkData
