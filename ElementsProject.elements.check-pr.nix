@@ -2,9 +2,8 @@
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
 , utils ? import ./andrew-utils.nix {}
-, fullMatrixOverride ? {}
-}:
-{ inlineJsonConfig
+
+, inlineJsonConfig
 , inlineCommitList ? []
 , prNum
 }:
@@ -29,7 +28,7 @@ let
     withDebug = [ true false ];
 
     src = jsonConfig.gitCommits;
-  } // fullMatrixOverride;
+  };
 
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
