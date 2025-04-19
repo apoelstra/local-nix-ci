@@ -26,6 +26,9 @@ let
     check = [ "" "check" "fuzz" ];
     withBench = [ true false ];
     withWallet = [ true false ];
+    withSqlite = { withWallet, ... }: if withWallet
+      then [ true false ]
+      else [ false ]; # enabling sqlite with --disable-wallet causes functional tests to fail
     withDebug = [ true false ];
 
     src = jsonConfig.gitCommits;
@@ -42,6 +45,7 @@ let
       mtxName,
       withBench,
       withWallet,
+      withSqlite,
       withDebug,
       check,
       src
@@ -77,6 +81,7 @@ let
 
         configureFlags = [
           "--with-boost-libdir=${pkgs.boost.out}/lib"
+        ] ++ lib.optionals (withSqlite) [
           "--with-sqlite-libdir=${pkgs.sqlite.out}/lib"
           "--with-sqlite=yes"
         ] ++ lib.optionals (!withBench) [
@@ -112,12 +117,19 @@ let
           cp -r ${qa-assets}/fuzz_seed_corpus .
           chmod +w -R fuzz_seed_corpus/
           patchShebangs test/fuzz
+          cat test/sanitizer_suppressions/ubsan
           ./test/fuzz/test_runner.py -j=$NIX_BUILD_CORES -l DEBUG fuzz_seed_corpus/
         ''
-        else if check == "check" then ''
-          patchShebangs test/functional
-          ./test/functional/test_runner.py -j1
-        ''
+        else if check == "check" then
+         # Disable functional tests when debug is on because it makes everything too slow.
+          if withDebug
+          then ''
+            echo "Skipping functional tests because debug build is on."
+          ''
+          else ''
+            patchShebangs test/functional
+            ./test/functional/test_runner.py -j2
+          ''
         else "";
 
         DIR_UNIT_TEST_DATA = "${qa-assets}/unit_test_data/";
