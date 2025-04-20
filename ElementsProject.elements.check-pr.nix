@@ -110,6 +110,7 @@ let
         enableParallelBuilding = true;
         patches = [
           ./patches/elements-001.patch # https://github.com/bitcoin/bitcoin/pull/29823
+          ./patches/elements-002.patch # increase timeout for unit test
         ];
 
         postInstall = if check == "fuzz"
