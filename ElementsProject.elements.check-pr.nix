@@ -111,6 +111,7 @@ let
         patches = [
           ./patches/elements-001.patch # https://github.com/bitcoin/bitcoin/pull/29823
           ./patches/elements-002.patch # increase timeout for unit test
+          ./patches/elements-003.patch # https://github.com/ElementsProject/elements/pull/1450
         ];
 
         postInstall = if check == "fuzz"
