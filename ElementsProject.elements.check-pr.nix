@@ -130,7 +130,7 @@ let
           ''
           else ''
             patchShebangs test/functional
-            ./test/functional/test_runner.py -j2
+            ./test/functional/test_runner.py -j1
           ''
         else "";
 
