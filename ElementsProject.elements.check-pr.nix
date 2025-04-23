@@ -37,6 +37,7 @@ let
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
     argsMatrix = fullMatrix;
+    forceSequential = true; # see docs in andrew-utils.nix for what this does
 
     singleCheckDrv = {
       projectName,
@@ -130,10 +131,7 @@ let
           ''
           else ''
             patchShebangs test/functional
-            ./test/functional/test_runner.py -j1 ||
-                ./test/functional/test_runner.py -j1 ||
-                ./test/functional/test_runner.py -j1 ||
-                ./test/functional/test_runner.py -j1
+            ./test/functional/test_runner.py -j1
           ''
         else "";
 
