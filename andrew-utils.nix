@@ -218,8 +218,8 @@ rec {
             expandValue = v: if builtins.isList v then v else [ v ];
             valueAsList = s: k: v:
               let res = expandValue (evaluateValue s v); in
-              assert lib.assertMsg (res != []) "Key ${k} has empty list for value, zeroing out whole matrix.";
-                #builtins.trace "Key ${k} has ${builtins.toString (builtins.length res)} values." res;
+                # Comment this assertion out when disabling stuff, e.g. in rust-miniscript pre 13.x
+                assert lib.assertMsg (res != []) "Key ${k} has empty list for value, zeroing out whole matrix.";
                 res;
             # We want to choose the next attribute such that, if it is a function,
             # then all of its inputs have already been evaluated.

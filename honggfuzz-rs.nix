@@ -15,11 +15,16 @@
     url = "https://github.com/rust-fuzz/honggfuzz-rs";
     ref = "refs/tags/v0.5.56";
   };
+  src57 = fetchGit {
+    url = "https://github.com/rust-fuzz/honggfuzz-rs";
+    ref = "refs/tags/v0.5.57";
+  };
 
   src =
     if honggfuzzVersion == "0.5.55" then src55
     else if honggfuzzVersion == "0.5.56" then src56
-    else abort "Unknown hongfuzz version {hongfuzzVersion}";
+    else if honggfuzzVersion == "0.5.57" then src57
+    else abort "Unknown hongfuzz version ${honggfuzzVersion}";
    
   cargoLock = {
     lockFile = "${src}/Cargo.lock";
