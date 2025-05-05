@@ -7,14 +7,14 @@ let
 in import ./rust.check-pr.nix {
   inherit utils;
   fullMatrixOverride = {
-    features = if oldVersion == "12.x"
+    ${if oldVersion == "none" then null else "features"} = if oldVersion == "12.x"
       then { workspace, ... } @ args: if workspace == "bitcoind-tests" then [] else utils.featuresForSrc { needsNoStd = true; } args
       else
         let oldFeatures = { rustc, ... }: [ [ "std" ] [ "std" "compiler" ]  [ "std" "compiler" "trace" ] ]
           ++ (if builtins.isNull (builtins.match "1.41" rustc.version) then [ [ "no-std" ] [ "no-std" "compiler" "trace" ] ] else [])
           ++ (if utils.rustcIsNightly rustc then [ [ "std" "unstable" "compiler" ] [ "no-std" "unstable" "compiler" ] ] else []);
         in
-          if oldVersion == "11.x" then oldFeatures
+          if oldVersion == "11.x" then { rustc, workspace, ... } @ args: if workspace == "bitcoind-tests" then [] else oldFeatures args
           else if oldVersion == "10.x" then { rustc, workspace, ... } @ args: if workspace == "bitcoind-tests" || workspace == "fuzz" then [] else oldFeatures args
           else abort "Unknown miniscript version ${oldVersion}";
 
@@ -23,7 +23,7 @@ in import ./rust.check-pr.nix {
     extraTestPostRun = { workspace, ... }: lib.optionalString (workspace == ".") ''
       cp fuzz/Cargo.toml old-Cargo.toml
       # Comment out for old versions
-      if [ "${oldVersion}" != "10.x" ]; then
+      if [ "${oldVersion}" != "10.x" && "${oldVersion}" != "11.x" ]; then
           cp .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
       fi
 
@@ -35,7 +35,7 @@ in import ./rust.check-pr.nix {
       cd ..
 
       diff fuzz/Cargo.toml old-Cargo.toml
-      if [ "${oldVersion}" != "10.x" ]; then
+      if [ "${oldVersion}" != "10.x" && "${oldVersion}" != "11.x" ]; then
           diff .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
       fi
     '';
