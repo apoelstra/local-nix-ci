@@ -654,6 +654,9 @@ rec {
           echo "Bitcoind exe: $BITCOIND_EXE"
           echo "Elementsd exe: $ELEMENTSD_EXE"
 
+          export CARGO_BIN_NAME="${projectName}"
+          echo "CARGO_BIN_NAME: $CARGO_BIN_NAME"
+
           # We have "cannot find libstdc++" issues when compiling
           # rust-bitcoin with bitcoinconsensus on and rustc nightly
           # from 2024-05-22 onward (did not occur on 2024-05-04;
