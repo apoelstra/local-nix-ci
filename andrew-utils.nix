@@ -562,6 +562,9 @@ rec {
                 echo 'Source: ${builtins.toString src.src}'
                 echo 'Workspace: ${if isNull workspace then "[no workspaces]" else workspace}'
                 echo 'Features: ${builtins.toJSON features}'
+
+                export CARGO_BIN_NAME="${projectName}"
+                echo "CARGO_BIN_NAME: $CARGO_BIN_NAME"
               '';
               rust = rustc;
             }
@@ -653,9 +656,6 @@ rec {
           export ELEMENTSD_EXE="${elementsSrc}/bin/elementsd"
           echo "Bitcoind exe: $BITCOIND_EXE"
           echo "Elementsd exe: $ELEMENTSD_EXE"
-
-          export CARGO_BIN_NAME="${projectName}"
-          echo "CARGO_BIN_NAME: $CARGO_BIN_NAME"
 
           # We have "cannot find libstdc++" issues when compiling
           # rust-bitcoin with bitcoinconsensus on and rustc nightly
