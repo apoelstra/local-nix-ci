@@ -127,7 +127,12 @@ rec {
     in [
       nightly
       pkgs.rust-bin.stable.latest.default
-      pkgs.rust-bin.beta.latest.default
+      # In 2025-05 this started causing problems due to a new unused_code lint getting into beta
+      # very shortly after we'd addressed it on rust-bitcoin master, so already-opened PRs started
+      # failing with the beta compiler.
+      # Also running this takes time and I don't think once in 10+ years has this ever provided
+      # value.
+      #pkgs.rust-bin.beta.latest.default
       msrv
     ];
 
