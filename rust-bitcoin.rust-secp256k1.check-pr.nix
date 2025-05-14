@@ -1,6 +1,6 @@
 import ./rust.check-pr.nix {
   fullMatrixOverride = {
-    clippyExtraArgs = "-A clippy::doc_lazy_continuation"; # https://github.com/rust-bitcoin/rust-secp256k1/pull/705
+    clippyExtraArgs = "-A clippy::new_without_default"; # https://github.com/rust-bitcoin/rust-secp256k1/pull/716/commits/dd26c3067044a89c503a32079c24227d6e1afca5
 
     secp256k1RevFile = { src, ... }: builtins.elemAt (builtins.split "\n"
       (builtins.readFile "${src.src}/secp256k1-sys/depend/secp256k1-HEAD-revision.txt"))
