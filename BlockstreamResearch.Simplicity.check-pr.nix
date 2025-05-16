@@ -75,14 +75,14 @@ let
 
                 ./dist/build/GenPrimitive/GenPrimitive
                 for inc in *.inc; do
-                    diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
+                    diff "$inc" "${sourceDir}/C/elements/$inc"
                 done
                 rm ./*.inc
 
                 #./dist/build/GenRustJets/GenRustJets # Output not committed anywhere
                 ./dist/build/GenTests/GenTests
                 for inc in checkSigHashAllTx1.[ch]; do
-                    diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
+                    diff "$inc" "${sourceDir}/C/elements/$inc"
                 done
                 rm checkSigHashAllTx1.[ch]
 
@@ -98,7 +98,7 @@ let
                         diff "$inc" "${sourceDir}/C/$inc"
                         ;;
                     decodeElementsJets.inc)
-                        diff "$inc" "${sourceDir}/C/primitive/elements/$inc"
+                        diff "$inc" "${sourceDir}/C/elements/$inc"
                         ;;
                     *)
                         echo "Unexpected output $inc from GenDecodeJet"
