@@ -512,8 +512,20 @@ run_commands() {
             sleep 5
             sleep_secs=$((sleep_secs + 5))
 
+            # Update DB to signal inactivity
+            SINCE=$(echo "SELECT inactive_since FROM config" | sqlite3 "$DB_FILE")
+            if [ -z "$SINCE" ]; then
+                echo "UPDATE config SET inactive_since = '$(date '+%F %T')'" | sqlite3 "$DB_FILE"
+            # "sleep_secs" = "5" is a hacky way of checking whether we echoed the
+            # "Nothing to do" message above.
+            elif [ "$sleep_secs" = "5" ]; then
+                echo "Inactive since $SINCE."
+            fi
+
             continue
         else
+            # Update DB to signal activity
+            echo "UPDATE config SET inactive_since = ''" | sqlite3 "$DB_FILE"
             backoff_sec=15
         fi
 
