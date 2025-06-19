@@ -113,6 +113,10 @@ locate_repo() {
 
     # Success. Obtain repo ID and export GIT_DIR for use by git.
     DB_REPO_ID=$(sqlite3 "$DB_FILE" "SELECT id FROM repos WHERE dot_git_path = '$escaped_git_path';")
+    if [ -z "$DB_REPO_ID" ]; then
+        echo "Failed to find repo ID for git path $escaped_git_path"
+        exit 1
+    fi
     export GIT_DIR
 }
 
