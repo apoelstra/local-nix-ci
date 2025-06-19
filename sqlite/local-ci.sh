@@ -651,7 +651,7 @@ run_commands() {
         fi
 
         if [ "$next_task_status" == "IN PROGRESS" ]; then
-            echo "WARNING: contining in-progress $task_type job $next_task_id for PR $pr_number"
+            echo "WARNING: contining in-progress $task_type job $next_task_id for $repo_name PR $pr_number"
             echo "(Waiting 15 seconds to give time to Ctrl+C)"
             sleep 15
         fi
@@ -703,7 +703,7 @@ EOF
                 # From here on we are doing an execution.
                 # 1. If there is no existing derivation, instantiate one.
                 if [ -z "$existing_derivation_path" ]; then
-                    send-text.sh "Starting PR $pr_number (instantiating)"
+                    send-text.sh "Starting $repo_name PR $pr_number (instantiating)"
                     # Check out local CI
                     pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
                     git reset --hard "$local_ci_commit"
@@ -723,14 +723,14 @@ EOF
                         popd
                     else
                         sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
-                        send-text.sh "Instantiation of PR $pr_number failed."
+                        send-text.sh "Instantiation of $repo_name PR $pr_number failed."
                         popd
                         echo "(Waiting 60 seconds (from $(date)) to give time to react.)"
                         sleep 60 # sleep 60 seconds to give me time to react if I am online
                         continue
                     fi
                 else
-                    send-text.sh "Starting PR $pr_number with existing drv $existing_derivation_path"
+                    send-text.sh "Starting $repo_name PR $pr_number with existing drv $existing_derivation_path"
                 fi
                 # 2. Build the instantiated derivation
                 if time nix-build \
@@ -789,7 +789,7 @@ EOF
                         done
                     fi
 
-                    send-text.sh "Test of PR $pr_number succeeded. Derivation: $existing_derivation_path"
+                    send-text.sh "Test of $repo_name PR $pr_number succeeded. Derivation: $existing_derivation_path"
                 else
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
 
@@ -816,7 +816,7 @@ EOF
                         done
                     fi
 
-                    send-text.sh "Test of PR $pr_number failed: $existing_derivation_path"
+                    send-text.sh "Test of $repo_name PR $pr_number failed: $existing_derivation_path"
                     sleep 60 # sleep 60 seconds to give me time to react if I am online
                     continue
                 fi
@@ -843,7 +843,7 @@ EOF
                     our_tree=\$(git rev-parse HEAD^{tree})
                     gh_tree=\$(git rev-parse $tip_commit^{tree})
                     if [ \"\$our_tree\" != \"\$gh_tree\" ]; then
-                        send-text.sh \"PR $pr_number: queued merge of $tip_commit but the actual commit is \$commit_id. Requeuing.\"
+                        send-text.sh \"$repo_name PR $pr_number: queued merge of $tip_commit but the actual commit is \$commit_id. Requeuing.\"
                         echo >&2
                         echo \"PR $pr_number\" >&2
                         echo \"Queued merge of $tip_commit; actual commit is \$commit_id.\" >&2
