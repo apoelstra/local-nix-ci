@@ -494,6 +494,105 @@ run_commands() {
         LIMIT 1;
         ")"
 
+        # Check merge_pushes table for any pending pushes
+        local merge_push_messages=()
+        local signature_messages=()
+        local should_restart_loop=false
+
+        # Get all repos with pending merge pushes
+        local repos_with_pushes=$(sqlite3 "$DB_FILE" "
+            SELECT DISTINCT r.id, r.name, r.dot_git_path
+            FROM merge_pushes mp
+            JOIN repos r ON mp.repo_id = r.id;")
+
+        if [ -n "$repos_with_pushes" ]; then
+            while IFS='|' read -r repo_id repo_name repo_git_path; do
+                # Get the target remote for this repo
+                local target_remote=$(sqlite3 "$DB_FILE" "SELECT DISTINCT target_remote FROM merge_pushes WHERE repo_id = $repo_id LIMIT 1;")
+
+                # Fetch from the target remote to get latest changes
+                pushd "$repo_git_path/.."
+                git fetch "$target_remote"
+
+                # Get all pending merge pushes for this repo
+                local merge_pushes=$(sqlite3 "$DB_FILE" "
+                    SELECT id, jj_change_id, tree_hash, state
+                    FROM merge_pushes
+                    WHERE repo_id = $repo_id;")
+
+                while IFS='|' read -r push_id jj_change_id tree_hash state; do
+                    if [ -n "$push_id" ]; then
+                        # a. Check if tree hash has changed
+                        local git_commit_id
+                        local current_tree_hash
+                        git_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id 2>/dev/null)
+                        if current_tree_hash=$(git log -1 "$git_commit_id" --no-graph --format="%T" 2>/dev/null); then
+                            if [ "$current_tree_hash" != "$tree_hash" ]; then
+                                sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                                merge_push_messages+=("Tree hash for change $jj_change_id in $repo_name has changed ($tree_hash → $current_tree_hash). Removing from queue.")
+                                continue
+                            fi
+
+                            # b. Check if it's a direct descendant of the target branch
+                            local target_branch=$(sqlite3 "$DB_FILE" "SELECT target_branch FROM merge_pushes WHERE id = $push_id;")
+                            local target_remote=$(sqlite3 "$DB_FILE" "SELECT target_remote FROM merge_pushes WHERE id = $push_id;")
+                            git fetch "$target_remote"
+                            if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$jj_change_id" 2>/dev/null; then
+                                sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                                merge_push_messages+=("Change $jj_change_id in $repo_name is not a direct descendant of $target_remote/$target_branch. Removing from queue.")
+                                continue
+                            fi
+
+                            # c. Check if state is FAILED
+                            if [ "$state" = "FAILED" ]; then
+                                sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                                merge_push_messages+=("Test for change $jj_change_id in $repo_name failed. Removing from queue.")
+                                continue
+                            fi
+
+                            # d. Check if state is SUCCESS and if it's signed
+                            if [ "$state" = "SUCCESS" ]; then
+                                if git verify-commit "$git_commit_id" &>/dev/null; then
+                                    # Push the change
+                                    if git push "$target_remote" "$git_commit_id:$target_branch"; then
+                                        merge_push_messages+=("Change $jj_change_id in $repo_name was successfully pushed to $target_branch.")
+                                    else
+                                        merge_push_messages+=("Failed to push change $jj_change_id in $repo_name to $target_branch.")
+                                    fi
+                                    sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                                    should_restart_loop=true
+                                else
+                                    signature_messages+=("Change $jj_change_id in $repo_name is ready to be pushed but is not GPG signed.")
+                                fi
+                            fi
+                        else
+                            # Change ID not found in jj
+                            sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                            merge_push_messages+=("Change $jj_change_id in $repo_name was not found. Removing from queue.")
+                        fi
+                    fi
+                done <<< "$merge_pushes"
+
+                popd
+            done <<< "$repos_with_pushes"
+
+            # Send all action messages in a single call
+            if [ ${#merge_push_messages[@]} -gt 0 ]; then
+                send-text.sh "$(printf "%s\n" "${merge_push_messages[@]}")"
+            fi
+
+            # Send signature messages only if we should
+            if [ ${#signature_messages[@]} -gt 0 ] && [ "$should_send_signature_messages" = true ]; then
+                send-text.sh "$(printf "%s\n" "${signature_messages[@]}")"
+                should_send_signature_messages=false
+            fi
+
+            # Restart the loop if we pushed something
+            if [ "$should_restart_loop" = true ]; then
+                continue
+            fi
+        fi
+
         # Check if a task was found
         if [ -z "$json_next_task" ] || [ "$json_next_task" == "[]" ]; then
             # No queued tasks, sleep and continue
@@ -527,6 +626,8 @@ run_commands() {
             # Update DB to signal activity
             echo "UPDATE config SET inactive_since = ''" | sqlite3 "$DB_FILE"
             backoff_sec=15
+            # Reset the flag to send signature messages next time
+            should_send_signature_messages=true
         fi
 
         local next_execution_id=$(echo "$json_next_task" | jq -r '.[0].execution_id')
@@ -664,9 +765,57 @@ EOF
 
                     # Set "SUCCESS" as the last step
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'SUCCESS', time_end = datetime('now') WHERE id = $next_execution_id;"
+
+                    # Check if this commit has a jj change ID in the merge_pushes table
+                    local jj_change_ids=$(sqlite3 "$DB_FILE" "
+                        SELECT jj_change_id FROM merge_pushes
+                        WHERE repo_id = $repo_id
+                        AND state = 'QUEUED'
+                        AND jj_change_id IN (
+                            SELECT jj_change_id FROM merge_pushes
+                            WHERE repo_id = $repo_id
+                        );")
+
+                    if [ -n "$jj_change_ids" ]; then
+                        for jj_change_id in $jj_change_ids; do
+                            # Check if this commit corresponds to the jj change ID
+                            pushd "$dot_git_path/.."
+                            if jj_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id 2>/dev/null); then
+                                if [ "$jj_commit_id" = "$tip_commit" ]; then
+                                    sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'SUCCESS' WHERE jj_change_id = '$jj_change_id' AND repo_id = $DB_REPO_ID;"
+                                fi
+                            fi
+                            popd
+                        done
+                    fi
+
                     send-text.sh "Test of PR $pr_number succeeded. Derivation: $existing_derivation_path"
                 else
                     sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
+
+                    # Check if this commit has a jj change ID in the merge_pushes table
+                    local jj_change_ids=$(sqlite3 "$DB_FILE" "
+                        SELECT jj_change_id FROM merge_pushes
+                        WHERE repo_id = $repo_id
+                        AND state = 'QUEUED'
+                        AND jj_change_id IN (
+                            SELECT jj_change_id FROM merge_pushes
+                            WHERE repo_id = $repo_id
+                        );")
+
+                    if [ -n "$jj_change_ids" ]; then
+                        for jj_change_id in $jj_change_ids; do
+                            # Check if this commit corresponds to the jj change ID
+                            pushd "$dot_git_path/.."
+                            if jj_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id 2>/dev/null); then
+                                if [ "$jj_commit_id" = "$tip_commit" ]; then
+                                    sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'FAILED' WHERE jj_change_id = '$jj_change_id' AND repo_id = $DB_REPO_ID;"
+                                fi
+                            fi
+                            popd
+                        done
+                    fi
+
                     send-text.sh "Test of PR $pr_number failed: $existing_derivation_path"
                     sleep 60 # sleep 60 seconds to give me time to react if I am online
                     continue

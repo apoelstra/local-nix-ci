@@ -104,3 +104,16 @@ CREATE TABLE config
     , inactive_since TEXT
     );
 INSERT INTO config (afk) VALUES ('BACK');
+
+CREATE TABLE merge_pushes
+    ( id INTEGER PRIMARY KEY ASC
+    , repo_id INTEGER REFERENCES repos(id) NOT NULL
+    , jj_change_id TEXT NOT NULL
+    , tree_hash TEXT NOT NULL
+    , target_remote TEXT NOT NULL DEFAULT 'origin'
+    , target_branch TEXT NOT NULL DEFAULT 'main'
+    , state TEXT NOT NULL DEFAULT 'QUEUED' CHECK(state in ('QUEUED', 'SUCCESS', 'FAILED'))
+    );
+CREATE INDEX merge_pushes_repo_id_index ON merge_pushes(repo_id);
+CREATE INDEX merge_pushes_jj_change_id_index ON merge_pushes(jj_change_id);
+CREATE INDEX merge_pushes_state_index ON merge_pushes(state);
