@@ -5,6 +5,7 @@ shopt -s nullglob
 
 command -v git >/dev/null 2>&1 || { echo "git is required but not installed. Aborting."; exit 1; }
 command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 is required but not installed. Aborting."; exit 1; }
+command -v jj >/dev/null 2>&1 || { echo "jj is required but not installed. Aborting."; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed. Aborting."; exit 1; }
 command -v send-text.sh >/dev/null 2>&1 || { echo "send-text.sh is required but not installed. Aborting."; exit 1; }
 command -v github-merge.py >/dev/null 2>&1 || { echo "github-merge.py is required but not installed. Aborting."; exit 1; }
