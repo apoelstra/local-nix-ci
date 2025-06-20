@@ -16,10 +16,10 @@ NIX_PIN_PATH="$HOME/code/NixOS/nixpkgs/local-ci-pin/"
 
 export NIX_PATH=nixpkgs=$NIX_PIN_PATH
 NIXPKGS_COMMIT_ID=$(cd "$NIX_PIN_PATH/" && git rev-parse HEAD)
-LOCAL_CI_PATH="$(cd "$(dirname "$(realpath "$0")")"; git rev-parse --show-toplevel)"
+LOCAL_CI_PATH="$(unset GIT_DIR; cd "$(dirname "$(realpath "$0")")"; git rev-parse --show-toplevel)"
 LOCAL_CI_WORKTREE="../local-ci-worktree"
-LOCAL_CI_COMMIT_ID="$(cd "$(dirname "$(realpath "$0")")"; git rev-parse HEAD)"
-LOCAL_CI_DIFF="$(cd "$(dirname "$(realpath "$0")")"; git diff)"
+LOCAL_CI_COMMIT_ID="$(unset GIT_DIR; cd "$(dirname "$(realpath "$0")")"; git rev-parse HEAD)"
+LOCAL_CI_DIFF="$(unset GIT_DIR; cd "$(dirname "$(realpath "$0")")"; git diff)"
 
 # Arguments (will be populated by parse_arguments)
 ARG_COMMAND=
@@ -919,7 +919,7 @@ EOF
 # Main logic based on the command line argument
 parse_arguments "$@"
 if [[ "$ARG_ALLOW_DIRTY_LOCAL_CI" != "yes" ]] && [[ ! -z "$LOCAL_CI_DIFF" ]]; then
-    echo "local CI directory apperas to be dirty and --allow-dirty-local-ci was not passed"
+    echo "local CI directory appears to be dirty and --allow-dirty-local-ci was not passed"
     exit 1
 fi
 
