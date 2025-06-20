@@ -376,7 +376,6 @@ queue_merge() {
 
     # First, sanity-check the PR number
     local pr_num="${1:-}"
-    local merge_commit="${2:-}"
     case $pr_num in
         '')
             echo "PR number is required by queue-pr command"
@@ -389,44 +388,50 @@ queue_merge() {
     esac
     shift
 
-    # In a merge run, unlike a PR run, there is no "comment" that we add. Any comments
-    # should have appeared as part of the ACK(s). The person running the merge script
-    # might not have even looked at the PR really.
+    # First fetch the current Github refs (this is also done in compute_merge_description.py
+    # and in the bitcoin-maintainer-tools github-merge.py; it modifies the repo but in a way
+    # that has never caused me problems in the years I've been using github-merge.py).
     #
-    # Also unlike a PR run, we don't grab the list of commits upfront. The merge script
-    # will create its own merge commit, compare this to pr/<n>/merge (Github's version),
-    # and look for ACKs.
+    # Because it's weird and non-obvious, let me highlight: this creates a synthetic pr/X/base
+    # ref, alongside pr/X/head and pr/X/merge (which are created by github) which points to
+    # the "base ref" as obtained from Github by querying with gh.
+    local base_ref
+    base_ref=$(gh pr view "$pr_num" --json baseRefName --jq '.baseRefName')
+    local remote=origin
+    git fetch -q "$remote" "+refs/pull/$pr_num/*:refs/heads/pull/$pr_num/*"
+    git fetch -q "$remote" "+refs/heads/$base_ref:refs/heads/pull/$pr_num/base"
 
-    # We check that the GH "head" commit exists as a sanity check. If the user has specified
-    # an alternate merge commit, we check that the head is a parent of it. Otherwise we use
-    # the GH merge commit.
-    local head_commit
-    if ! head_commit=$(git rev-parse "pr/$pr_num/head" 2>/dev/null); then
-        echo "No commit at rev pr/$pr_num/head. Perhaps you need to fetch?"
-        exit 1
-    fi
-    if [ -z "$merge_commit" ]; then
-        if ! merge_commit=$(git rev-parse "pr/$pr_num/merge" 2>/dev/null); then
-            echo "No commit at rev pr/$pr_num/merge. Perhaps this PR was already merged?"
-            exit 1
-        fi
-    fi
+    # Then create a merge commit (no signature, no description, just a merge)
+    jj --config signing.behavior=drop new --no-edit -r "pull/$pr_num/head" -r "pull/$pr_num/base"
 
-    if [ "$(git rev-parse "$head_commit")" != "$(git rev-parse "$merge_commit^2")" ]; then
-        echo "Merge commit $merge_commit does not appear to be a merge of head commit $head_commit".
-        echo "The second parent of $merge_commit is $(git rev-parse "$merge_commit^2")."
-        echo
-        echo "The head commit is pr/$pr_num/head"
-        if [ -n "${2:-}" ]
-        then echo "The merge commit was passed on the command-line."
-        else echo "The merge commit is pr/$pr_num/merge."
-        fi
-        exit 1
-    fi
+    # (Racily) obtain the change ID of the commit we just made. It appears that `jj new`
+    # cannot be made to just output the commit or change ID that it just created in a
+    # machine-readable format. ChatGPT suggests parsing the human-readable output but
+    # that seems likely to break, so instead I'm just gonna do the racy thing. Ultimately
+    # this doesn't matter: we expect the resulting commit to be empty every time, and we
+    # ask the user to sign this empty commit out-of-band, and so if we get the "wrong"
+    # one then the worst case we'll have vandalized the description of an empty change.
+    local local_merge_change_id
+    local_merge_change_id=$(jj log --no-pager --no-graph -T change_id -r "latest(pull/$pr_num/head+ & pull/$pr_num/base+)")
 
-    # Then we just blindly stick the request in.
+    # Obtain its description and do initial sanity checks. If anything looks funny about
+    # the PR (e.g. having @s in the commit message) the user will be given an opportunity
+    # to bail here.
+    local description
+    local tree_hash
+    description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" -c "$local_merge_change_id" "$pr_num")
+    # Copy the tree hash out of the description to avoid computing it twice
+    tree_hash=$(echo "$description" | grep "^Tree-SHA512: " | cut -d' ' -f2)
+
+    # If we made it this far, the PR looks ok (or at least, the users says keep going).
+    # Add the initial message and queue it for testing and for pushing.
+    jj describe -r "$local_merge_change_id" -m "$description"
+    local merge_commit
+    merge_commit=$(jj log --no-graph -r "$local_merge_change_id" -T commit_id)
+
     local escaped_diff="${LOCAL_CI_DIFF//\'/\'\'}"
-    echo "Queuing merge for PR $pr_num; head $head_commit merge (GH) $merge_commit"
+    echo "Queuing merge for PR $pr_num; merge change ID $local_merge_change_id commit ID $merge_commit"
+    send-text.sh "Queuing merge for PR $pr_num; merge change ID $local_merge_change_id commit ID $merge_commit"
     (
         cat <<EOF
 BEGIN TRANSACTION;
@@ -442,6 +447,9 @@ INSERT INTO tasks_executions (task_id, time_queued, priority)
 
 INSERT INTO task_commits (task_id, commit_id, is_tip)
     SELECT id, '$merge_commit', 1 FROM tasks ORDER BY id DESC LIMIT 1;
+
+INSERT INTO merge_pushes (repo_id, jj_change_id, tree_hash, target_branch, state) VALUES
+    ('$DB_REPO_ID', '$local_merge_change_id', '$tree_hash', '$base_ref', 'QUEUED');
 EOF
         echo_insert_rust_lockfiles "$merge_commit"
         echo "COMMIT TRANSACTION;"
@@ -481,6 +489,7 @@ run_commands() {
             derivations.local_ci_diff AS local_ci_diff,
             derivations.path AS existing_derivation_path,
             derivations.time_instantiated AS existing_derivation_time,
+            repos.id AS repo_id,
             repos.name AS repo_name,
             repos.dot_git_path AS dot_git_path,
             repos.nixfile_path AS nixfile_path
@@ -516,8 +525,8 @@ run_commands() {
                 local target_remote=$(sqlite3 "$DB_FILE" "SELECT DISTINCT target_remote FROM merge_pushes WHERE repo_id = $repo_id LIMIT 1;")
 
                 # Fetch from the target remote to get latest changes
-                pushd "$repo_git_path/.."
-                git fetch "$target_remote"
+                pushd "$repo_git_path/.." > /dev/null
+                git fetch "$target_remote" > /dev/null
 
                 # Get all pending merge pushes for this repo
                 local merge_pushes=$(sqlite3 "$DB_FILE" "
@@ -530,8 +539,13 @@ run_commands() {
                         # a. Check if tree hash has changed
                         local git_commit_id
                         local current_tree_hash
-                        git_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id 2>/dev/null)
-                        if current_tree_hash=$(git log -1 "$git_commit_id" --no-graph --format="%T" 2>/dev/null); then
+                        if ! git_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id); then
+                            sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                            merge_push_messages+=("Change $jj_change_id in $repo_name seems to have been abandoned. Removing from queue.")
+                            continue
+                        fi
+
+                        if current_tree_hash=$("$LOCAL_CI_PATH/sqlite/compute_sha512_root.py" "$git_commit_id"); then
                             if [ "$current_tree_hash" != "$tree_hash" ]; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
                                 merge_push_messages+=("Tree hash for change $jj_change_id in $repo_name has changed ($tree_hash → $current_tree_hash). Removing from queue.")
@@ -542,7 +556,7 @@ run_commands() {
                             local target_branch=$(sqlite3 "$DB_FILE" "SELECT target_branch FROM merge_pushes WHERE id = $push_id;")
                             local target_remote=$(sqlite3 "$DB_FILE" "SELECT target_remote FROM merge_pushes WHERE id = $push_id;")
                             git fetch "$target_remote"
-                            if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$jj_change_id" 2>/dev/null; then
+                            if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$git_commit_id" 2>/dev/null; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
                                 merge_push_messages+=("Change $jj_change_id in $repo_name is not a direct descendant of $target_remote/$target_branch. Removing from queue.")
                                 continue
@@ -578,7 +592,7 @@ run_commands() {
                     fi
                 done <<< "$merge_pushes"
 
-                popd
+                popd > /dev/null
             done <<< "$repos_with_pushes"
 
             # Send all action messages in a single call
@@ -646,6 +660,7 @@ run_commands() {
         local local_ci_commit=$(echo "$json_next_task" | jq -r '.[0].local_ci_commit')
         local existing_derivation_path=$(echo "$json_next_task" | jq -r '.[0].existing_derivation_path // empty')
         local existing_derivation_time=$(echo "$json_next_task" | jq -r '.[0].existing_derivation_time // empty')
+        local repo_id=$(echo "$json_next_task" | jq -r '.[0].repo_id')
         local repo_name=$(echo "$json_next_task" | jq -r '.[0].repo_name')
         local dot_git_path=$(echo "$json_next_task" | jq -r '.[0].dot_git_path')
         local nixfile_path="$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/$(echo "$json_next_task" | jq -r '.[0].nixfile_path')"
@@ -703,216 +718,127 @@ EOF
         sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'IN PROGRESS', time_start = datetime('now') WHERE id = $next_execution_id;"
         local strcommits="${commits[*]}"
 
-        case "$task_type" in
-            PR)
-                # From here on we are doing an execution.
-                # 1. If there is no existing derivation, instantiate one.
-                if [ -z "$existing_derivation_path" ]; then
-                    send-text.sh "Starting $repo_name PR $pr_number (instantiating)"
-                    # Check out local CI
-                    pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
-                    git reset --hard "$local_ci_commit"
-                    echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
+        # From here on we are doing an execution.
+        # 1. If there is no existing derivation, instantiate one.
+        if [ -z "$existing_derivation_path" ]; then
+            send-text.sh "Starting $repo_name PR $pr_number (instantiating)"
+            # Check out local CI
+            pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
+            git reset --hard "$local_ci_commit"
+            echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
 
-                    # Do instantiation
-                    if existing_derivation_paths=$(time nix-instantiate \
-                        --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
-                        --arg inlineCommitList "[ $strcommits ]" \
-                        --argstr prNum "$pr_number" \
-                        "$nixfile_path")
-                    then
-                        for existing_derivation_path in $existing_derivation_paths; do
-                            local escaped_path=${existing_derivation_path//\'/\'\'}
-                            sqlite3 "$DB_FILE" "UPDATE derivations SET path = '$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;"
-                        done
-                        popd
-                    else
-                        sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
-                        send-text.sh "Instantiation of $repo_name PR $pr_number failed."
-                        popd
-                        echo "(Waiting 60 seconds (from $(date)) to give time to react.)"
-                        sleep 60 # sleep 60 seconds to give me time to react if I am online
-                        continue
-                    fi
-                else
-                    send-text.sh "Starting $repo_name PR $pr_number with existing drv $existing_derivation_path"
-                fi
-                # 2. Build the instantiated derivation
-                if time nix-build \
-                    --builders-use-substitutes \
-                    --no-build-output \
-                    --no-out-link \
-                    --keep-failed \
-                    --keep-derivations \
-                    --keep-outputs \
-                    --log-lines 100 \
-                    "$existing_derivation_path" \
-                    --log-format internal-json -v \
-                    2> >(nom --json)
-                then
-                    if [ -n "$github_comment" ]; then
-                        message="successfully ran local tests; $github_comment"
-                    else
-                        message="successfully ran local tests"
-                    fi
-                    pushd "$dot_git_path/..";
-                    case $on_success in
-                        ACK)
-                            gh pr review "$pr_number" -a -b "ACK ${tip_commit}; $message"
-                            ;;
-                        COMMENT)
-                            gh pr review "$pr_number" -c -b "On ${tip_commit} $message"
-                            ;;
-                        NONE)
-                            ;;
-                    esac
-                    popd
-
-                    # Set "SUCCESS" as the last step
-                    sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'SUCCESS', time_end = datetime('now') WHERE id = $next_execution_id;"
-
-                    # Check if this commit has a jj change ID in the merge_pushes table
-                    local jj_change_ids=$(sqlite3 "$DB_FILE" "
-                        SELECT jj_change_id FROM merge_pushes
-                        WHERE repo_id = $repo_id
-                        AND state = 'QUEUED'
-                        AND jj_change_id IN (
-                            SELECT jj_change_id FROM merge_pushes
-                            WHERE repo_id = $repo_id
-                        );")
-
-                    if [ -n "$jj_change_ids" ]; then
-                        for jj_change_id in $jj_change_ids; do
-                            # Check if this commit corresponds to the jj change ID
-                            pushd "$dot_git_path/.."
-                            if jj_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id 2>/dev/null); then
-                                if [ "$jj_commit_id" = "$tip_commit" ]; then
-                                    sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'SUCCESS' WHERE jj_change_id = '$jj_change_id' AND repo_id = $DB_REPO_ID;"
-                                fi
-                            fi
-                            popd
-                        done
-                    fi
-
-                    send-text.sh "Test of $repo_name PR $pr_number succeeded. Derivation: $existing_derivation_path"
-                else
-                    sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
-
-                    # Check if this commit has a jj change ID in the merge_pushes table
-                    local jj_change_ids=$(sqlite3 "$DB_FILE" "
-                        SELECT jj_change_id FROM merge_pushes
-                        WHERE repo_id = $repo_id
-                        AND state = 'QUEUED'
-                        AND jj_change_id IN (
-                            SELECT jj_change_id FROM merge_pushes
-                            WHERE repo_id = $repo_id
-                        );")
-
-                    if [ -n "$jj_change_ids" ]; then
-                        for jj_change_id in $jj_change_ids; do
-                            # Check if this commit corresponds to the jj change ID
-                            pushd "$dot_git_path/.."
-                            if jj_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id 2>/dev/null); then
-                                if [ "$jj_commit_id" = "$tip_commit" ]; then
-                                    sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'FAILED' WHERE jj_change_id = '$jj_change_id' AND repo_id = $DB_REPO_ID;"
-                                fi
-                            fi
-                            popd
-                        done
-                    fi
-
-                    send-text.sh "Test of $repo_name PR $pr_number failed: $existing_derivation_path"
-                    sleep 60 # sleep 60 seconds to give me time to react if I am online
-                    continue
-                fi
-                ;;
-            MERGE)
-                # With merges we need to run everything through the merge script, via testcmd.
-                # This is a bit racy but it's what we gotta do.
-                local old_testcmd=$(git config --get githubmerge.testcmd)
-
-                # Check out local CI
-                pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
-                git reset --hard "$local_ci_commit"
-                echo "$json_next_task" | jq -r '.[0].local_ci_diff // empty' | git apply --allow-empty
+            # Do instantiation
+            if existing_derivation_paths=$(time nix-instantiate \
+                --arg inlineJsonConfig "{ gitDir = $dot_git_path; projectName = \"$repo_name\"; }" \
+                --arg inlineCommitList "[ $strcommits ]" \
+                --argstr prNum "$pr_number" \
+                "$nixfile_path")
+            then
+                for existing_derivation_path in $existing_derivation_paths; do
+                    local escaped_path=${existing_derivation_path//\'/\'\'}
+                    sqlite3 "$DB_FILE" "UPDATE derivations SET path = '$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;"
+                done
                 popd
-
+            else
+                sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
+                send-text.sh "Instantiation of $repo_name PR $pr_number failed."
+                popd
+                echo "(Waiting 60 seconds (from $(date)) to give time to react.)"
+                sleep 60 # sleep 60 seconds to give me time to react if I am online
+                continue
+            fi
+        else
+            send-text.sh "Starting $repo_name $task_type $pr_number with existing drv $existing_derivation_path"
+        fi
+        # 2. Build the instantiated derivation
+        if time nix-build \
+            --builders-use-substitutes \
+            --no-build-output \
+            --no-out-link \
+            --keep-failed \
+            --keep-derivations \
+            --keep-outputs \
+            --log-lines 100 \
+            "$existing_derivation_path" \
+            --log-format internal-json -v \
+            2> >(nom --json)
+        then
+            if [ "$task_type" = "PR"]; then
+                if [ -n "$github_comment" ]; then
+                    message="successfully ran local tests; $github_comment"
+                else
+                    message="successfully ran local tests"
+                fi
                 pushd "$dot_git_path/..";
-                cd "$(git rev-parse --show-toplevel)"
-
-                strcommits=$(echo "$strcommits" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
-                git config githubmerge.testcmd "
-                    set -e
-
-                    commit_id=\$(git rev-parse HEAD)
-                    our_tree=\$(git rev-parse HEAD^{tree})
-                    gh_tree=\$(git rev-parse $tip_commit^{tree})
-                    if [ \"\$our_tree\" != \"\$gh_tree\" ]; then
-                        send-text.sh \"$repo_name PR $pr_number: queued merge of $tip_commit but the actual commit is \$commit_id. Requeuing.\"
-                        echo >&2
-                        echo \"PR $pr_number\" >&2
-                        echo \"Queued merge of $tip_commit; actual commit is \$commit_id.\" >&2
-                        echo \"Queued merge commit has tree \$gh_tree\" >&2
-                        echo \"This 'merge' commit has tree \$our_tree\" >&2
-                        echo >&2
-                        echo \"Requeuing with priority $((QUEUE_PRIORITY + 1)).\" >&2
-                        echo >&2
-
-                        # Queue with one-higher priority than its initial priority, which should
-                        # roughly match the 'do this next' semnatics the user expects.
-                        local-ci.sh queue-merge $pr_number \$commit_id --priority $((QUEUE_PRIORITY + 1))
-                        exit 1
-                    fi
-
-                    send-text.sh \"Starting merge PR $pr_number \$commit_id (instantiating)\"
-                    # Do instantiation
-                    if derivation_path=\$(time nix-instantiate \\
-                        --arg inlineJsonConfig \"{ gitDir = $dot_git_path; projectName = \\\"$repo_name\\\"; }\" \\
-                        --arg inlineCommitList \"[ $strcommits ]\" \
-                        --argstr prNum \"$pr_number\" \\
-                        \"$nixfile_path\")
-                    then
-                        escaped_path=\${derivation_path//\'/\'\'}
-                        sqlite3 \"$DB_FILE\" \"UPDATE derivations SET path = '\$escaped_path', time_instantiated = datetime('now') WHERE id = $derivation_id;\"
-                    else
-                        sqlite3 \"$DB_FILE\" \"UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;\"
-                        send-text.sh \"Instantiation of merge for PR $pr_number failed.\"
-                        sleep 60 # sleep 60 seconds to give me time to react if I am online
-                        exit 1
-                    fi
-
-                    time nix-build \\
-                        --builders-use-substitutes \\
-                        --no-build-output \\
-                        --no-out-link \\
-                        --keep-failed \\
-                        --keep-derivations \\
-                        --keep-outputs \\
-                        --log-lines 100 \\
-                        \"\$derivation_path\" \\
-                        --log-format internal-json -v \\
-                        2> >(nom --json)
-                "
-                # Ignore return value of github-merge
-                local result
-                if github-merge.py "$pr_number"; then
-                    send-text.sh "Merge of PR $pr_number succeeded."
-                    result=SUCCESS
-                else
-                    send-text.sh "Merge of PR $pr_number failed."
-                    result=FAILED
-                fi
-                sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = '$result', time_end = datetime('now') WHERE id = $next_execution_id;"
+                case $on_success in
+                    ACK)
+                        gh pr review "$pr_number" -a -b "ACK ${tip_commit}; $message"
+                        ;;
+                    COMMENT)
+                        gh pr review "$pr_number" -c -b "On ${tip_commit} $message"
+                        ;;
+                    NONE)
+                        ;;
+                esac
                 popd
+            fi
 
-                if [ -n "$old_testcmd" ]; then
-                    git config githubmerge.testcmd "$old_testcmd"
-                fi
-                ;;
-            *)
-                echo "Don't know how to do task type $task_type yet."
-                ;;
-        esac
+            # Set "SUCCESS" as the last step
+            sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'SUCCESS', time_end = datetime('now') WHERE id = $next_execution_id;"
+
+            # Check if this commit has a jj change ID in the merge_pushes table
+            local jj_change_ids=$(sqlite3 "$DB_FILE" "
+                SELECT jj_change_id FROM merge_pushes
+                WHERE repo_id = $repo_id
+                AND state = 'QUEUED'
+                AND jj_change_id IN (
+                    SELECT jj_change_id FROM merge_pushes
+                    WHERE repo_id = $repo_id
+                );")
+
+            if [ -n "$jj_change_ids" ]; then
+                pushd "$dot_git_path/.."
+                local tip_change_id
+                tip_change_id=$(jj log -r "$tip_commit" --no-graph -T change_id)
+                for jj_change_id in $jj_change_ids; do
+                    if [ "$jj_change_id" = "$tip_change_id" ]; then
+                        sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'SUCCESS' WHERE jj_change_id = '$jj_change_id' AND repo_id = $repo_id;"
+                    fi
+                done
+                popd
+            fi
+
+            send-text.sh "Test of $repo_name $task_type $pr_number succeeded. Derivation: $existing_derivation_path"
+        else
+            sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
+
+            # Check if this commit has a jj change ID in the merge_pushes table
+            local jj_change_ids=$(sqlite3 "$DB_FILE" "
+                SELECT jj_change_id FROM merge_pushes
+                WHERE repo_id = $repo_id
+                AND state = 'QUEUED'
+                AND jj_change_id IN (
+                    SELECT jj_change_id FROM merge_pushes
+                    WHERE repo_id = $repo_id
+                );")
+
+            if [ -n "$jj_change_ids" ]; then
+                for jj_change_id in $jj_change_ids; do
+                    # Check if this commit corresponds to the jj change ID
+                    pushd "$dot_git_path/.."
+                    if jj_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id 2>/dev/null); then
+                        if [ "$jj_commit_id" = "$tip_commit" ]; then
+                            sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'FAILED' WHERE jj_change_id = '$jj_change_id' AND repo_id = $DB_REPO_ID;"
+                        fi
+                    fi
+                    popd
+                done
+            fi
+
+            send-text.sh "Test of $repo_name PR $pr_number failed: $existing_derivation_path"
+            sleep 60 # sleep 60 seconds to give me time to react if I am online
+            continue
+        fi
     done
 }
 

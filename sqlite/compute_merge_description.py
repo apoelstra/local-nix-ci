@@ -392,6 +392,7 @@ def main():
         stderr.write('-' * 75)
         stderr.write('\n')
         stderr.write(disp_message)
+        stderr.write('\n')
         stderr.write('-' * 75)
         stderr.write('\n')
 
