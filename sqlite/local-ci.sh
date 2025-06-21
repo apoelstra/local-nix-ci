@@ -763,7 +763,7 @@ EOF
             --log-format internal-json -v \
             2> >(nom --json)
         then
-            if [ "$task_type" = "PR"]; then
+            if [ "$task_type" = "PR" ]; then
                 if [ -n "$github_comment" ]; then
                     message="successfully ran local tests; $github_comment"
                 else
