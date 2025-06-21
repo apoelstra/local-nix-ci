@@ -402,7 +402,7 @@ queue_merge() {
     git fetch -q "$remote" "+refs/heads/$base_ref:refs/heads/pull/$pr_num/base"
 
     # Then create a merge commit (no signature, no description, just a merge)
-    jj --config signing.behavior=drop new --no-edit -r "pull/$pr_num/head" -r "pull/$pr_num/base"
+    jj --config signing.behavior=drop new --no-edit -r "pull/$pr_num/base" -r "pull/$pr_num/head" 
 
     # (Racily) obtain the change ID of the commit we just made. It appears that `jj new`
     # cannot be made to just output the commit or change ID that it just created in a
