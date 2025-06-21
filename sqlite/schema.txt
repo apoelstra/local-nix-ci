@@ -112,6 +112,7 @@ CREATE TABLE merge_pushes
     , tree_hash TEXT NOT NULL
     , target_remote TEXT NOT NULL DEFAULT 'origin'
     , target_branch TEXT NOT NULL DEFAULT 'main'
+    , pr_number INTEGER NOT NULL
     , state TEXT NOT NULL DEFAULT 'QUEUED' CHECK(state in ('QUEUED', 'SUCCESS', 'FAILED'))
     );
 CREATE INDEX merge_pushes_repo_id_index ON merge_pushes(repo_id);

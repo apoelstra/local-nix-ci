@@ -448,8 +448,8 @@ INSERT INTO tasks_executions (task_id, time_queued, priority)
 INSERT INTO task_commits (task_id, commit_id, is_tip)
     SELECT id, '$merge_commit', 1 FROM tasks ORDER BY id DESC LIMIT 1;
 
-INSERT INTO merge_pushes (repo_id, jj_change_id, tree_hash, target_branch, state) VALUES
-    ('$DB_REPO_ID', '$local_merge_change_id', '$tree_hash', '$base_ref', 'QUEUED');
+INSERT INTO merge_pushes (repo_id, jj_change_id, tree_hash, target_branch, pr_number, state) VALUES
+    ('$DB_REPO_ID', '$local_merge_change_id', '$tree_hash', '$base_ref', $pr_num, 'QUEUED');
 EOF
         echo_insert_rust_lockfiles "$merge_commit"
         echo "COMMIT TRANSACTION;"
@@ -459,6 +459,7 @@ EOF
 run_commands() {
     local backoff_sec=30
     local sleep_secs=$backoff_sec
+    local should_send_signature_messages=true # send sig messages on startup
 
     local afk="";
     while true; do
@@ -530,64 +531,74 @@ run_commands() {
 
                 # Get all pending merge pushes for this repo
                 local merge_pushes=$(sqlite3 "$DB_FILE" "
-                    SELECT id, jj_change_id, tree_hash, state
+                    SELECT id, jj_change_id, tree_hash, pr_number, state
                     FROM merge_pushes
                     WHERE repo_id = $repo_id;")
 
-                while IFS='|' read -r push_id jj_change_id tree_hash state; do
+                while IFS='|' read -r push_id jj_change_id tree_hash pr_num state; do
                     if [ -n "$push_id" ]; then
-                        # a. Check if tree hash has changed
+                        # First, recompute and update description.
+                        local description
+                        local new_tree_hash
+                        description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" -y -c "$jj_change_id" "$pr_num")
+                        # Copy the tree hash out of the description to avoid computing it twice
+                        new_tree_hash=$(echo "$description" | grep "^Tree-SHA512: " | cut -d' ' -f2)
+
+                        # a. Check if the commit has been abandoned.
                         local git_commit_id
                         local current_tree_hash
                         if ! git_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id); then
                             sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                            merge_push_messages+=("Change $jj_change_id in $repo_name seems to have been abandoned. Removing from queue.")
+                            merge_push_messages+=("Change $jj_change_id ($repo_name PR $pr_num) seems to have been abandoned. Removing from queue.")
                             continue
                         fi
 
-                        if current_tree_hash=$("$LOCAL_CI_PATH/sqlite/compute_sha512_root.py" "$git_commit_id"); then
-                            if [ "$current_tree_hash" != "$tree_hash" ]; then
+                        # b. Update description (should pass since the commit was not abandoned,
+                        #    but might not if something weird is going on)
+                        if jj describe -r "$jj_change_id" -m "$description"; then
+                            # c. Check if tree hash has changed
+                            if [ "$new_tree_hash" != "$tree_hash" ]; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("Tree hash for change $jj_change_id in $repo_name has changed ($tree_hash → $current_tree_hash). Removing from queue.")
+                                merge_push_messages+=("Tree hash for change $jj_change_id ($repo_name PR $pr_num) has changed ($tree_hash → $current_tree_hash). Removing from queue.")
                                 continue
                             fi
 
-                            # b. Check if it's a direct descendant of the target branch
+                            # d. Check if it's a direct descendant of the target branch
                             local target_branch=$(sqlite3 "$DB_FILE" "SELECT target_branch FROM merge_pushes WHERE id = $push_id;")
                             local target_remote=$(sqlite3 "$DB_FILE" "SELECT target_remote FROM merge_pushes WHERE id = $push_id;")
                             git fetch "$target_remote"
                             if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$git_commit_id" 2>/dev/null; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("Change $jj_change_id in $repo_name is not a direct descendant of $target_remote/$target_branch. Removing from queue.")
+                                merge_push_messages+=("Change $jj_change_id ($repo_name PR $pr_num) is not a direct descendant of $target_remote/$target_branch. Removing from queue.")
                                 continue
                             fi
 
-                            # c. Check if state is FAILED
+                            # e. Check if state is FAILED
                             if [ "$state" = "FAILED" ]; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("Test for change $jj_change_id in $repo_name failed. Removing from queue.")
+                                merge_push_messages+=("Test for change $jj_change_id ($repo_name PR $pr_num) failed. Removing from queue.")
                                 continue
                             fi
 
-                            # d. Check if state is SUCCESS and if it's signed
+                            # f. Check if state is SUCCESS and if it's signed
                             if [ "$state" = "SUCCESS" ]; then
                                 if git verify-commit "$git_commit_id" &>/dev/null; then
                                     # Push the change
                                     if git push "$target_remote" "$git_commit_id:$target_branch"; then
-                                        merge_push_messages+=("Change $jj_change_id in $repo_name was successfully pushed to $target_branch.")
+                                        merge_push_messages+=("Change $jj_change_id ($repo_name PR $pr_num) was successfully pushed to $target_branch.")
                                     else
-                                        merge_push_messages+=("Failed to push change $jj_change_id in $repo_name to $target_branch.")
+                                        merge_push_messages+=("Failed to push change $jj_change_id ($repo_name PR $pr_num) to $target_branch.")
                                     fi
                                     sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
                                     should_restart_loop=true
                                 else
-                                    signature_messages+=("Change $jj_change_id in $repo_name is ready to be pushed but is not GPG signed.")
+                                    signature_messages+=("Change $jj_change_id ($repo_name PR $pr_num) is ready to be pushed but is not GPG signed.")
                                 fi
                             fi
                         else
                             # Change ID not found in jj
                             sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                            merge_push_messages+=("Change $jj_change_id in $repo_name was not found. Removing from queue.")
+                            merge_push_messages+=("Failed to update description for $jj_change_id ($repo_name PR $pr_num) -- maybe already pushed? Removing from queue.")
                         fi
                     fi
                 done <<< "$merge_pushes"
@@ -624,6 +635,11 @@ run_commands() {
                 fi
 
                 echo "([$(date +"%F %T")] Nothing to do. (Next message in $((backoff_sec / 60)) minutes.)"
+                # Output signature messages on "nothing to do" messages
+                if [ ${#signature_messages[@]} -gt 0 ]; then
+                    echo "$(printf "%s\n" "${signature_messages[@]}")"
+                    should_send_signature_messages=false
+                fi
                 sleep_secs=0;
             fi
 

@@ -233,7 +233,7 @@ def parse_arguments():
         help='The repo to fetch the pull request from. Useful for monotree repositories. Can only be specified when branch==master. (default: githubmerge.repository setting)')
     parser.add_argument('--local-merge-ref', '-c', metavar='local_merge_ref', type=str, nargs='?', required=True,
         help='The git ref or jj change ID of the local merge to describe.')
-    parser.add_argument('--yes', '-y',
+    parser.add_argument('--yes', '-y', action='store_true',
         help='Noninteractive mode (do not prompt the user if warnings are present)')
     parser.add_argument('pull', metavar='PULL', type=int, nargs=1,
         help='Pull request ID to merge')
