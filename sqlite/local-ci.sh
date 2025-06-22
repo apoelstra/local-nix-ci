@@ -414,6 +414,12 @@ queue_merge() {
     local local_merge_change_id
     local_merge_change_id=$(jj log --no-pager --no-graph -T change_id -r "latest(pull/$pr_num/head+ & pull/$pr_num/base+)")
 
+    # If it conflicts, bail out
+    if ! jj log --quiet -r "$local_merge_change_id & ~conflicts()"; then
+        echo "Failed to queue $pr_num: conflict in merge change $local_merge_change_id"
+        exit 1
+    fi
+
     # Obtain its description and do initial sanity checks. If anything looks funny about
     # the PR (e.g. having @s in the commit message) the user will be given an opportunity
     # to bail here.
