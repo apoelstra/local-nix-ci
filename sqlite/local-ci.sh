@@ -26,6 +26,7 @@ ARG_COMMAND=
 ARG_COMMAND_ARGS=()
 ARG_REPO_NAME=
 ARG_ALLOW_DIRTY_LOCAL_CI="no"
+ARG_REQUEUE="no"
 QUEUE_PRIORITY=0
 
 DB_REPO_ID=
@@ -54,6 +55,8 @@ parse_arguments() {
             ((i++)) # Skip next item since it's the directory
         elif [[ "${args[i]}" == "--allow-dirty-local-ci" ]]; then
             ARG_ALLOW_DIRTY_LOCAL_CI="yes"
+        elif [[ "${args[i]}" == "--requeue" ]]; then
+            ARG_REQUEUE="yes"
         else
             if [ "$ARG_COMMAND" == "" ]; then
                 ARG_COMMAND=${args[i]}
@@ -425,7 +428,11 @@ queue_merge() {
     # to bail here.
     local description
     local tree_hash
-    description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" -c "$local_merge_change_id" "$pr_num")
+    if [ "$ARG_REQUEUE" = "yes" ]; then
+        description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" --yes -c "$local_merge_change_id" "$pr_num")
+    else
+        description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" -c "$local_merge_change_id" "$pr_num")
+    fi
     # Copy the tree hash out of the description to avoid computing it twice
     tree_hash=$(echo "$description" | grep "^Tree-SHA512: " | cut -d' ' -f2)
 
@@ -605,6 +612,17 @@ run_commands() {
                             continue
                         fi
 
+                        # a1. Update our view of upstream and check that our merge commit still has
+                        #     the PR's head as a parent. If not, the PR was updated and we should
+                        #     cancel the merge.
+                        local target_remote=$(sqlite3 "$DB_FILE" "SELECT target_remote FROM merge_pushes WHERE id = $push_id;")
+                        git fetch -q "$target_remote" "+refs/pull/$pr_num/head:refs/heads/pull/$pr_num/head"
+                        if ! jj log --quiet -r "$jj_change_id- & pull/$pr_num/head"; then
+                            sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                            merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "$repo_name PR $pr_num has been updated (change ID $jj_change_id no longer has pull/$pr_num/head as a parent). Removing from queue")")
+                            continue
+                        fi
+
                         # b. Update description (should pass since the commit was not abandoned,
                         #    but might not if something weird is going on)
                         if jj describe -r "$jj_change_id" -m "$description"; then
@@ -617,11 +635,21 @@ run_commands() {
 
                             # d. Check if it's a direct descendant of the target branch
                             local target_branch=$(sqlite3 "$DB_FILE" "SELECT target_branch FROM merge_pushes WHERE id = $push_id;")
-                            local target_remote=$(sqlite3 "$DB_FILE" "SELECT target_remote FROM merge_pushes WHERE id = $push_id;")
                             git fetch "$target_remote"
                             if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$git_commit_id" 2>/dev/null; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Change $jj_change_id ($repo_name PR $pr_num) is not a direct descendant of $target_remote/$target_branch. Removing from queue")")
+                                merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Change $jj_change_id ($repo_name PR $pr_num) is not a direct descendant of $target_remote/$target_branch. Removing from queue; attempted to requeue.")")
+                                # The above lines deleted the queued merge. But the reason for doing so was that
+                                # upstream master changed, while the PR itself did not change (if it did, we would
+                                # have noticed it in an earlier check). So we should re-queue this.
+                                #
+                                # If requeuing failed the user will get a message from the `queue-merge` call, which
+                                # will occur *before* `merge_push_messages` is shown.
+                                if "$LOCAL_CI_PATH/sqlite/local-ci.sh" queue-merge --requeue "$pr_num"; then
+                                    merge_push_messages+=("...Removing from queue; successfully requeued.")
+                                else
+                                    merge_push_messages+=("...Removing from queue; failed to requeue.")
+                                fi
                                 continue
                             fi
 
