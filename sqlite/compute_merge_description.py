@@ -339,7 +339,9 @@ def main():
     if diff:
         stderr.write("WARNING: merge differs from github!\n")
         stderr.write(diff.decode('utf-8'))
-        stderr.write(f"\nRun git diff {merge_commit}..{local_merge_commit} to reproduce.\n\n")
+        stderr.write(f"\nGithub merge commit: {merge_commit}\n")
+        stderr.write(f"   Our merge commit: {local_merge_commit}\n")
+        stderr.write(f"Run git diff {merge_commit}..{local_merge_commit} to reproduce.\n\n")
         has_warnings = True
 
     # Compute description
