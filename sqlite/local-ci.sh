@@ -418,7 +418,7 @@ queue_merge() {
     local_merge_change_id=$(jj log --no-pager --no-graph -T change_id -r "latest(pull/$pr_num/head+ & pull/$pr_num/base+)")
 
     # If it conflicts, bail out
-    if ! jj log --quiet -r "$local_merge_change_id & ~conflicts()"; then
+    if ! jj log --quiet -r "$local_merge_change_id & ~conflicts()" > /dev/null; then
         echo "Failed to queue $pr_num: conflict in merge change $local_merge_change_id"
         exit 1
     fi
@@ -617,7 +617,7 @@ run_commands() {
                         #     cancel the merge.
                         local target_remote=$(sqlite3 "$DB_FILE" "SELECT target_remote FROM merge_pushes WHERE id = $push_id;")
                         git fetch -q "$target_remote" "+refs/pull/$pr_num/head:refs/heads/pull/$pr_num/head"
-                        if ! jj log --quiet -r "$jj_change_id- & pull/$pr_num/head"; then
+                        if ! jj log --quiet -r "$jj_change_id- & pull/$pr_num/head" > /dev/null; then
                             sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
                             merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "$repo_name PR $pr_num has been updated (change ID $jj_change_id no longer has pull/$pr_num/head as a parent). Removing from queue")")
                             continue
