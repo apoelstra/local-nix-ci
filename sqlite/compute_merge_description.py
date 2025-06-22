@@ -300,11 +300,6 @@ def main():
     # Fetch the branches from Github. (We cannot do this with jj, even if we wanted to,
     # since it cannot fetch arbitrary refs; see https://github.com/jj-vcs/jj/discussions/5388
     try:
-        subprocess.check_call([GIT,'checkout','-q',branch])
-    except subprocess.CalledProcessError:
-        stderr.write(f"ERROR: Cannot check out branch {branch}.\n")
-        sys.exit(3)
-    try:
         subprocess.check_call([GIT,'fetch','-q',host_repo_from,'+refs/pull/'+pull+'/*:refs/heads/pull/'+pull+'/*',
                                                           '+refs/heads/'+branch+':refs/heads/'+base_branch])
     except subprocess.CalledProcessError:
