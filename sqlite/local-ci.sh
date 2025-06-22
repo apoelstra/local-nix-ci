@@ -402,7 +402,7 @@ queue_merge() {
     git fetch -q "$remote" "+refs/heads/$base_ref:refs/heads/pull/$pr_num/base"
 
     # Then create a merge commit (no signature, no description, just a merge)
-    jj --config signing.behavior=drop new --no-edit -r "pull/$pr_num/base" -r "pull/$pr_num/head" 
+    jj --config signing.behavior=drop new --no-edit -r "pull/$pr_num/base" -r "pull/$pr_num/head"
 
     # (Racily) obtain the change ID of the commit we just made. It appears that `jj new`
     # cannot be made to just output the commit or change ID that it just created in a
@@ -515,6 +515,36 @@ run_commands() {
         LIMIT 1;
         ")"
 
+        # Function to mark queued MERGE tasks as failed and generate appropriate message
+        mark_merge_tasks_failed_and_message() {
+            local git_commit_id="$1"
+            local base_message="$2"
+
+            local failed_tasks=$(sqlite3 "$DB_FILE" "
+                UPDATE tasks_executions
+                SET status = 'FAILED', time_end = datetime('now')
+                WHERE status = 'QUEUED'
+                AND task_id IN (
+                    SELECT t.id FROM tasks t
+                    JOIN task_commits tc ON t.id = tc.task_id
+                    WHERE t.task_type = 'MERGE' AND tc.commit_id = '$git_commit_id'
+                );
+                SELECT COUNT(*) FROM tasks_executions
+                WHERE status = 'FAILED'
+                AND time_end = datetime('now')
+                AND task_id IN (
+                    SELECT t.id FROM tasks t
+                    JOIN task_commits tc ON t.id = tc.task_id
+                    WHERE t.task_type = 'MERGE' AND tc.commit_id = '$git_commit_id'
+                );")
+
+            if [ "$failed_tasks" -gt 0 ]; then
+                echo "$base_message and marking $failed_tasks queued MERGE tasks as failed."
+            else
+                echo "$base_message"
+            fi
+        }
+
         # Check merge_pushes table for any pending pushes
         local merge_push_messages=()
         local signature_messages=()
@@ -554,8 +584,24 @@ run_commands() {
                         local git_commit_id
                         local current_tree_hash
                         if ! git_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id); then
+                            git_commit_id=$(jj log -r "$jj_change_id & abandoned()" --no-graph -T commit_id)
                             sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                            merge_push_messages+=("Change $jj_change_id ($repo_name PR $pr_num) seems to have been abandoned. Removing from queue.")
+                            # Cannot call mark_merge_tasks_failed_and_message because we don't know the commit ID;
+                            # this can be obtained from jj but it's pretty hard -- we have to repeat the `jj log`
+                            # call with `--at-operation <op>` where `<op>` is the ID *prior* to the abandonment
+                            # in the op log. We can list all the op log IDs with something like
+                            #
+                            #    `jj op log --no-graph -T 'id ++ " " ++ description  ++ "\n"`
+                            #
+                            # but the description will be "abandon commit <commit ID>" so we gotta inspect each
+                            # such entry to find the one that affected our *change id* most recently.
+                            #
+                            # In practice I expect I will only be manually abandoning commits after the tests have
+                            # completed, since that's when it'll ping me to sign, so there won't be any queued
+                            # tests to drop. So no big deal. But if I decide I want to clean up queued tasks,
+                            # probably I will need to add the commit ID to the `merge_pushes` table and figure
+                            # out how to keep it up-to-date.
+                            merge_push_messages+=("Change $jj_change_id ($repo_name PR $pr_num) seems to have been abandoned. Removing from queue")
                             continue
                         fi
 
@@ -565,7 +611,7 @@ run_commands() {
                             # c. Check if tree hash has changed
                             if [ "$new_tree_hash" != "$tree_hash" ]; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("Tree hash for change $jj_change_id ($repo_name PR $pr_num) has changed ($tree_hash → $current_tree_hash). Removing from queue.")
+                                merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Tree hash for change $jj_change_id ($repo_name PR $pr_num) has changed ($tree_hash → $new_tree_hash). Removing from queue")")
                                 continue
                             fi
 
@@ -575,14 +621,14 @@ run_commands() {
                             git fetch "$target_remote"
                             if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$git_commit_id" 2>/dev/null; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("Change $jj_change_id ($repo_name PR $pr_num) is not a direct descendant of $target_remote/$target_branch. Removing from queue.")
+                                merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Change $jj_change_id ($repo_name PR $pr_num) is not a direct descendant of $target_remote/$target_branch. Removing from queue")")
                                 continue
                             fi
 
                             # e. Check if state is FAILED
                             if [ "$state" = "FAILED" ]; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("Test for change $jj_change_id ($repo_name PR $pr_num) failed. Removing from queue.")
+                                merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Test for change $jj_change_id ($repo_name PR $pr_num) failed. Removing from queue")")
                                 continue
                             fi
 
@@ -602,9 +648,9 @@ run_commands() {
                                 fi
                             fi
                         else
-                            # Change ID not found in jj
+                            # `jj describe` failed, presumably because the change was already pushed and became immutable
                             sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                            merge_push_messages+=("Failed to update description for $jj_change_id ($repo_name PR $pr_num) -- maybe already pushed? Removing from queue.")
+                            merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Failed to update description for $jj_change_id ($repo_name PR $pr_num) -- maybe already pushed? Removing from queue")")
                         fi
                     fi
                 done <<< "$merge_pushes"
