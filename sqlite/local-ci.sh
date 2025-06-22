@@ -444,7 +444,7 @@ queue_merge() {
 
     local escaped_diff="${LOCAL_CI_DIFF//\'/\'\'}"
     echo "Queuing merge for PR $pr_num; merge change ID $local_merge_change_id commit ID $merge_commit"
-    send-text.sh "Queuing merge for PR $pr_num; merge change ID $local_merge_change_id commit ID $merge_commit"
+    send-text.sh "local-ci.sh -- queue merge" "PR $pr_num; merge change ID $local_merge_change_id commit ID $merge_commit"
     (
         cat <<EOF
 BEGIN TRANSACTION;
@@ -688,12 +688,12 @@ run_commands() {
 
             # Send all action messages in a single call
             if [ ${#merge_push_messages[@]} -gt 0 ]; then
-                send-text.sh "$(printf "%s\n" "${merge_push_messages[@]}")"
+                send-text.sh "local-ci.sh -- push queue " "$(printf "%s\n" "${merge_push_messages[@]}")"
             fi
 
             # Send signature messages only if we should
             if [ ${#signature_messages[@]} -gt 0 ] && [ "$should_send_signature_messages" = true ]; then
-                send-text.sh "$(printf "%s\n" "${signature_messages[@]}")"
+                send-text.sh "local-ci.sh -- push queue (NEED SIGNATURES)" "$(printf "%s\n" "${signature_messages[@]}")"
                 should_send_signature_messages=false
             fi
 
@@ -817,7 +817,7 @@ EOF
         # From here on we are doing an execution.
         # 1. If there is no existing derivation, instantiate one.
         if [ -z "$existing_derivation_path" ]; then
-            send-text.sh "Starting $repo_name PR $pr_number (instantiating)"
+            send-text.sh "local-ci.sh -- running" "Starting $repo_name PR $pr_number (instantiating)"
             # Check out local CI
             pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
             git reset --hard "$local_ci_commit"
@@ -837,14 +837,14 @@ EOF
                 popd
             else
                 sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
-                send-text.sh "Instantiation of $repo_name PR $pr_number failed."
+                send-text.sh "local-ci.sh -- running" "Instantiation of $repo_name PR $pr_number failed."
                 popd
                 echo "(Waiting 60 seconds (from $(date)) to give time to react.)"
                 sleep 60 # sleep 60 seconds to give me time to react if I am online
                 continue
             fi
         else
-            send-text.sh "Starting $repo_name $task_type $pr_number with existing drv $existing_derivation_path"
+            send-text.sh "local-ci.sh -- running" "Starting $repo_name $task_type $pr_number with existing drv $existing_derivation_path"
         fi
         # 2. Build the instantiated derivation
         if time nix-build \
@@ -904,7 +904,7 @@ EOF
                 popd
             fi
 
-            send-text.sh "Test of $repo_name $task_type $pr_number succeeded. Derivation: $existing_derivation_path"
+            send-text.sh "local-ci.sh -- running" "Test of $repo_name $task_type $pr_number succeeded. Derivation: $existing_derivation_path"
         else
             sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
 
@@ -931,7 +931,7 @@ EOF
                 done
             fi
 
-            send-text.sh "Test of $repo_name PR $pr_number failed: $existing_derivation_path"
+            send-text.sh "local-ci.sh -- running" "Test of $repo_name PR $pr_number failed: $existing_derivation_path"
             sleep 60 # sleep 60 seconds to give me time to react if I am online
             continue
         fi
