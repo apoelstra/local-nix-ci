@@ -438,7 +438,7 @@ queue_merge() {
 
     # If we made it this far, the PR looks ok (or at least, the users says keep going).
     # Add the initial message and queue it for testing and for pushing.
-    jj describe -r "$local_merge_change_id" -m "$description"
+    jj describe --quiet -r "$local_merge_change_id" -m "$description"
     local merge_commit
     merge_commit=$(jj log --no-graph -r "$local_merge_change_id" -T commit_id)
 
@@ -625,7 +625,7 @@ run_commands() {
 
                         # b. Update description (should pass since the commit was not abandoned,
                         #    but might not if something weird is going on)
-                        if jj describe -r "$jj_change_id" -m "$description"; then
+                        if jj describe --quiet -r "$jj_change_id" -m "$description"; then
                             # c. Check if tree hash has changed
                             if [ "$new_tree_hash" != "$tree_hash" ]; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
