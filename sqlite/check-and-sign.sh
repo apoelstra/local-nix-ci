@@ -52,8 +52,8 @@ fi
 
 echo "Recomputing merge description and performing sanity checks..."
 
-# First, recompute description doing appropriate sanity checks
-if ! description=$("$compute_script" -c "$jj_change_id" "$pr_num" 2>&1); then
+# First, recompute description doing appropriate sanity checks.
+if ! description=$("$compute_script" -c "$jj_change_id" "$pr_num"); then
     echo "Error: Failed to compute merge description" >&2
     echo "$description" >&2
     exit 1
