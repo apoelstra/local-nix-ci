@@ -122,8 +122,7 @@ rec {
       msrv = pkgs.rust-bin.fromRustupToolchain { channel = msrvVersion; };
       nightly = if src.nightlyVersion != null
         then pkgs.rust-bin.fromRustupToolchain { channel = builtins.elemAt (builtins.match "([^\r\n]+)\r?\n?" src.nightlyVersion) 0; }
-        else builtins.trace "warning - no rust-version, using latest nightly" #(pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default));
-           pkgs.rust-bin.fromRustupToolchain { channel = "nightly-2024-08-20"; }; #temp 2024-08-26 due to new doc lint
+        else builtins.trace "warning - no rust-version, using latest nightly" (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default));
     in [
       nightly
       pkgs.rust-bin.stable.latest.default
