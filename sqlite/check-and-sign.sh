@@ -300,17 +300,6 @@ if ! git checkout "$commit_id" >/dev/null 2>&1; then
     exit 1
 fi
 
-# Push tags
-echo ""
-echo "Pushing tags to remote '$remote_name'..."
-for tag_name in "${created_tags[@]}"; do
-    echo "Pushing tag: $tag_name"
-    if ! git push "$remote_name" "$tag_name"; then
-        echo "Error: Failed to push tag: $tag_name" >&2
-        exit 1
-    fi
-done
-
 # Publish packages
 echo ""
 echo "Publishing packages..."
@@ -319,6 +308,17 @@ for package_info in "${packages_to_tag[@]}"; do
     echo "Publishing package: $package_name"
     if ! cargo publish -p "$package_name"; then
         echo "Error: Failed to publish package: $package_name" >&2
+        exit 1
+    fi
+done
+
+# Push tags
+echo ""
+echo "Pushing tags to remote '$remote_name'..."
+for tag_name in "${created_tags[@]}"; do
+    echo "Pushing tag: $tag_name"
+    if ! git push "$remote_name" "$tag_name"; then
+        echo "Error: Failed to push tag: $tag_name" >&2
         exit 1
     fi
 done
