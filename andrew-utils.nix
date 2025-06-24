@@ -492,6 +492,7 @@ rec {
     , prNum
     , lockFile
     , src
+    , patches ? []
     , ...
     }:
     let
@@ -501,6 +502,7 @@ rec {
         name = memoName;
         src = src.src;
         overrideLockFile = lockFile;
+        inherit patches;
       };
     in
     {
@@ -515,6 +517,7 @@ rec {
     , rustc
     , msrv
     , src
+    , patches ? []
     , workspace
     , features
     , releaseMode ? false
@@ -566,6 +569,7 @@ rec {
                 echo 'Source: ${builtins.toString src.src}'
                 echo 'Workspace: ${if isNull workspace then "[no workspaces]" else workspace}'
                 echo 'Features: ${builtins.toJSON features}'
+                echo 'Patches: ${builtins.toJSON patches}'
 
                 export CARGO_BIN_NAME="${projectName}"
                 echo "CARGO_BIN_NAME: $CARGO_BIN_NAME"

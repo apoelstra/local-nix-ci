@@ -51,6 +51,7 @@ rec {
   generatedCargoNix =
     { name
     , src
+    , patches ? []
     , cargoToml ? "Cargo.toml"
     , additionalCargoNixArgs ? [ ]
     , additionalCrateHashes ? internal.parseOptHashesFile
@@ -84,7 +85,7 @@ rec {
       ];
       preferLocalBuild = true;
 
-      inherit src;
+      inherit patches src;
       phases = [ "unpackPhase" "buildPhase" ];
 
       buildPhase = ''
