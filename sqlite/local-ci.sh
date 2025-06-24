@@ -818,7 +818,7 @@ EOF
         # From here on we are doing an execution.
         # 1. If there is no existing derivation, instantiate one.
         if [ -z "$existing_derivation_path" ]; then
-            send-text.sh "Running CI" "Starting $repo_name PR $pr_number (instantiating)"
+            send-text.sh "Starting CI run" "Starting $repo_name $task_type $pr_number (instantiating)"
             # Check out local CI
             pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE"
             git reset --hard "$local_ci_commit"
@@ -838,14 +838,14 @@ EOF
                 popd
             else
                 sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
-                send-text.sh "Running CI" "Instantiation of $repo_name PR $pr_number failed."
+                send-text.sh "End CI run (fail)" "Instantiation of $repo_name PR $pr_number failed."
                 popd
                 echo "(Waiting 60 seconds (from $(date)) to give time to react.)"
                 sleep 60 # sleep 60 seconds to give me time to react if I am online
                 continue
             fi
         else
-            send-text.sh "Running CI" "Starting $repo_name $task_type $pr_number with existing drv $existing_derivation_path"
+            send-text.sh "Starting CI run (continuation)" "Starting $repo_name $task_type $pr_number with existing drv $existing_derivation_path"
         fi
         # 2. Build the instantiated derivation
         if time nix-build \
@@ -905,7 +905,7 @@ EOF
                 popd
             fi
 
-            send-text.sh "Running CI" "Test of $repo_name $task_type $pr_number succeeded. Derivation: $existing_derivation_path"
+            send-text.sh "End CI run (success)" "Test of $repo_name $task_type $pr_number succeeded. Derivation: $existing_derivation_path"
         else
             sqlite3 "$DB_FILE" "UPDATE tasks_executions SET status = 'FAILED', time_end = datetime('now') WHERE id = $next_execution_id;"
 
@@ -932,7 +932,7 @@ EOF
                 done
             fi
 
-            send-text.sh "Running CI" "Test of $repo_name PR $pr_number failed: $existing_derivation_path"
+            send-text.sh "End CI run (fail)" "Test of $repo_name PR $pr_number failed: $existing_derivation_path"
             sleep 60 # sleep 60 seconds to give me time to react if I am online
             continue
         fi
