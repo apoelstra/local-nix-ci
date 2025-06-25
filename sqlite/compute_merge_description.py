@@ -311,7 +311,10 @@ def main():
     for ref in [head_branch, base_branch, merge_branch, local_merge_branch]:
         try:
             commit = commit_id_from_git_or_jj(ref, exit_on_fail = False)
-            assert len(commit) == 40
+            if len(commit) != 40:
+                stderr.write(f"ERROR: {ref} of pull request {pull_reference} on {host_repo_from} does not have a unique commit ID.\n")
+                sys.exit(3)
+
             commits.append(commit)
         except subprocess.CalledProcessError:
             stderr.write(f"ERROR: Cannot find {ref} of pull request {pull_reference} on {host_repo_from}.\n")
