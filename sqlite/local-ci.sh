@@ -581,18 +581,11 @@ run_commands() {
 
                 while IFS='|' read -r push_id jj_change_id tree_hash pr_num state; do
                     if [ -n "$push_id" ]; then
-                        # First, recompute and update description.
-                        local description
-                        local new_tree_hash
-                        description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" -y -c "$jj_change_id" "$pr_num")
-                        # Copy the tree hash out of the description to avoid computing it twice
-                        new_tree_hash=$(echo "$description" | grep "^Tree-SHA512: " | cut -d' ' -f2)
-
-                        # a. Check if the commit has been abandoned.
+                        # First, check if the changehas been abandoned, since nothing else will work
+                        # if the change is gone.
                         local git_commit_id
                         local current_tree_hash
                         if ! git_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id); then
-                            git_commit_id=$(jj log -r "$jj_change_id & abandoned()" --no-graph -T commit_id)
                             sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
                             # Cannot call mark_merge_tasks_failed_and_message because we don't know the commit ID;
                             # this can be obtained from jj but it's pretty hard -- we have to repeat the `jj log`
@@ -613,9 +606,16 @@ run_commands() {
                             continue
                         fi
 
-                        # a1. Update our view of upstream and check that our merge commit still has
-                        #     the PR's head as a parent. If not, the PR was updated and we should
-                        #     cancel the merge.
+                        # Then, recompute and update description. Then we can do checks.
+                        local description
+                        local new_tree_hash
+                        description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" -y -c "$jj_change_id" "$pr_num")
+                        # Copy the tree hash out of the description to avoid computing it twice
+                        new_tree_hash=$(echo "$description" | grep "^Tree-SHA512: " | cut -d' ' -f2)
+
+                        # a. Update our view of upstream and check that our merge commit still has
+                        #    the PR's head as a parent. If not, the PR was updated and we should
+                        #    cancel the merge.
                         local target_remote=$(sqlite3 "$DB_FILE" "SELECT target_remote FROM merge_pushes WHERE id = $push_id;")
                         git fetch -q "$target_remote" "+refs/pull/$pr_num/head:refs/heads/pull/$pr_num/head"
                         if ! jj log --quiet -r "$jj_change_id- & pull/$pr_num/head" > /dev/null; then
