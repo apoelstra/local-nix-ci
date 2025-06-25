@@ -115,19 +115,13 @@ echo ""
 echo ""
 echo "Checking for version updates in Cargo.toml files..."
 
-# Get the commit ID for the signed change
-if ! commit_id=$(jj log -r "$jj_change_id" --no-graph -T 'commit_id' 2>/dev/null); then
-    echo "Error: Failed to get commit ID for jj change: $jj_change_id" >&2
-    exit 1
-fi
-
 # Get list of changed Cargo.toml files in this merge
 changed_cargo_files=()
 while read -r file; do
     if [[ "$file" == *"Cargo.toml" ]]; then
         changed_cargo_files+=("$file")
     fi
-done < <(jj diff --to "$commit_id" --from "pull/$pr_num/base" --name-only 2>/dev/null)
+done < <(jj diff --to "$jj_change_id" --from "pull/$pr_num/base" --name-only 2>/dev/null)
 
 if [[ ${#changed_cargo_files[@]} -eq 0 ]]; then
     echo "No Cargo.toml files were modified in this merge."
@@ -235,6 +229,12 @@ if ! jj sign -r "$jj_change_id"; then
 fi
 
 echo "Successfully signed change: $jj_change_id"
+
+# Get the commit ID for the signed change
+if ! commit_id=$(jj log -r "$jj_change_id" --no-graph -T 'commit_id' 2>/dev/null); then
+    echo "Error: Failed to get commit ID for jj change: $jj_change_id" >&2
+    exit 1
+fi
 
 if [[ ${#packages_to_tag[@]} -eq 0 ]]; then
     exit 0
