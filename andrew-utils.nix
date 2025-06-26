@@ -546,13 +546,14 @@ rec {
         # values.
         buildRustCrateForPkgs = pkgs: crate:
           # Unsure where this ought to live. Arguably in nixpkgs itself.
-          let buildRustCrate = pkgs.buildRustCrate.override {
-            defaultCrateOverrides = pkgs.defaultCrateOverrides // {
-              hidapi = attrs: {
-                buildInputs = [ pkgs.pkg-config pkgs.hidapi pkgs.udev ];
+          let
+            buildRustCrate = pkgs.buildRustCrate.override {
+              defaultCrateOverrides = pkgs.defaultCrateOverrides // {
+                hidapi = attrs: {
+                  buildInputs = [ pkgs.pkg-config pkgs.hidapi pkgs.udev ];
+                };
               };
             };
-          };
           in
             if builtins.elem crate.crateName rootCrateIds
             # need to force msrv in here because of https://github.com/NixOS/nixpkgs/pull/274440#pullrequestreview-2350593987
@@ -574,7 +575,44 @@ rec {
                 export CARGO_BIN_NAME="${projectName}"
                 echo "CARGO_BIN_NAME: $CARGO_BIN_NAME"
               '';
-              rust = rustc;
+
+              rust =
+              let
+                # In bash we cannot set names like CARGO_BIN_EXE_hal-simplicity because
+                # the - means that this is not a valid identifier. Quoting it does not
+                # help. Using eval does not help. Instead you have to use env. However,
+                # env only lets you run one command; it can't modify the running shell
+                # environment.
+                #
+                # In a shell, you can run `exec env ${envString} bash` which seems to work
+                # but in a nix build this seems to just terminate the build. You can also
+                # run `alias rustc="env 'stuff=stuff' rustc" but doing this here does not
+                # get propagated into the mkDerivation that buildRustCrate creates.
+                #
+                # Instead it looks like we have to override the rustc derivation itself
+                # in order to set these environment variables.
+                #
+                # Now, -at compile time- the binaries will show up as ./target/bin/XYZ.
+                # However, when we run the tests, in a separate derivation, they will
+                # be off in /nix/store/whatever/bin/XYZ, and we can't compute `whatever`
+                # because it includes, among other things, a hash of the binary that
+                # we're compiling right now. So ./target/bin/XYZ will be wrong and the
+                # correct path is cryptographically unknowable.
+                #
+                # HOWEVER, in crate2nix, it turns out that we copy all the binaries into
+                # target/debug, for some historical reasons. So we can access them there.
+                # https://github.com/nix-community/crate2nix/blob/c027e463f25c3b335a92a4a5cc9caab4c2b814f5/crate2nix/Cargo.nix#L3316-L3321
+                envString = builtins.concatStringsSep " " (map (bin:
+                  let
+                    var = "CARGO_BIN_EXE_${bin.name}";
+                    val = "./target/debug/${bin.name}";
+                  in "\"${var}=${val}\"")
+                  (nixpkgs.lib.trivial.importTOML "${src.src}/Cargo.toml").bin);
+              in nixpkgs.writeShellScriptBin "rustc" ''
+                #!/bin/sh
+                echo exec env ${envString} ${rustc}/bin/rustc "$@"
+                exec env ${envString} ${rustc}/bin/rustc "$@"
+              '';
             }
             else (buildRustCrate (crate // { rust-version = msrv; })).override {
               preUnpack = ''
