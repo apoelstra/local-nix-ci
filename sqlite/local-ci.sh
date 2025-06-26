@@ -581,7 +581,7 @@ run_commands() {
 
                 while IFS='|' read -r push_id jj_change_id tree_hash pr_num state; do
                     if [ -n "$push_id" ]; then
-                        # First, check if the changehas been abandoned, since nothing else will work
+                        # First, check if the change has been abandoned, since nothing else will work
                         # if the change is gone.
                         local git_commit_id
                         local current_tree_hash
@@ -609,7 +609,14 @@ run_commands() {
                         # Then, recompute and update description. Then we can do checks.
                         local description
                         local new_tree_hash
-                        description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" -y -c "$jj_change_id" "$pr_num")
+                        if ! description=$("$LOCAL_CI_PATH/sqlite/compute_merge_description.py" -y -c "$jj_change_id" "$pr_num"); then
+                            echo "Failed to compute description for merge of $repo_id PR $pr_num."
+                            echo "Typically this means that the PR has already been merged."
+
+                            sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                            merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Cannot compute description for merge commit of $repo_name PR $pr_num. Change id $jj_change_id. Removing from queue.")")
+                            continue
+                        fi
                         # Copy the tree hash out of the description to avoid computing it twice
                         new_tree_hash=$(echo "$description" | grep "^Tree-SHA512: " | cut -d' ' -f2)
 
