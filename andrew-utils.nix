@@ -520,6 +520,7 @@ rec {
     , patches ? []
     , workspace
     , features
+    , cargoToml
     , releaseMode ? false
     , ...
     }:
@@ -602,17 +603,20 @@ rec {
                 # HOWEVER, in crate2nix, it turns out that we copy all the binaries into
                 # target/debug, for some historical reasons. So we can access them there.
                 # https://github.com/nix-community/crate2nix/blob/c027e463f25c3b335a92a4a5cc9caab4c2b814f5/crate2nix/Cargo.nix#L3316-L3321
+                mainToml = nixpkgs.lib.trivial.importTOML "${src.src}/Cargo.toml";
                 envString = builtins.concatStringsSep " " (map (bin:
                   let
                     var = "CARGO_BIN_EXE_${bin.name}";
                     val = "./target/debug/${bin.name}";
                   in "\"${var}=${val}\"")
-                  (nixpkgs.lib.trivial.importTOML "${src.src}/Cargo.toml").bin);
-              in nixpkgs.writeShellScriptBin "rustc" ''
-                #!/bin/sh
-                echo exec env ${envString} ${rustc}/bin/rustc "$@"
-                exec env ${envString} ${rustc}/bin/rustc "$@"
-              '';
+                  mainToml.bin);
+              in if mainToml ? bin
+                then nixpkgs.writeShellScriptBin "rustc" ''
+                  #!/bin/sh
+                  echo exec env ${envString} ${rustc}/bin/rustc "$@"
+                  exec env ${envString} ${rustc}/bin/rustc "$@"
+                ''
+                else rustc;
             }
             else (buildRustCrate (crate // { rust-version = msrv; })).override {
               preUnpack = ''
