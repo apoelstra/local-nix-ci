@@ -925,7 +925,7 @@ EOF
                     pushd "$dot_git_path/.."
                     if jj_commit_id=$(jj log -r "$jj_change_id" --no-graph -T commit_id 2>/dev/null); then
                         if [ "$jj_commit_id" = "$tip_commit" ]; then
-                            sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'FAILED' WHERE jj_change_id = '$jj_change_id' AND repo_id = $DB_REPO_ID;"
+                            sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'FAILED' WHERE jj_change_id = '$jj_change_id' AND repo_id = $repo_id;"
                         fi
                     fi
                     popd
