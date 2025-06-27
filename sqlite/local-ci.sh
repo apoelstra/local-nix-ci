@@ -876,7 +876,10 @@ EOF
                 pushd "$dot_git_path/..";
                 case $on_success in
                     ACK)
-                        gh pr review "$pr_number" -a -b "ACK ${tip_commit}; $message"
+                        if ! gh pr review "$pr_number" -a -b "ACK ${tip_commit}; $message"; then
+                            send-text.sh "Failed to ACK PR" "Failed to ACK PR $pr_number -- posting comment instead. (Is this your own PR?)"
+                            gh pr review "$pr_number" -c -b "On ${tip_commit} $message"
+                        fi
                         ;;
                     COMMENT)
                         gh pr review "$pr_number" -c -b "On ${tip_commit} $message"
