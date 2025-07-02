@@ -417,6 +417,7 @@ queue_merge() {
     # one then the worst case we'll have vandalized the description of an empty change.
     local local_merge_change_id
     local_merge_change_id=$(jj log --no-pager --no-graph -T change_id -r "latest(pull/$pr_num/head+ & pull/$pr_num/base+)")
+    local_merge_change_id="${local_merge_change_id:0:12}" # truncate to 12 chars
 
     # If it conflicts, bail out
     if ! jj log --quiet -r "$local_merge_change_id & ~conflicts()" > /dev/null; then
@@ -580,6 +581,7 @@ run_commands() {
                     WHERE repo_id = $repo_id;")
 
                 while IFS='|' read -r push_id jj_change_id tree_hash pr_num state; do
+                    jj_change_id="${jj_change_id:0:12}" # truncate to 12 chars
                     if [ -n "$push_id" ]; then
                         # First, check if the change has been abandoned, since nothing else will work
                         # if the change is gone.
