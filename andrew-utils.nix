@@ -273,7 +273,9 @@ rec {
       (builtins.trace src.cargoNixes src.cargoNixes);
 
     mainCargoToml = { src, ... }: lib.trivial.importTOML "${src.src}/Cargo.toml";
-    mainMajorRev = { mainCargoToml, ... }: builtins.elemAt (builtins.match "(([0-9]+)\.[0-9\.]+)" mainCargoToml.package.version) 0;
+    mainMajorRev = { mainCargoToml, ... }: if mainCargoToml ? package
+      then builtins.elemAt (builtins.match "(([0-9]+)\.[0-9\.]+)" mainCargoToml.package.version) 0
+      else null;
 
     workspace = { mainCargoToml, ... }:
       if mainCargoToml ? workspace
