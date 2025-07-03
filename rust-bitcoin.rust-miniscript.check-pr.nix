@@ -1,31 +1,42 @@
 let
   utils = import ./andrew-utils.nix { };
   lib = utils.overlaidPkgs.lib;
-  # for old versions pr 12.x -- will also need to disable the assertion in andrew-utils.nix
-  # that prevents using empty sets to zero out (part of) the matrix
-  oldVersion = "none"; # 12.x 11.x 10.x
 in import ./rust.check-pr.nix {
   inherit utils;
-  fullMatrixOverride = {
-    ${if oldVersion == "none" then null else "features"} = if oldVersion == "12.x"
-      then { workspace, ... } @ args: if workspace == "bitcoind-tests" then [] else utils.featuresForSrc { needsNoStd = true; } args
-      else
-        let oldFeatures = { rustc, ... }: [ [ "std" ] [ "std" "compiler" ]  [ "std" "compiler" "trace" ] ]
-          ++ (if builtins.isNull (builtins.match "1.41" rustc.version) then [ [ "no-std" ] [ "no-std" "compiler" "trace" ] ] else [])
-          ++ (if utils.rustcIsNightly rustc then [ [ "std" "unstable" "compiler" ] [ "no-std" "unstable" "compiler" ] ] else []);
-        in
-          if oldVersion == "11.x" then { rustc, workspace, ... } @ args: if workspace == "bitcoind-tests" then [] else oldFeatures args
-          else if oldVersion == "10.x" then { rustc, workspace, ... } @ args: if workspace == "bitcoind-tests" || workspace == "fuzz" then [] else oldFeatures args
-          else abort "Unknown miniscript version ${oldVersion}";
+  fullMatrixOverrideWithPrev = prev: {
+    # Miniscript 12 and lower have a required no-std feature.
+    # Note: `cargoToml` is not used directly but is required by `utils.featuresForSrc`,
+    #  and if we don't list it then `matrix` might not provide it.
+    features = { cargoToml, rustc, mainMajorRev, ... } @ args: if mainMajorRev < "13"
+      # In 10.x we also have an "unstable" nightly-only feature.
+      # FIXME also maybe I need to disable "trace" here at least on 1.41.1?
+      then if mainMajorRev < "11" && !utils.rustcIsNightly rustc
+        then builtins.map
+          (l: builtins.filter (s: s != "unstable") l)
+          (utils.featuresForSrc { needsNoStd = true; } args)
+        else utils.featuresForSrc { needsNoStd = true; } args
+      else prev.features args;
 
-    ${if oldVersion == "10.x" then "docTestCmd" else null} = "";
+    # For Miniscript 12 and lower just disable the integration tests (I -think-
+    # because they require a version of the `bitcoind` crate that won't let me
+    # override the bitcoind binary, but I don't remember.)
+    workspace = { mainMajorRev, ... } @ args: if mainMajorRev < "13"
+      # In 10.x the fuzz tests also don't build. FIXME this seems like it should
+      # be fixable.
+      then if mainMajorRev < "11"
+        then builtins.filter (x: x != "fuzz" && x != "bitcoind-tests") (prev.workspace args)
+        else builtins.filter (x: x != "bitcoind-tests") (prev.workspace args)
+      else prev.workspace args;
 
-    extraTestPostRun = { workspace, ... }: lib.optionalString (workspace == ".") ''
+    # FIXME disable doctests for 10.x and lower.
+    docTestCmd = { mainMajorRev, ... } @ args: if mainMajorRev < "11"
+      then ""
+      else "cargo test --all-features --locked --doc";
+
+    extraTestPostRun = { mainMajorRev, workspace, ... }:
+    lib.optionalString (mainMajorRev >= "13" && workspace == ".") ''
       cp fuzz/Cargo.toml old-Cargo.toml
-      # Comment out for old versions
-      if [ "${oldVersion}" != "10.x" && "${oldVersion}" != "11.x" ]; then
-          cp .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
-      fi
+      cp .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
 
       cd fuzz/
       patchShebangs ./generate-files.sh
@@ -35,9 +46,7 @@ in import ./rust.check-pr.nix {
       cd ..
 
       diff fuzz/Cargo.toml old-Cargo.toml
-      if [ "${oldVersion}" != "10.x" && "${oldVersion}" != "11.x" ]; then
-          diff .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
-      fi
+      diff .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
     '';
   };
 }

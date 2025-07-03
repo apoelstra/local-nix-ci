@@ -15,7 +15,7 @@ let
     inherit prNum;
     inherit (utils.standardRustMatrixFns jsonConfig)
       projectName src msrv rustc cargoNix lockFile srcName mtxName
-      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
+      isMainLockFile isMainWorkspace mainCargoToml mainMajorRev workspace cargoToml
       features # Must be overridden if there are any exceptional feature combinations
       runClippy
       runFmt
