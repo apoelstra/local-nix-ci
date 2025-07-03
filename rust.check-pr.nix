@@ -1,6 +1,7 @@
 { pkgs ? import <nixpkgs> {}
 , utils ? import ./andrew-utils.nix {}
 , fullMatrixOverride ? {}
+, fullMatrixOverrideWithPrev ? prev: {}
 }:
 { inlineJsonConfig
 , inlineCommitList ? []
@@ -10,7 +11,7 @@ let
   jsonConfig = inlineJsonConfig // {
     gitCommits = map utils.srcFromCommit inlineCommitList;
   };
-  fullMatrix = {
+  fullMatrixPrev = {
     inherit prNum;
     inherit (utils.standardRustMatrixFns jsonConfig)
       projectName src msrv rustc cargoNix lockFile srcName mtxName
@@ -22,6 +23,8 @@ let
       releaseMode # Should override with false for slow crates!
       ;
   } // fullMatrixOverride;
+
+  fullMatrix = fullMatrixPrev // (fullMatrixOverrideWithPrev fullMatrixPrev);
 
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
