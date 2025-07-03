@@ -909,6 +909,7 @@ EOF
                 pushd "$dot_git_path/.."
                 local tip_change_id
                 tip_change_id=$(jj log -r "$tip_commit" --no-graph -T change_id)
+                tip_change_id="${tip_change_id:0:12}" # truncate to 12 chars
                 for jj_change_id in $jj_change_ids; do
                     if [ "$jj_change_id" = "$tip_change_id" ]; then
                         sqlite3 "$DB_FILE" "UPDATE merge_pushes SET state = 'SUCCESS' WHERE jj_change_id = '$jj_change_id' AND repo_id = $repo_id;"
