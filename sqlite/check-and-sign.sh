@@ -7,6 +7,7 @@ command -v jj >/dev/null 2>&1 || { echo "jj is required but not installed. Abort
 command -v git >/dev/null 2>&1 || { echo "git is required but not installed. Aborting."; exit 1; }
 command -v cargo >/dev/null 2>&1 || { echo "cargo is required but not installed. Aborting."; exit 1; }
 command -v gh >/dev/null 2>&1 || { echo "gh is required but not installed. Aborting."; exit 1; }
+command -v gpg2 >/dev/null 2>&1 || { echo "gh is required but not installed. Aborting."; exit 1; }
 
 LOCAL_CI_PATH="$(unset GIT_DIR; cd "$(dirname "$(realpath "$0")")"; git rev-parse --show-toplevel)"
 
@@ -31,6 +32,10 @@ if [[ -z "${LOCAL_CI_PATH:-}" ]]; then
     echo "Error: LOCAL_CI_PATH environment variable is not set" >&2
     exit 1
 fi
+
+# Attempt to sign empty message to unlock gpg agent.
+echo "Signing empty message to unlock gpg-agent."
+gpg2 -as < /dev/null > /dev/null
 
 # Check that compute_merge_description.py exists and is executable
 readonly compute_script="$LOCAL_CI_PATH/sqlite/compute_merge_description.py"
