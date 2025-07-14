@@ -47,7 +47,7 @@ rec {
   elementsDotNix = nixpkgs.fetchgit {
     url = "https://github.com/roconnor-blockstream/elements-nix";
     rev = "8f55670c4d78d6ffc1dd25fbbfa61d1c95d32f59";
-    outputHash = "sha256-Rtni7YRLB7aXMtrLuiKbmQR9Yx6b39Az+rLS8Jki0QE=";
+    hash = "sha256-Rtni7YRLB7aXMtrLuiKbmQR9Yx6b39Az+rLS8Jki0QE=";
   };
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
@@ -57,7 +57,7 @@ rec {
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/bitcoin/bitcoin";
       rev = "v24.2";
-      outputHash = "sha256-WCbh/6WfQdbCPdRQK/WAMzR42s/HxE4eM1Cf/4mrafM=";
+      hash = "sha256-WCbh/6WfQdbCPdRQK/WAMzR42s/HxE4eM1Cf/4mrafM=";
     };
     withGCC13Patches = false;
   });
@@ -86,7 +86,7 @@ rec {
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/ElementsProject/elements";
       rev = "elements-0.21.0.2";
-      outputHash = "sha256-VcfJu7svpoXGGDMfIHofqCd43eTmvGOABtFwbkb6kU0=";
+      hash = "sha256-VcfJu7svpoXGGDMfIHofqCd43eTmvGOABtFwbkb6kU0=";
     };
   };
   elementsSrc22 = nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
@@ -94,7 +94,7 @@ rec {
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/ElementsProject/elements";
       rev = "elements-22.1.1";
-      outputHash = "sha256-bkqDuJeDq2QwzTUP0KT6IB5wpC7LIPpLIbeO4fwkUYA=";
+      hash = "sha256-bkqDuJeDq2QwzTUP0KT6IB5wpC7LIPpLIbeO4fwkUYA=";
     };
   };
   elementsSrc = nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
@@ -104,7 +104,7 @@ rec {
     withSource = nixpkgs.fetchgit {
       url = "https://github.com/ElementsProject/elements";
       rev = "elements-23.2.4";
-      outputHash = "sha256-OTX6we88fALSz0COKqjWV62pm8qro29eHl9qdiUxNdI=";
+      hash = "sha256-OTX6we88fALSz0COKqjWV62pm8qro29eHl9qdiUxNdI=";
     };
   };
   # See comment near usage for what this is for.
