@@ -10,6 +10,34 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed. Abort
 command -v send-text.sh >/dev/null 2>&1 || { echo "send-text.sh is required but not installed. Aborting."; exit 1; }
 command -v github-merge.py >/dev/null 2>&1 || { echo "github-merge.py is required but not installed. Aborting."; exit 1; }
 
+# Wrapper to catch "database is locked" errors and retry.
+sqlite3() {
+    local tries=5
+    local delay=5
+    local attempt rc
+    local stderr_buf                                     # holds combined stdout/stderr each loop
+
+    for (( attempt=1; attempt<=tries; ++attempt )); do
+        # Capture *everything* so we can look for the lock error, but replay it faithfully.
+        stderr_buf=$( command sqlite3 "$@" 2>&1 )
+        rc=$?
+
+        if (( rc == 0 )); then
+            printf '%s' "$stderr_buf"   # was actually stdout; we captured both streams
+            return 0
+        fi
+
+        if [[ $stderr_buf == *"database is locked"* ]] && (( attempt < tries )); then
+            sleep "$delay"
+            continue
+        fi
+
+        # Either a different error, or we’re out of retries
+        printf '%s\n' "$stderr_buf" >&2
+        return "$rc"
+    done
+}
+
 # Global setup
 DB_FILE="$HOME/local-ci.db"
 NIX_PIN_PATH="$HOME/code/NixOS/nixpkgs/local-ci-pin/"
