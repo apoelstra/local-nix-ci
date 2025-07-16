@@ -594,6 +594,7 @@ run_commands() {
             JOIN repos r ON mp.repo_id = r.id;")
 
         if [ -n "$repos_with_pushes" ]; then
+            echo "Checking queued pushes..."
             while IFS='|' read -r repo_id repo_name repo_git_path; do
                 # Get the target remote for this repo
                 local target_remote=$(sqlite3 "$DB_FILE" "SELECT DISTINCT target_remote FROM merge_pushes WHERE repo_id = $repo_id LIMIT 1;")
@@ -673,7 +674,7 @@ run_commands() {
 
                             # d. Check if it's a direct descendant of the target branch
                             local target_branch=$(sqlite3 "$DB_FILE" "SELECT target_branch FROM merge_pushes WHERE id = $push_id;")
-                            git fetch "$target_remote"
+                            git fetch -q "$target_remote"
                             if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$git_commit_id" 2>/dev/null; then
                                 sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
                                 merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Change $jj_change_id ($repo_name PR $pr_num) is not a direct descendant of $target_remote/$target_branch. Removing from queue; attempted to requeue.")")
@@ -739,6 +740,7 @@ run_commands() {
             if [ "$should_restart_loop" = true ]; then
                 continue
             fi
+            echo "Done checking merged pushes (pushed everything pushable)."
         fi
 
         # Check if a task was found
