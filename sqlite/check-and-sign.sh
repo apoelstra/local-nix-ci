@@ -299,23 +299,30 @@ if ! git remote get-url "$remote_name" >/dev/null 2>&1; then
     exit 1
 fi
 
-#
-if ! git checkout "$commit_id" >/dev/null 2>&1; then
-    echo "Error: Failed to checkout $commit_id" >&2
-    exit 1
-fi
+# Checkout the commit in a temporary workspace
+tmpdir=$(mktemp -d)
+cleanup() {
+    jj workspace forget "$tmpdir" 2>/dev/null || true
+    rm -rf "$tmpdir"
+}
+trap cleanup EXIT
 
-# Publish packages
-echo ""
-echo "Publishing packages..."
-for package_info in "${packages_to_tag[@]}"; do
-    package_name=$(echo "$package_info" | cut -d' ' -f1)
-    echo "Publishing package: $package_name"
-    if ! cargo publish -p "$package_name"; then
-        echo "Error: Failed to publish package: $package_name" >&2
-        exit 1
-    fi
-done
+jj workspace add -r "$commit_id" "$tmpdir"
+
+# Publish from workspace directory.
+(
+    cd "$tmpdir"
+    echo ""
+    echo "Publishing packages..."
+    for package_info in "${packages_to_tag[@]}"; do
+        package_name=$(echo "$package_info" | cut -d' ' -f1)
+        echo "Publishing package: $package_name"
+        if ! cargo publish -p "$package_name"; then
+            echo "Error: Failed to publish package: $package_name" >&2
+            exit 1
+        fi
+    done
+)
 
 # Push tags
 echo ""
