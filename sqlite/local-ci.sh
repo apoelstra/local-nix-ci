@@ -594,7 +594,6 @@ run_commands() {
             JOIN repos r ON mp.repo_id = r.id;")
 
         if [ -n "$repos_with_pushes" ]; then
-            echo "Checking queued pushes..."
             while IFS='|' read -r repo_id repo_name repo_git_path; do
                 # Get the target remote for this repo
                 local target_remote=$(sqlite3 "$DB_FILE" "SELECT DISTINCT target_remote FROM merge_pushes WHERE repo_id = $repo_id LIMIT 1;")
@@ -733,6 +732,9 @@ run_commands() {
             # Send signature messages only if we should
             if [ ${#signature_messages[@]} -gt 0 ] && [ "$should_send_signature_messages" = true ]; then
                 send-text.sh "Push-queue (NEED SIGNATURES)" "$(printf "%s\n" "${signature_messages[@]}")"
+                echo
+                printf "%s\n" "${signature_messages[@]}"
+                echo
                 should_send_signature_messages=false
             fi
 
@@ -740,7 +742,6 @@ run_commands() {
             if [ "$should_restart_loop" = true ]; then
                 continue
             fi
-            echo "Done checking merged pushes (pushed everything pushable)."
         fi
 
         # Check if a task was found
@@ -757,7 +758,9 @@ run_commands() {
                 echo "([$(date +"%F %T")] Nothing to do. (Next message in $((backoff_sec / 60)) minutes.)"
                 # Output signature messages on "nothing to do" messages
                 if [ ${#signature_messages[@]} -gt 0 ]; then
+                    echo
                     echo "$(printf "%s\n" "${signature_messages[@]}")"
+                    echo
                     should_send_signature_messages=false
                 fi
                 sleep_secs=0;
