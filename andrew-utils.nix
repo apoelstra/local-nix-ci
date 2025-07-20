@@ -34,6 +34,9 @@ rec {
   # Laziness means this is only called when used
   tools-nix = overlaidPkgs.callPackage tools-nix-path {};
 
+  # Re-export pkgs
+  inherit nixpkgs;
+
   # Support for old elementsd and bitcoind. Modern nixpkgs have dropped
   # boost 1.75, and its versions of db 4.8 don't link with ancient versions
   # of gcc, and probably there are other problems. Easier to just use this
