@@ -1,5 +1,6 @@
 let
   utils = import ./andrew-utils.nix { };
+  lib = utils.nixpkgs.lib;
 in import ./rust.check-pr.nix {
   inherit utils;
   fullMatrixOverride = {
@@ -18,5 +19,21 @@ in import ./rust.check-pr.nix {
         exclude = [ "actual-serde" "schemars" ];
       } { inherit src cargoToml; }
       else utils.featuresForSrc { } { inherit src cargoToml; };
+
+    extraTestPostRun = { workspace, ... }:
+    lib.optionalString (workspace == ".") ''
+      cp fuzz/Cargo.toml old-Cargo.toml
+      cp .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
+
+      cd fuzz/
+      patchShebangs ./generate-files.sh
+      sed -i 's/REPO_DIR=.*/REPO_DIR=../' generate-files.sh
+      sed -i 's/REPO_DIR=.*/REPO_DIR=../' fuzz-util.sh
+      ./generate-files.sh
+      cd ..
+
+      diff fuzz/Cargo.toml old-Cargo.toml
+      diff .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
+    '';
   };
 }
