@@ -302,16 +302,16 @@ fi
 # Checkout the commit in a temporary workspace
 tmpdir=$(mktemp -d)
 cleanup() {
-    jj workspace forget "$tmpdir" 2>/dev/null || true
+    jj workspace forget check-and-sign 2>/dev/null || true
     rm -rf "$tmpdir"
 }
 trap cleanup EXIT
 
-jj workspace add -r "$commit_id" "$tmpdir"
+jj workspace add -r "$commit_id" --name "check-and-sign" "$tmpdir/$commit_id" 
 
 # Publish from workspace directory.
 (
-    cd "$tmpdir"
+    cd "$tmpdir/$commit_id"
     echo ""
     echo "Publishing packages..."
     for package_info in "${packages_to_tag[@]}"; do
