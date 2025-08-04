@@ -735,6 +735,10 @@ run_commands() {
                 echo
                 printf "%s\n" "${signature_messages[@]}"
                 echo
+                echo "Sleeping 90 seconds (from $(date)) to give time to sign commits so we can push and re-queue before continuing tests."
+                sleep 80
+                echo "10 seconds left."
+                sleep 10
                 should_send_signature_messages=false
             fi
 
