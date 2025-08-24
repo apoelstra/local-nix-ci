@@ -96,11 +96,18 @@ rec {
         export CARGO_HOME="$out/cargo"
         export HOME="$out"
 
-        # asp
+        # ASP -- add overrideLockFile.
+        # When overriding the lockfile, we need to convert version 4 lockfiles to version 3.
+        # As of Rust 1.89 (at least) this "conversion" just means changing the version number.
+        # This is necessary to run crate2nix with rustc 1.76; see comment above in `buildInputs`
+        # for why we need to do this.
         ${if overrideLockFile == null then
           ""
-        else
-          "cp ${overrideLockFile} ./Cargo.lock"}
+        else ''
+          cp ${overrideLockFile} ./Cargo.lock
+          chmod +w ./Cargo.lock
+          sed -i 's/version = 4/version = 3/' ./Cargo.lock
+        ''};
 
 
         cp ${vendor.cargoConfig} $out/cargo/config
