@@ -107,7 +107,7 @@ rec {
           cp ${overrideLockFile} ./Cargo.lock
           chmod +w ./Cargo.lock
           sed -i 's/version = 4/version = 3/' ./Cargo.lock
-        ''};
+        ''}
 
 
         cp ${vendor.cargoConfig} $out/cargo/config
