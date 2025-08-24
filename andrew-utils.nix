@@ -586,7 +586,9 @@ rec {
                 echo 'Patches: ${builtins.toJSON patches}'
 
                 export CARGO_BIN_NAME="${projectName}"
+                export CARGO_CRATE_NAME="${crate.crateName}"
                 echo "CARGO_BIN_NAME: $CARGO_BIN_NAME"
+                echo "CARGO_CRATE_NAME: $CARGO_CRATE_NAME"
               '';
 
               rust =
@@ -635,6 +637,9 @@ rec {
                 set +x
                 echo "[buildRustCrate override for crate ${crate.crateName} (dependency)]"
                 echo 'rustc: ${builtins.toString rustc}'
+                # Needed by leptos-config
+                export CARGO_CRATE_NAME="${crate.crateName}"
+                echo "CARGO_CRATE_NAME: $CARGO_CRATE_NAME"
               '';
               rust = rustc;
             };
