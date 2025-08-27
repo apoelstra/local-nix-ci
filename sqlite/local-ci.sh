@@ -576,9 +576,9 @@ run_commands() {
                 );")
 
             if [ "$failed_tasks" -gt 0 ]; then
-                echo "$base_message and marking $failed_tasks queued MERGE tasks as failed."
+                echo "$base_message and marking $failed_tasks queued MERGE tasks as failed." >&2
             else
-                echo "$base_message"
+                echo "$base_message" >&2
             fi
         }
 
@@ -663,60 +663,65 @@ run_commands() {
 
                         # b. Update description (should pass since the commit was not abandoned,
                         #    but might not if something weird is going on)
-                        if jj describe --quiet -r "$jj_change_id" -m "$description"; then
-                            # c. Check if tree hash has changed
-                            if [ "$new_tree_hash" != "$tree_hash" ]; then
-                                sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Tree hash for change $jj_change_id ($repo_name PR $pr_num) has changed ($tree_hash → $new_tree_hash). Removing from queue")")
-                                continue
-                            fi
-
-                            # d. Check if it's a direct descendant of the target branch
-                            local target_branch=$(sqlite3 "$DB_FILE" "SELECT target_branch FROM merge_pushes WHERE id = $push_id;")
-                            git fetch -q "$target_remote"
-                            if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$git_commit_id" 2>/dev/null; then
-                                sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Change $jj_change_id ($repo_name PR $pr_num) is not a direct descendant of $target_remote/$target_branch. Removing from queue; attempted to requeue.")")
-                                # The above lines deleted the queued merge. But the reason for doing so was that
-                                # upstream master changed, while the PR itself did not change (if it did, we would
-                                # have noticed it in an earlier check). So we should re-queue this.
-                                #
-                                # If requeuing failed the user will get a message from the `queue-merge` call, which
-                                # will occur *before* `merge_push_messages` is shown.
-                                if "$LOCAL_CI_PATH/sqlite/local-ci.sh" queue-merge --requeue "$pr_num"; then
-                                    merge_push_messages+=("...Removing from queue; successfully requeued.")
-                                else
-                                    merge_push_messages+=("...Removing from queue; failed to requeue.")
-                                fi
-                                continue
-                            fi
-
-                            # e. Check if state is FAILED
-                            if [ "$state" = "FAILED" ]; then
-                                sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Test for change $jj_change_id ($repo_name PR $pr_num) failed. Removing from queue")")
-                                continue
-                            fi
-
-                            # f. Check if state is SUCCESS and if it's signed
-                            if [ "$state" = "SUCCESS" ]; then
-                                if git verify-commit "$git_commit_id" &>/dev/null; then
-                                    # Push the change
-                                    if git push "$target_remote" "$git_commit_id:$target_branch"; then
-                                        merge_push_messages+=("Change $jj_change_id ($repo_name PR $pr_num) was successfully pushed to $target_branch.")
-                                    else
-                                        merge_push_messages+=("Failed to push change $jj_change_id ($repo_name PR $pr_num) to $target_branch.")
-                                    fi
-                                    sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                                    should_restart_loop=true
-                                else
-                                    signature_messages+=("Change $jj_change_id ($repo_name PR $pr_num) is ready to be pushed but is not GPG signed.")
-                                fi
-                            fi
-                        else
+                        if ! jj describe --quiet -r "$jj_change_id" -m "$description"; then
                             # `jj describe` failed, presumably because the change was already pushed and became immutable
+                            echo "WARNING: failed to update description of change $jj_change_id." >&2
+                            echo "This is likely because it has already been pushed (e.g. as a tag)." >&2
+                            echo "If there are any last-minute ACKs or description updates, these will" >&2
+                            echo "not be reflected in the final commit. You may want to manually take" >&2
+                            echo "a look. The commit is $git_commit_id." >&2
+                            echo >&2
+                            echo "This is not an error. Doing remaining sanity checks and will then push." >&2
+                        fi
+
+                        # c. Check if tree hash has changed
+                        if [ "$new_tree_hash" != "$tree_hash" ]; then
                             sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
-                            merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Failed to update description for $jj_change_id ($repo_name PR $pr_num) -- maybe already pushed? Removing from queue")")
+                            merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Tree hash for change $jj_change_id ($repo_name PR $pr_num) has changed ($tree_hash → $new_tree_hash). Removing from queue")")
+                            continue
+                        fi
+
+                        # d. Check if it's a direct descendant of the target branch
+                        local target_branch=$(sqlite3 "$DB_FILE" "SELECT target_branch FROM merge_pushes WHERE id = $push_id;")
+                        git fetch -q "$target_remote"
+                        if ! git merge-base --is-ancestor "$target_remote/$target_branch" "$git_commit_id" 2>/dev/null; then
+                            sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                            merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Change $jj_change_id ($repo_name PR $pr_num) is not a direct descendant of $target_remote/$target_branch. Removing from queue; attempted to requeue.")")
+                            # The above lines deleted the queued merge. But the reason for doing so was that
+                            # upstream master changed, while the PR itself did not change (if it did, we would
+                            # have noticed it in an earlier check). So we should re-queue this.
+                            #
+                            # If requeuing failed the user will get a message from the `queue-merge` call, which
+                            # will occur *before* `merge_push_messages` is shown.
+                            if "$LOCAL_CI_PATH/sqlite/local-ci.sh" queue-merge --requeue "$pr_num"; then
+                                merge_push_messages+=("...Removing from queue; successfully requeued.")
+                            else
+                                merge_push_messages+=("...Removing from queue; failed to requeue.")
+                            fi
+                            continue
+                        fi
+
+                        # e. Check if state is FAILED
+                        if [ "$state" = "FAILED" ]; then
+                            sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                            merge_push_messages+=("$(mark_merge_tasks_failed_and_message "$git_commit_id" "Test for change $jj_change_id ($repo_name PR $pr_num) failed. Removing from queue")")
+                            continue
+                        fi
+
+                        # f. Check if state is SUCCESS and if it's signed
+                        if [ "$state" = "SUCCESS" ]; then
+                            if git verify-commit "$git_commit_id" &>/dev/null; then
+                                # Push the change
+                                if git push "$target_remote" "$git_commit_id:$target_branch"; then
+                                    merge_push_messages+=("Change $jj_change_id ($repo_name PR $pr_num) was successfully pushed to $target_branch.")
+                                else
+                                    merge_push_messages+=("Failed to push change $jj_change_id ($repo_name PR $pr_num) to $target_branch.")
+                                fi
+                                sqlite3 "$DB_FILE" "DELETE FROM merge_pushes WHERE id = $push_id;"
+                                should_restart_loop=true
+                            else
+                                signature_messages+=("Change $jj_change_id ($repo_name PR $pr_num) is ready to be pushed but is not GPG signed.")
+                            fi
                         fi
                     fi
                 done <<< "$merge_pushes"
