@@ -142,7 +142,7 @@ rec {
   rustcIsNightly = rustc: !builtins.isNull (builtins.match ".*nightly-([0-9]+-[0-9]+-[0-9]+).*" rustc.version);
 
   # Given a list of features
-  featuresForSrc = { needsNoStd ? false, include ? [], exclude ? [] }: { src, cargoToml, ... }:
+  featuresForSrc = { include ? [], exclude ? [] }: { src, needsNoStd, cargoToml, ... }:
     let
       randBit = name:
         let
@@ -290,6 +290,9 @@ rec {
         then mainCargoToml.workspace.members
           ++ (if mainCargoToml ? package then [ "." ] else [])
         else null;
+
+    needsNoStd = { cargoToml, ... }:
+        cargoToml ? features && builtins.elem "no-std" (builtins.attrNames cargoToml.features);
 
     # If there are no include/exclude rules for the crate, you can just inherit this.
     features = featuresForSrc {};
@@ -678,6 +681,7 @@ rec {
     , runClippy ? true
     , runDocs ? true
     , runFmt ? false
+    , runFuzz ? true
     , docTestCmd ? "cargo test --all-features --locked --doc"
     # We have some should_panic tests in rust-bitcoin that fail in release mode
     , releaseMode ? false
@@ -761,9 +765,9 @@ rec {
             cargo doc -j1 --all-features
           '' + lib.optionalString runFmt ''
             cargo fmt --all -- --check
-          '' + lib.optionalString (rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz) ''
+          '' + lib.optionalString (runFuzz && rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz) ''
             echo "Ran fuzztests (cargo-fuzz): ${fuzzHonggfuzzDrv}"
-          '' + lib.optionalString (rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
+          '' + lib.optionalString (runFuzz && rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
             echo "Ran fuzztests (honggfuzz): ${fuzzLibfuzzerDrv}"
           '' + ''
             popd
@@ -942,6 +946,4 @@ rec {
       }) fuzzTargets);
     in fuzzLibFuzzerDrv;
 }
-
-
 

@@ -16,6 +16,7 @@ let
     inherit (utils.standardRustMatrixFns jsonConfig)
       projectName src msrv rustc cargoNix lockFile srcName mtxName
       isMainLockFile isMainWorkspace mainCargoToml mainMajorRev workspace cargoToml
+      needsNoStd
       features # Must be overridden if there are any exceptional feature combinations
       runClippy
       runFmt
