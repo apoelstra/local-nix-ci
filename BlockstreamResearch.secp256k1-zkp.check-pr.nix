@@ -2,62 +2,64 @@
   pkgs ? import <nixpkgs> {}
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
-, jsonConfigFile
+, utils ? import ./andrew-utils.nix {}
+, inlineJsonConfig
+, inlineCommitList ? []
 , prNum
-# Only used by checkHEad, not checkPr
-, singleRev ? prNum
 }:
 let
   utils = import ./andrew-utils.nix { };
-  jsonConfig = lib.trivial.importJSON jsonConfigFile;
-  gitCommits = utils.githubPrSrcs {
-    # This must be a .git directory, not a URL or anything, since githubPrCommits
-    # well set the GIT_DIR env variable to it before calling git commands. The
-    # intention is for this to be run locally.
-    gitDir = /. + jsonConfig.gitDir;
-    gitUrl = jsonConfig.gitUrl;
-    inherit prNum;
+  jsonConfig = inlineJsonConfig // {
+    gitCommits = map utils.srcFromCommit inlineCommitList;
   };
   extraModulesName = mods: builtins.concatStringsSep "_" (map (builtins.substring 0 4) mods);
+  fullMatrix = {
+    projectName = "secp256k1-zkp";
+    inherit prNum;
+
+    srcName = { src, ... }: src.commitId;
+    mtxName = { src, withAsm, extraModules, ... }:
+      "secp-zkp-PR-${prNum}-${src.shortId}-${withAsm}-${extraModulesName extraModules}";
+
+    extraModules = [
+      []
+      ["recovery"]
+      ["ecdh"]
+      ["musig" "extrakeys" "schnorrsig"]
+      ["generator"]
+      ["generator" "rangeproof" "surjectionproof" "whitelist"]
+      ["recovery" "ecdh" "musig" "extrakeys" "schnorrsig" "generator" "rangeproof" "surjectionproof" "whitelist"]
+    ];
+    ecmultGenPrecision = [ 2 4 8 ];
+    ecmultWindow = [ 2 15 20 ]; # clang can't handle 24 :(:
+    withAsm = [ "no" "x86_64" ];
+    withMsan = [ true false ];
+    widemul = [ "int64" "int128" "int128_struct" ];
+    doValgrindCheck = true;
+
+    src = jsonConfig.gitCommits;
+  };
+
   checkData = rec {
-    name = "${jsonConfig.repoName}-pr-${builtins.toString prNum}";
-
-    argsMatrices = [{
-      projectName = "libsecp256k1-zkp";
-      srcName = self: self.src.commitId;
-      mtxName = self: "${self.projectName}-PR-${prNum}-${self.src.shortId}-${self.withAsm}-${extraModulesName self.extraModules}";
-
-      extraModules = [
-        []
-        ["recovery"]
-        ["ecdh"]
-        ["musig" "extrakeys" "schnorrsig"]
-        ["generator"]
-        ["generator" "rangeproof" "surjectionproof" "whitelist"]
-        ["recovery" "ecdh" "musig" "extrakeys" "schnorrsig" "generator" "rangeproof" "surjectionproof" "whitelist"]
-      ];
-      ecmultGenPrecision = [ 2 4 8 ];
-      ecmultWindow = [ 2 15 20 ]; # clang can't handle 24 :(:
-      withAsm = [ "no" "x86_64" ];
-      withMsan = [ true false ];
-      widemul = [ "int64" "int128" "int128_struct" ];
-      doValgrindCheck = true;
-      src = gitCommits;
-    }];
+    name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
+    argsMatrix = fullMatrix;
 
     singleCheckDrv = {
-      projectName,
-      srcName,
-      mtxName,
-      extraModules,
-      ecmultGenPrecision,
-      ecmultWindow,
-      withAsm,
-      withMsan,
-      widemul,
-      doValgrindCheck,
-      src
-    }: dummy:
+        projectName
+      , prNum
+      , srcName
+      , mtxName
+      , extraModules
+      , ecmultGenPrecision
+      , ecmultWindow
+      , withAsm
+      , withMsan
+      , widemul
+      , doValgrindCheck
+      , src
+    }:
+    dummy1:  # generated cargo.nix
+    dummy2:  # called cargo.nix
     let
       valgrindCheckCmd = if doValgrindCheck
         then ''
@@ -80,7 +82,7 @@ let
         name = "${projectName}-${src.shortId}";
         src = src.src;
 
-        nativeBuildInputs = [ pkgs.pkgconfig pkgs.autoreconfHook pkgs.valgrind ]
+        nativeBuildInputs = [ pkgs.pkg-config pkgs.autoreconfHook pkgs.valgrind ]
           ++ lib.optionals withMsan [
             pkgs.llvmPackages_15.llvm # to get llvm-symbolizer when clang blows up
             pkgs.clang_15
@@ -109,9 +111,6 @@ let
         postCheck = ctimeCheckCmd + valgrindCheckCmd;
         makeFlags = [ "VERBOSE=true" ];
 
-        # TODO turn this off when the new RAM arrives
-        enableParallelBuilding = false;
-
         meta = {
           homepage = http://www.github.com/bitcoin-core/secp256k1;
           license = lib.licenses.mit;
@@ -130,22 +129,4 @@ let
     in taggedDrv;
   };
 in
-{
-  checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr (checkData // {
-    argsMatrices = map
-      (argsMtx: argsMtx // {
-        src = rec {
-          src = builtins.fetchGit {
-            allRefs = true;
-            url = jsonConfig.gitDir;
-            rev = singleRev;
-          };
-          name = builtins.toString prNum;
-          shortId = name;
-          commitId = shortId;
-        };
-      })
-      checkData.argsMatrices;
-  });
-}
+  utils.checkPr checkData
