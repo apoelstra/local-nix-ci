@@ -765,10 +765,8 @@ rec {
             cargo doc -j1 --all-features
           '' + lib.optionalString runFmt ''
             cargo fmt --all -- --check
-          '' + lib.optionalString (runFuzz && rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? honggfuzz) ''
-            echo "Ran fuzztests (cargo-fuzz): ${fuzzHonggfuzzDrv}"
           '' + lib.optionalString (runFuzz && rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
-            echo "Ran fuzztests (honggfuzz): ${fuzzLibfuzzerDrv}"
+            echo "Ran fuzztests (cargo-fuzz): ${fuzzLibfuzzerDrv}"
           '' + ''
             popd
           '' + extraTestPostRun;
@@ -776,9 +774,6 @@ rec {
         fuzzTargets = map
           (bin: bin.name)
           (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
-        fuzzHonggfuzzDrv = cargoFuzzHonggfuzzDrv {
-          inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
-        };
         fuzzLibfuzzerDrv = cargoFuzzLibfuzzerDrv {
           inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
         };
@@ -803,87 +798,6 @@ rec {
           checkPrRunDocs = boolString runDocs;
           checkPrIsTip = boolString src.isTip;
         });
-
-  # Derivation that runs cargo-hfuzz on a series of targets found in fuzz/Cargo.toml.
-  cargoFuzzHonggfuzzDrv = {
-    projectName
-  , src
-  , cargoToml
-  , lockFile
-  , generatedCargoNix
-  , fuzzTargets
-  }: let
-    honggfuzzVersion =
-      let
-        lockToml = nixpkgs.lib.importTOML lockFile;
-        honggfuzz = (builtins.filter (x: x.name == "honggfuzz") lockToml.package);
-      in (builtins.elemAt honggfuzz 0).version;
-
-    singleFuzzHonggfuzzDrv = fuzzTarget: stdenv.mkDerivation {
-      name = "fuzz-${fuzzTarget}";
-      src = src.src;
-      buildInputs = [
-        overlaidPkgs.rust-bin.stable."1.64.0".default
-        (import ./honggfuzz-rs.nix { inherit honggfuzzVersion; })
-        # Need to use libopcodes 2.38 because of https://github.com/rust-fuzz/honggfuzz-rs/issues/68
-        nixpkgs.libopcodes_2_38  # for dis-asm.h and bfd.h
-        nixpkgs.libunwind   # for libunwind-ptrace.h
-      ];
-      phases = [ "unpackPhase" "buildPhase" ];
-
-      buildPhase = ''
-        set -x
-        export CARGO_HOME=$PWD/cargo
-        export HFUZZ_RUN_ARGS="--run_time 120 --threads 2 --exit_upon_crash"
-
-        cargo -V
-        cargo hfuzz version
-        echo "Source: ${src.commitId}"
-        echo "Fuzz target: ${fuzzTarget}"
-
-        # copied from libffi; see also https://github.com/NixOS/nixpkgs/pull/246244#issuecomment-1701571496
-        NIX_HARDENING_ENABLE=''${NIX_HARDENING_ENABLE/fortify3/}
-        NIX_HARDENING_ENABLE=''${NIX_HARDENING_ENABLE/fortify/}
-
-        # honggfuzz rebuilds the world, including itself for some reason, and
-        # it expects to be able to build itself in-place. So we need a read/write
-        # copy.
-        cp -r ${generatedCargoNix}/cargo .
-        chmod -R +w cargo
-
-        DEP_DIR=$(grep 'directory =' $CARGO_HOME/config | sed 's/directory = "\(.*\)"/\1/')
-        cp -r "$DEP_DIR" vendor-copy/
-        chmod +w vendor-copy/
-        rm vendor-copy/*honggfuzz*
-        cp -rL "$DEP_DIR/"*honggfuzz* vendor-copy/ # -L means copy soft-links as real files
-        chmod -R +w vendor-copy/
-        # These two lines are just a search-and-replace ... but trying to get sed to replace
-        # one string full of slashes with another is an unreadable mess, so easier to just
-        # erase the line completely then recreate it with echo.
-        sed -i "s/directory = \".*\"//" "$CARGO_HOME/config"
-        echo "directory = \"$PWD/vendor-copy\"" >> "$CARGO_HOME/config"
-        cat "$CARGO_HOME/config"
-        # Done crazy honggfuzz shit
-
-        # If we have git dependencies, we need a lockfile, or else we get an error of the
-        # form "cannot use a vendored dependency without an existing lockfile". This is a
-        # limitation in cargo 1.58 (and probably later) which they apparently decided to
-        # fob off on us users.
-        cp ${lockFile} Cargo.lock
-        pushd fuzz/
-        cargo hfuzz run "${fuzzTarget}"
-        popd
-
-        touch $out
-      '';
-    };
-    fuzzHonggfuzzDrv = overlaidPkgs.linkFarm
-      "${projectName}-${src.shortId}-fuzz"
-      (map (x: rec {
-        name = "fuzz-${path.name}";
-        path = singleFuzzHonggfuzzDrv x;
-      }) fuzzTargets);
-    in fuzzHonggfuzzDrv;
 
   # Derivation that runs cargo-fuzz on a series of targets found in fuzz/Cargo.toml.
   cargoFuzzLibfuzzerDrv = {
