@@ -901,7 +901,7 @@ rec {
         # cargo-fuzz needs a nightly compiler to run since it invokes rustc with -Z
         # Pick an arbitrary nightly; don't blindly use latest because that'll be unreliable. But
         # it's probably worth updating this pin from time to time.
-        (overlaidPkgs.rust-bin.fromRustupToolchain { channel = "nightly-2025-03-20"; })
+        (overlaidPkgs.rust-bin.fromRustupToolchain { channel = "nightly-2025-09-05"; })
         overlaidPkgs.cargo-fuzz
       ];
 
