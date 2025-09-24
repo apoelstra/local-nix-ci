@@ -10,6 +10,10 @@ import ./rust.check-pr.nix {
       rev = secp256k1RevFile;
     };
 
+    # 2025-09: see if patching the test RNG to be more deterministic will solve
+    #  our flaky test problems
+    patches = [ ./patches/rust-secp.patch ];
+
     extraTestPostRun = { workspace, secp256k1Src, ... }:
       if workspace == "secp256k1-sys"
       then ''
