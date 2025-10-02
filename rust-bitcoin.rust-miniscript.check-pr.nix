@@ -12,7 +12,7 @@ in import ./rust.check-pr.nix {
     # Miniscript 12 and lower have a required no-std feature.
     # Note: `cargoToml` is not used directly but is required by `utils.featuresForSrc`,
     #  and if we don't list it then `matrix` might not provide it.
-    needsNoStd = { mainMajorRev, ... }: builtins.compareVersions mainMajorRev "11.0" < 0;
+    needsNoStd = { mainMajorRev, ... }: builtins.compareVersions mainMajorRev "12.0" < 0;
     
     # In 10.x we also have an "unstable" nightly-only feature.
     features = { cargoToml, rustc, mainMajorRev, ... } @ args:
