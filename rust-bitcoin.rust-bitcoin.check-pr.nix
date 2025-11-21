@@ -23,8 +23,13 @@ in import ./rust.check-pr.nix {
       } { inherit src cargoToml needsNoStd; }
       else utils.featuresForSrc { } { inherit src cargoToml needsNoStd; };
 
-    extraTestPostRun = { workspace, needsNoStd, ... }:
-    lib.optionalString (! needsNoStd && workspace == ".") ''
+    extraTestPostRunTopLevel = { workspace, needsNoStd, ... }:
+    lib.optionalString (! needsNoStd && workspace == "bitcoin") ''
+      CHECKDIR=$(mktemp -d)
+      cp -r . "$CHECKDIR"
+      chmod +w -R "$CHECKDIR"
+      pushd "$CHECKDIR"
+
       cp fuzz/Cargo.toml old-Cargo.toml
       cp .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
 
@@ -37,6 +42,8 @@ in import ./rust.check-pr.nix {
 
       diff fuzz/Cargo.toml old-Cargo.toml
       diff .github/workflows/cron-daily-fuzz.yml old-daily-fuzz.yml
+
+      popd
     '';
   };
 }

@@ -686,6 +686,7 @@ rec {
     # We have some should_panic tests in rust-bitcoin that fail in release mode
     , releaseMode ? false
     , extraTestPostRun ? ""
+    , extraTestPostRunTopLevel ? ""
     , ...
     }:
     generatedCargoNix:
@@ -767,7 +768,7 @@ rec {
             cargo fmt --all -- --check
           '' + lib.optionalString (runFuzz && rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
             echo "Ran fuzztests (cargo-fuzz): ${fuzzLibfuzzerDrv}"
-          '' + ''
+          '' + extraTestPostRunTopLevel + ''
             popd
           '' + extraTestPostRun;
         };
