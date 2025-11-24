@@ -23,8 +23,9 @@ in import ./rust.check-pr.nix {
       } { inherit src cargoToml needsNoStd; }
       else utils.featuresForSrc { } { inherit src cargoToml needsNoStd; };
 
-    extraTestPostRunTopLevel = { workspace, needsNoStd, ... }:
-    lib.optionalString (! needsNoStd && workspace == "bitcoin") ''
+    extraTestPostRunTopLevel = { workspace, needsNoStd, msrv, ... }:
+    # FIXME remove the msrv requirement by fixing generate-files.sh on backport branches
+    lib.optionalString (msrv >= "1.63.0" && ! needsNoStd && workspace == "bitcoin") ''
       CHECKDIR=$(mktemp -d)
       cp -r . "$CHECKDIR"
       chmod +w -R "$CHECKDIR"
