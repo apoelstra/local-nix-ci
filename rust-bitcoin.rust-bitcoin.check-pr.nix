@@ -24,8 +24,9 @@ in import ./rust.check-pr.nix {
       else utils.featuresForSrc { } { inherit src cargoToml needsNoStd; };
 
     extraTestPostRunTopLevel = { workspace, needsNoStd, msrv, ... }:
-    # FIXME remove the msrv requirement by fixing generate-files.sh on backport branches
-    lib.optionalString (msrv >= "1.63.0" && ! needsNoStd && workspace == "bitcoin") ''
+    # FIXME remove the msrv requirement by fixing generate-files.sh on backport branches;
+    # remove the "false" by just waiting a week or two for all PRs to be based on fixed commit.
+    lib.optionalString (false && msrv >= "1.63.0" && ! needsNoStd && workspace == "bitcoin") ''
       CHECKDIR=$(mktemp -d)
       cp -r . "$CHECKDIR"
       chmod +w -R "$CHECKDIR"
