@@ -5,6 +5,7 @@ in import ./rust.check-pr.nix {
   fullMatrixOverride = {
     # No clippy.toml; manually set MSRV
     rustc = { src, ... }: utils.rustcsForSrc { inherit src; msrvVersion = "1.78.0"; };
+    runDocs = false; # broken by https://github.com/rust-lang/rust/pull/138907
     # cargo test --doc fails with "error: no library targets"
     docTestCmd = "";
     # 2024-08-24 -- triggers on DisplayInner, which is used in merkle.rs, which stopped
