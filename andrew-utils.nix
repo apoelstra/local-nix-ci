@@ -301,8 +301,8 @@ rec {
       then mainCargoToml
       else lib.trivial.importTOML "${src.src}/${workspace}/Cargo.toml";
 
-    msrv = { src, ...}: if src.cargoToml ? package && src.cargoToml.package ? rust-version
-        then src.cargoToml.package.rust-version
+    msrv = { src, cargoToml, ...}: if cargoToml ? package && cargoToml.package ? rust-version
+        then cargoToml.package.rust-version
         else if src.clippyToml != null && src.clippyToml ? msrv
         then src.clippyToml.msrv
         else builtins.trace "warning - no clippy.toml, using 1.56.1 as MSRV" "1.56.1";
