@@ -760,10 +760,10 @@ rec {
           '' + lib.optionalString runDocs ''
             # Do nightly "broken links" check
             export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
-            cargo doc -j1 --all-features
-            # Do non-docsrs check that our docs are feature-gated correctly.
+            cargo doc -j1 --all-features --no-deps
+            # Do non-docsrs check
             export RUSTDOCFLAGS="-D warnings"
-            cargo doc -j1 --all-features
+            cargo doc -j1 --all-features --no-deps
           '' + lib.optionalString runFmt ''
             cargo fmt --all -- --check
           '' + lib.optionalString (runFuzz && rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
