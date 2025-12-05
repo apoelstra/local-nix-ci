@@ -284,6 +284,85 @@ echo "- Push the new tags to the remote repository"
 echo "- Run 'cargo publish -p <package>' for each package"
 echo "- Post a GitHub comment 'Tagged and published.'"
 echo ""
+
+# If there are multiple packages, ask about publishing order
+publish_order=("${packages_to_tag[@]}")
+if [[ ${#packages_to_tag[@]} -gt 1 ]]; then
+    echo "Multiple packages detected. You may need to specify a publishing order"
+    echo "if there are dependencies between them."
+    echo ""
+    echo "Current packages to publish:"
+    for i in "${!packages_to_tag[@]}"; do
+        package_name=$(echo "${packages_to_tag[$i]}" | cut -d' ' -f1)
+        echo "$((i+1)). $package_name"
+    done
+    echo ""
+    echo "Do you want to specify a custom publishing order?"
+    read -p "Type YES to specify custom order, or anything else to use default order: " order_confirmation
+
+    if [[ "$order_confirmation" == "YES" ]]; then
+        echo ""
+        echo "Please specify the publishing order by entering package numbers separated by spaces."
+        echo "For example, to publish package 2 first, then 1, then 3, enter: 2 1 3"
+        echo ""
+        read -p "Enter publishing order: " order_input
+
+        # Parse the order input
+        order_array=($order_input)
+        new_publish_order=()
+
+        # Validate the order input
+        valid_order=true
+        for num in "${order_array[@]}"; do
+            if ! [[ "$num" =~ ^[1-9][0-9]*$ ]] || [[ $num -gt ${#packages_to_tag[@]} ]] || [[ $num -lt 1 ]]; then
+                echo "Error: Invalid package number: $num" >&2
+                valid_order=false
+                break
+            fi
+        done
+
+        # Check that all packages are included exactly once
+        if [[ $valid_order == true ]]; then
+            if [[ ${#order_array[@]} -ne ${#packages_to_tag[@]} ]]; then
+                echo "Error: You must specify exactly ${#packages_to_tag[@]} package numbers" >&2
+                valid_order=false
+            else
+                # Check for duplicates
+                sorted_order=($(printf '%s\n' "${order_array[@]}" | sort -n))
+                for i in "${!sorted_order[@]}"; do
+                    expected=$((i+1))
+                    if [[ ${sorted_order[$i]} -ne $expected ]]; then
+                        echo "Error: Each package number must appear exactly once" >&2
+                        valid_order=false
+                        break
+                    fi
+                done
+            fi
+        fi
+
+        if [[ $valid_order == false ]]; then
+            echo "Publishing cancelled due to invalid order specification." >&2
+            exit 1
+        fi
+
+        # Build the new publish order
+        for num in "${order_array[@]}"; do
+            index=$((num-1))
+            new_publish_order+=("${packages_to_tag[$index]}")
+        done
+
+        publish_order=("${new_publish_order[@]}")
+
+        echo ""
+        echo "Publishing order set to:"
+        for i in "${!publish_order[@]}"; do
+            package_name=$(echo "${publish_order[$i]}" | cut -d' ' -f1)
+            echo "$((i+1)). $package_name"
+        done
+    fi
+fi
+
+echo ""
 read -p "Type YES to proceed with publishing: " publish_confirmation
 
 if [[ "$publish_confirmation" != "YES" ]]; then
@@ -307,14 +386,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-jj workspace add -r "$commit_id" --name "check-and-sign" "$tmpdir/$commit_id" 
+jj workspace add -r "$commit_id" --name "check-and-sign" "$tmpdir/$commit_id"
 
 # Publish from workspace directory.
 (
     cd "$tmpdir/$commit_id"
     echo ""
-    echo "Publishing packages..."
-    for package_info in "${packages_to_tag[@]}"; do
+    echo "Publishing packages in specified order..."
+    for package_info in "${publish_order[@]}"; do
         package_name=$(echo "$package_info" | cut -d' ' -f1)
         echo "Publishing package: $package_name"
         if ! cargo publish -p "$package_name"; then
