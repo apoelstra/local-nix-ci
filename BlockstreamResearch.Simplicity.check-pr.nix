@@ -73,11 +73,24 @@ let
                 diff "precomputed.h" ${sourceDir}/C/precomputed.h
                 rm "precomputed.h"
 
-                ./dist/build/GenPrimitive/GenPrimitive
-                for inc in *.inc; do
-                    diff "$inc" "${sourceDir}/C/elements/$inc"
-                done
-                rm ./*.inc
+                if ./dist/build/GenPrimitive/GenPrimitive; then
+                  for inc in *.inc; do
+                      diff "$inc" "${sourceDir}/C/elements/$inc"
+                  done
+                  rm ./*.inc
+                else
+                  ./dist/build/GenPrimitive/GenPrimitive --elements
+                  for inc in *.inc; do
+                      diff "$inc" "${sourceDir}/C/elements/$inc"
+                  done
+                  rm ./*.inc
+
+                  ./dist/build/GenPrimitive/GenPrimitive --bitcoin
+                  for inc in *.inc; do
+                      diff "$inc" "${sourceDir}/C/bitcoin/$inc"
+                  done
+                  rm ./*.inc
+                fi
 
                 #./dist/build/GenRustJets/GenRustJets # Output not committed anywhere
                 ./dist/build/GenTests/GenTests
@@ -99,6 +112,9 @@ let
                         ;;
                     decodeElementsJets.inc)
                         diff "$inc" "${sourceDir}/C/elements/$inc"
+                        ;;
+                    decodeBitcoinJets.inc)
+                        diff "$inc" "${sourceDir}/C/bitcoin/$inc"
                         ;;
                     *)
                         echo "Unexpected output $inc from GenDecodeJet"
