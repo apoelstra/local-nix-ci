@@ -233,7 +233,7 @@ case "$ARG_COMMAND" in
         PR_UUID=$(tw_upsert "${PR_FILTER[@]}" -- "${PR_UPSERT[@]}")
 
         # Now handle individual commit tasks
-        echo "Processing commits for PR $pr_num..."
+        COMMIT_UUIDS=()
         while IFS= read -r commit_id; do
             if [ -n "$commit_id" ]; then
                 COMMIT_FILTER=(
@@ -245,6 +245,7 @@ case "$ARG_COMMAND" in
                     "description:Commit $commit_id"
                 )
                 COMMIT_UUID=$(tw_upsert "${COMMIT_FILTER[@]}" -- "${COMMIT_UPSERT[@]}")
+                COMMIT_UUIDS+=("$COMMIT_UUID")
                 task "$PR_UUID" modify "depends:$COMMIT_UUID"
             fi
         done <<< "$PR_COMMITS"
@@ -254,13 +255,96 @@ case "$ARG_COMMAND" in
         fi
         
         echo "Finished processing PR $pr_num. Task UUID $PR_UUID"
+        echo
+        
+        # Display PR information
+        echo "=== PR #$pr_num: $PR_TITLE ==="
+        echo "Author: $PR_AUTHOR"
+        
+        # Get PR review status
+        PR_REVIEW_STATUS=$(task "$PR_UUID" export | jq -r '.[0].review_status // "unreviewed"')
+        echo "PR Review Status: $PR_REVIEW_STATUS"
+        echo
+        
+        # Display commit information
+        echo "=== Commits ==="
+        
+        HAS_NACKED_COMMIT=false
+        HAS_APPROVED_COMMIT=false
+        
+        while IFS= read -r commit_uuid; do
+            if [ -n "$commit_uuid" ]; then
+                COMMIT_DATA=$(task "$commit_uuid" export | jq -r '.[0]')
+                COMMIT_ID=$(echo "$COMMIT_DATA" | jq -r '.commit_id // ""')
+                COMMIT_REVIEW_STATUS=$(echo "$COMMIT_DATA" | jq -r '.review_status // "unreviewed"')
+                COMMIT_CI_STATUS=$(echo "$COMMIT_DATA" | jq -r '.ci_status // "unstarted"')
+                IS_TIP=$(echo "$COMMIT_DATA" | jq -r '.tags // [] | contains(["TIP_COMMIT"])')
+                
+                echo -n "  $COMMIT_ID (review: $COMMIT_REVIEW_STATUS"
+                
+                if [ "$COMMIT_REVIEW_STATUS" = "approved" ]; then
+                    echo -n ", ci: $COMMIT_CI_STATUS"
+                    HAS_APPROVED_COMMIT=true
+                fi
+                
+                if [ "$COMMIT_REVIEW_STATUS" = "nacked" ]; then
+                    HAS_NACKED_COMMIT=true
+                fi
+                
+                if [ "$IS_TIP" = "true" ]; then
+                    echo -n ", TIP"
+                fi
+                
+                echo ")"
+            fi
+        done <<< "$COMMIT_UUIDS"
+        
+        echo
+        
+        # Provide suggestions based on review status
+        if [ "$HAS_NACKED_COMMIT" = "true" ] && [ "$PR_REVIEW_STATUS" != "nacked" ]; then
+            echo "⚠️  Note: Some commits are nacked but the PR is not nacked."
+            echo "   Consider nacking the PR with: $0 pr nack $pr_num"
+            echo
+        fi
         ;;
     run)
         run "${ARG_COMMAND_ARGS[@]}"
         ;;
+    nack)
+        # Handle PR nack command
+        pr_num="${ARG_COMMAND_ARGS[0]:-}"
+        case $pr_num in
+            '')
+                echo "PR number is required by nack command"
+                exit 1
+                ;;
+            *[!0-9]*)
+                echo "PR number must be a number, not $pr_num"
+                exit 1
+                ;;
+        esac
+        
+        locate_repo
+        PR_FILTER=(
+            "project:local-ci.$PROJECT"
+            "pr_number:$pr_num"
+            commit_id:
+        )
+        PR_UUID=$(tw_unique_uuid "${PR_FILTER[@]}")
+        if [ -z "$PR_UUID" ]; then
+            echo "PR #$pr_num not found in task database"
+            exit 1
+        fi
+        
+        task "$PR_UUID" modify "review_status:nacked"
+        echo "PR #$pr_num marked as nacked"
+        ;;
     *)
         echo "Usage:"
         echo "   $0 list"
+        echo "   $0 pr <number>"
+        echo "   $0 nack <number>"
         exit 1
         ;;
 esac
