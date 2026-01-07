@@ -1,75 +1,143 @@
 # Should be sourced from local-ci.sh.
 # Not intended to be run directly.
 
-run() {
+run_ci_loop() {
     local backoff_sec=30
     local sleep_sec=$backoff_sec # trigger warning/status update on first iteration
     local filter=(project:local-ci claimedby: or "claimedby:$HOSTNAME")
 
+    local busy=false
+    local warnings=()
+
     while true; do
-        local busy=false
-        local warnings=()
+        # Find next approved commit that needs CI
+        local next_commit_uuid=$(task "review_status:approved" "ci_status:unstarted" "commit_id.any:" export | jq -r '.[0].uuid // empty')
 
-        # 1. First, instantiate anything that is uninstantiated.
-        local unstarted
-        while IFS= read -d $'\0' -r unstarted; do
-            # FIXME because instantiation is mostly single-threaded, and in this case
-            #  takes a very long time due to IFD, we should background these and only
-            #  block if there are more than 4 of them (say) running.
-            local project=$(echo "$unstarted" | jq -r .project)
-            local git_dir=$(echo "$unstarted" | jq -r .repo_root)
-            local commit_id=$(echo "$unstarted" | jq -r .commit_id)
-            local pr_number=$(echo "$unstarted" | jq -r .pr_number) # may be null
-
-            # Compute nixfile path
-            local nixfile_path="$(
-                echo "$project" | sed "s#^local-ci.#$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/#"
-            )".check-pr.nix
-            if ! [ -f "$nixfile_path" ]; then
-                warnings+=("Skipped job with project $project since nixfile path is not found: $nixfile_path'")
-                continue
-            fi
-            
-            echo "Task: $project";
-
-            nix-instantiate \
-                --arg inlineJsonConfig "{ gitDir = $git_dir; projectName = \"$project\"; }" \
-                --arg inlineCommitList "[ \"$commit_id\" ]" \
-                --argstr prNum "$pr_number" \
-                "$nixfile_path"
-
-        done < <(
-            task "${filter[@]}" ci_status:unstarted derivation: export | \
-                jq --raw-output0 -c '.[]'
-        )
-
-        # Done work. If we did something, reset the sleep counter and
-        # loop around. If we did nothing, sleep and periodically
-        # output a "nothing to do" message.
-        if [ "$busy" != "false" ]; then
-            backoff_sec=30
-            sleep_sec=1
-        else
-            sleep 1
-            ((sleep_sec++))
-
-            if [ "$sleep_sec" -ge "$backoff_sec" ]; then
-                # Will max out at 480, 960, 1920, etc., whichever is greater than
-                # the number written here. (64 minutes apparently.)
-                if [ "$backoff_sec" -lt 2400 ]; then
-                    backoff_sec=$((backoff_sec * 2))
-                    sleep_sec=0
-                fi
-
-                echo "([$(date +"%F %T")] Nothing to do. (Next message in $((backoff_sec / 60)) minutes.)"
-                if [ ${#warnings[@]} -gt 0 ]; then
-                    echo "Current warnings:" >&2
-                    for warning in "${warnings[@]}"; do
-                        echo "    $warning"
-                    done
-                fi
+        if [ -z "$next_commit_uuid" ]; then
+            # Done work. If we did something, reset the sleep counter and
+            # loop around. If we did nothing, sleep and periodically
+            # output a "nothing to do" message.
+            if [ "$busy" != "false" ]; then
+                backoff_sec=30
                 sleep_sec=1
+            else
+                sleep 1
+                ((sleep_sec++))
+
+                if [ "$sleep_sec" -ge "$backoff_sec" ]; then
+                    # Will max out at 480, 960, 1920, etc., whichever is greater than
+                    # the number written here. (64 minutes apparently.)
+                    if [ "$backoff_sec" -lt 2400 ]; then
+                        backoff_sec=$((backoff_sec * 2))
+                        sleep_sec=0
+                    fi
+
+                    echo "([$(date +"%F %T")] Nothing to do. (Next message in $((backoff_sec / 60)) minutes.)"
+                    if [ ${#warnings[@]} -gt 0 ]; then
+                        echo "Current warnings:" >&2
+                        for warning in "${warnings[@]}"; do
+                            echo "    $warning"
+                        done
+                        echo "(You need to Ctrl+C and restart local-ci.sh run to reset the warnings.)" >&2
+                    fi
+                    sleep_sec=1
+                fi
             fi
+            busy=false
+            continue
         fi
+        busy=true
+
+        # Get commit details
+        local commit_data=$(task "$next_commit_uuid" export | jq -r '.[0]')
+        local commit_id=$(echo "$commit_data" | jq -r '.commit_id')
+        local repo_root=$(echo "$commit_data" | jq -r '.repo_root')
+        local project=$(echo "$commit_data" | jq -r '.project')
+        
+        echo "Processing commit $commit_id from project $project"
+        
+        # Mark as started
+        task "$next_commit_uuid" modify "ci_status:started"
+        
+        # Change to repo directory
+        pushd "$repo_root" > /dev/null
+        
+        # Determine nixfile path based on project
+        local nixfile_path="$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/${project}.check-pr.nix"
+        if [ ! -f "$nixfile_path" ]; then
+            continue
+        fi
+        # Compute nixfile path
+        local nixfile_path="$(
+            echo "$project" | sed "s#^local-ci.#$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/#"
+        )".check-pr.nix
+        if ! [ -f "$nixfile_path" ]; then
+            warnings+=("Failing job for $commit_id with project $project since nixfile path is not found: $nixfile_path'")
+            task "$next_commit_uuid" modify "ci_status:failed"
+            popd > /dev/null
+            continue
+        fi
+        
+        # Check out local CI
+        pushd "$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE" > /dev/null
+        git reset --hard "$LOCAL_CI_COMMIT_ID"
+        if [ -n "$LOCAL_CI_DIFF" ]; then
+            echo "$LOCAL_CI_DIFF" | git apply --allow-empty
+        fi
+        popd > /dev/null
+        
+        # Build commit string for nix
+        local is_tip=$(task "$next_commit_uuid" export | jq -r '.[0].tags // [] | contains(["TIP_COMMIT"])')
+        local commit_str="{
+            commit = \"$commit_id\";
+            isTip = $is_tip;
+            gitUrl = \"$(git rev-parse --git-dir)\";
+            cargoNixes = {};
+        }"
+        
+        # Try to instantiate derivation
+        local derivation_path
+        if derivation_path=$(nix-instantiate \
+            --arg inlineJsonConfig "{ gitDir = \"$(git rev-parse --git-dir)\"; projectName = \"$project\"; }" \
+            --arg inlineCommitList "[ $commit_str ]" \
+            --argstr prNum "" \
+            "$nixfile_path" 2>/dev/null)
+        then
+            echo "Instantiated derivation: $derivation_path"
+            task "$next_commit_uuid" modify "derivation:$derivation_path"
+        else
+            echo "Failed to instantiate derivation for commit $commit_id"
+            task "$next_commit_uuid" modify "ci_status:failed"
+            popd > /dev/null
+            continue
+        fi
+        
+        # Build the derivation
+        echo "Building derivation for commit $commit_id..."
+        if nix-build \
+            --builders-use-substitutes \
+            --no-build-output \
+            --no-out-link \
+            --keep-failed \
+            --keep-derivations \
+            --keep-outputs \
+            --log-lines 100 \
+            "$derivation_path" \
+            --log-format internal-json -v \
+            2> >(nom --json 2>/dev/null || cat >&2)
+        then
+            echo "Build succeeded for commit $commit_id"
+            task "$next_commit_uuid" modify "ci_status:success"
+            
+            # Check if all commits in related PRs are now successful
+            check_and_approve_prs "$next_commit_uuid"
+        else
+            echo "Build failed for commit $commit_id"
+            task "$next_commit_uuid" modify "ci_status:failed"
+        fi
+        
+        popd > /dev/null
+        echo "Finished processing commit $commit_id"
+        echo
     done
 }

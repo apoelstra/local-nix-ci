@@ -34,7 +34,7 @@ verbose=
 # status in local CI system
 uda.ci_status.type=string
 uda.ci_status.label=Local CI Status
-uda.ci_status.values=unstarted,needsig,success,failed
+uda.ci_status.values=unstarted,started,needsig,success,failed
 uda.ci_status.default=unstarted
 uda.derivation.type=string
 uda.derivation.label=Top-level derivation for commit CI run

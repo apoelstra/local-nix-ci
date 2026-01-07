@@ -150,6 +150,62 @@ tw_upsert() {
     echo "$uuid"
 }
 
+check_and_approve_prs() {
+    local commit_uuid="$1"
+    
+    # Find PRs that depend on this commit
+    local pr_uuids=$(task "depends:$commit_uuid" export | jq -r '.[] | select(.pr_number) | .uuid')
+    
+    while IFS= read -r pr_uuid; do
+        if [ -n "$pr_uuid" ]; then
+            local pr_data=$(task "$pr_uuid" export | jq -r '.[0]')
+            local pr_number=$(echo "$pr_data" | jq -r '.pr_number')
+            local pr_review_status=$(echo "$pr_data" | jq -r '.review_status // "unreviewed"')
+            local repo_root=$(echo "$pr_data" | jq -r '.repo_root')
+            
+            # Only proceed if PR is approved
+            if [ "$pr_review_status" != "approved" ]; then
+                continue
+            fi
+            
+            # Get all commits for this PR
+            local all_commits_successful=true
+            local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+            
+            while IFS= read -r commit_uuid_check; do
+                if [ -n "$commit_uuid_check" ]; then
+                    local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
+                    if [ "$commit_ci_status" != "success" ]; then
+                        all_commits_successful=false
+                        break
+                    fi
+                fi
+            done <<< "$commit_uuids"
+            
+            # If all commits successful and PR is approved, post approval on GitHub
+            if [ "$all_commits_successful" = "true" ]; then
+                echo "All commits in PR #$pr_number are successful and PR is approved. Posting GitHub approval..."
+                
+                # Get tip commit for the approval message
+                local tip_commit=$(task "depends:$pr_uuid" "+TIP_COMMIT" export | jq -r '.[0].commit_id // empty')
+                if [ -z "$tip_commit" ]; then
+                    # Fallback: get any commit from the PR
+                    tip_commit=$(echo "$commit_uuids" | head -n1 | xargs -I {} task {} export | jq -r '.[0].commit_id')
+                fi
+                
+                pushd "$repo_root" > /dev/null
+                if gh pr review "$pr_number" -a -b "ACK $tip_commit; successfully ran local tests"; then
+                    echo "Successfully posted approval for PR #$pr_number"
+                else
+                    echo "Failed to post approval for PR #$pr_number - posting comment instead"
+                    gh pr review "$pr_number" -c -b "On $tip_commit successfully ran local tests"
+                fi
+                popd > /dev/null
+            fi
+        fi
+    done <<< "$pr_uuids"
+}
+
 ####
 # Main logic
 ####
@@ -309,7 +365,11 @@ case "$ARG_COMMAND" in
         fi
         ;;
     run)
-        run "${ARG_COMMAND_ARGS[@]}"
+        # Reset any "started" jobs to "unstarted" (previous instance likely crashed)
+        echo "Resetting any 'started' jobs to 'unstarted'..."
+        task "ci_status:started" modify "ci_status:unstarted" || echo "(none updated)"
+        
+        run_ci_loop
         ;;
     nack)
         # Handle PR nack command
