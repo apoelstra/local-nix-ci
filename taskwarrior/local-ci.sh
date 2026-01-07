@@ -327,6 +327,7 @@ case "$ARG_COMMAND" in
         
         HAS_NACKED_COMMIT=false
         HAS_APPROVED_COMMIT=false
+        HAS_FAILED_CI=false
         
         while IFS= read -r commit_uuid; do
             if [ -n "$commit_uuid" ]; then
@@ -347,6 +348,10 @@ case "$ARG_COMMAND" in
                     HAS_NACKED_COMMIT=true
                 fi
                 
+                if [ "$COMMIT_CI_STATUS" = "failed" ]; then
+                    HAS_FAILED_CI=true
+                fi
+                
                 if [ "$IS_TIP" = "true" ]; then
                     echo -n ", TIP"
                 fi
@@ -361,6 +366,12 @@ case "$ARG_COMMAND" in
         if [ "$HAS_NACKED_COMMIT" = "true" ] && [ "$PR_REVIEW_STATUS" != "nacked" ]; then
             echo "⚠️  Note: Some commits are nacked but the PR is not nacked."
             echo "   Consider nacking the PR with: $0 pr nack $pr_num"
+            echo
+        fi
+        
+        if [ "$HAS_FAILED_CI" = "true" ]; then
+            echo "⚠️  Note: Some commits have failed CI status."
+            echo "   To restart CI for a commit, use: $0 commit <commit_id> reset-ci"
             echo
         fi
         ;;
@@ -401,9 +412,15 @@ case "$ARG_COMMAND" in
         echo "PR #$pr_num marked as nacked"
         ;;
     commit)
-        # Handle commit review command
-        if [ "${#ARG_COMMAND_ARGS[@]}" -lt 2 ] || [ "${ARG_COMMAND_ARGS[1]}" != "review" ]; then
-            echo "Usage: $0 commit <commit_id> review"
+        # Handle commit commands
+        if [ "${#ARG_COMMAND_ARGS[@]}" -lt 2 ]; then
+            echo "Usage: $0 commit <commit_id> {review|reset-ci}"
+            exit 1
+        fi
+        
+        subcommand="${ARG_COMMAND_ARGS[1]}"
+        if [ "$subcommand" != "review" ] && [ "$subcommand" != "reset-ci" ]; then
+            echo "Usage: $0 commit <commit_id> {review|reset-ci}"
             exit 1
         fi
         
@@ -433,7 +450,14 @@ case "$ARG_COMMAND" in
         )
         COMMIT_UUID=$(tw_upsert "${COMMIT_FILTER[@]}" -- "${COMMIT_UPSERT[@]}")
         
-        # Get current review status
+        if [ "$subcommand" = "reset-ci" ]; then
+            # Reset CI status to unstarted
+            task "$COMMIT_UUID" modify "ci_status:unstarted"
+            echo "CI status for commit $FULL_COMMIT_ID reset to unstarted"
+            exit 0
+        fi
+        
+        # Get current review status (for review command)
         CURRENT_STATUS=$(task "$COMMIT_UUID" export | jq -r '.[0].review_status // "unreviewed"')
         
         while true; do
@@ -529,6 +553,7 @@ case "$ARG_COMMAND" in
         echo "   $0 pr <number>"
         echo "   $0 nack <number>"
         echo "   $0 commit <commit_id> review"
+        echo "   $0 commit <commit_id> reset-ci"
         exit 1
         ;;
 esac
