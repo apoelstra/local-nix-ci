@@ -63,6 +63,8 @@ uda.review_status.type=string
 uda.review_status.label=Review Status
 uda.review_status.values=unreviewed,needschange,nacked,approved
 uda.review_status.default=unreviewed
+uda.review_notes.type=string
+uda.review_notes.label=Review Notes
  
 # Reports
 report.list.description=Default Task List

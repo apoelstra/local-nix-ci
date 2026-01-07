@@ -340,11 +340,135 @@ case "$ARG_COMMAND" in
         task "$PR_UUID" modify "review_status:nacked"
         echo "PR #$pr_num marked as nacked"
         ;;
+    commit)
+        # Handle commit review command
+        if [ "${#ARG_COMMAND_ARGS[@]}" -lt 2 ] || [ "${ARG_COMMAND_ARGS[1]}" != "review" ]; then
+            echo "Usage: $0 commit <commit_id> review"
+            exit 1
+        fi
+        
+        commit_id="${ARG_COMMAND_ARGS[0]:-}"
+        if [ -z "$commit_id" ]; then
+            echo "Commit ID is required"
+            exit 1
+        fi
+        
+        locate_repo
+        
+        # Resolve short commit ID to full commit ID
+        FULL_COMMIT_ID=$(git rev-parse "$commit_id" 2>/dev/null || echo "")
+        if [ -z "$FULL_COMMIT_ID" ]; then
+            echo "Invalid commit ID: $commit_id"
+            exit 1
+        fi
+        
+        # Create/find commit task
+        COMMIT_FILTER=(
+            "project:local-ci.$PROJECT"
+            "commit_id:$FULL_COMMIT_ID"
+        )
+        COMMIT_UPSERT=(
+            "repo_root:$REPO_ROOT"
+            "description:Commit $FULL_COMMIT_ID"
+        )
+        COMMIT_UUID=$(tw_upsert "${COMMIT_FILTER[@]}" -- "${COMMIT_UPSERT[@]}")
+        
+        # Get current review status
+        CURRENT_STATUS=$(task "$COMMIT_UUID" export | jq -r '.[0].review_status // "unreviewed"')
+        
+        while true; do
+            echo
+            echo "=== Reviewing commit $FULL_COMMIT_ID ==="
+            echo "Current review status: $CURRENT_STATUS"
+            echo
+            
+            # Show git diff
+            echo "--- Git diff ---"
+            git show "$FULL_COMMIT_ID"
+            echo
+            
+            # Show PRs containing this commit
+            echo "--- PRs containing this commit ---"
+            PR_TASKS=$(task "project:local-ci.$PROJECT" "depends:$COMMIT_UUID" export 2>/dev/null || echo "[]")
+            if [ "$PR_TASKS" != "[]" ]; then
+                echo "$PR_TASKS" | jq -r '.[] | "  PR #" + (.pr_number | tostring) + ": " + .pr_title + " (by " + .pr_author + ")"'
+                
+                # Check if this is the tip commit for any PRs
+                IS_TIP=$(task "$COMMIT_UUID" export | jq -r '.[0].tags // [] | contains(["TIP_COMMIT"])')
+                if [ "$IS_TIP" = "true" ]; then
+                    echo "  ⚠️  This is a tip commit for at least one of the above PR(s)"
+                fi
+                echo
+                echo "  Note: Remember to review the PR(s) separately from individual commits."
+            else
+                echo "  No PRs found containing this commit."
+            fi
+            echo
+            
+            # Prompt for action
+            echo "What would you like to do?"
+            echo "1) Approve"
+            echo "2) NACK"
+            echo "3) Needs Change"
+            echo "4) Erase review (mark unreviewed)"
+            echo "5) Re-view diff"
+            echo "6) Cancel"
+            read -p "Choice (1-6): " choice
+            
+            case "$choice" in
+                1) NEW_STATUS="approved" ;;
+                2) NEW_STATUS="nacked" ;;
+                3) NEW_STATUS="needschange" ;;
+                4) NEW_STATUS="unreviewed" ;;
+                5)
+                    # Continue loop to re-show diff
+                    continue
+                    ;;
+                6)
+                    echo "Review cancelled."
+                    break
+                    ;;
+                *)
+                    echo "Invalid choice. Please select 1-6."
+                    continue
+                    ;;
+            esac
+                    
+            # Open editor for review notes
+            TEMP_FILE=$(mktemp)
+            EDITOR_CMD="${EDITOR:-vim}"
+            
+            # Populate temp file with template
+            echo "# Enter your review here. Updated review status: $NEW_STATUS" > "$TEMP_FILE"
+            
+            echo "Opening $EDITOR_CMD for review notes..."
+            if "$EDITOR_CMD" "$TEMP_FILE"; then
+                # Read review notes from temp file and remove comment lines
+                REVIEW_NOTES=$(grep -v '^#' "$TEMP_FILE" | sed '/^$/d')
+                rm "$TEMP_FILE"
+                
+                # Update task with new status and notes
+                task "$COMMIT_UUID" modify "review_status:$NEW_STATUS" "review_notes:$REVIEW_NOTES"
+                
+                echo "Commit $FULL_COMMIT_ID review status updated to: $NEW_STATUS"
+                if [ -n "$REVIEW_NOTES" ]; then
+                    echo "Review notes saved."
+                fi
+                break
+            else
+                # Editor failed (e.g. user typed :cq in vim)
+                rm "$TEMP_FILE"
+                echo "Editor exited with error. Review cancelled."
+                continue
+            fi
+        done
+        ;;
     *)
         echo "Usage:"
         echo "   $0 list"
         echo "   $0 pr <number>"
         echo "   $0 nack <number>"
+        echo "   $0 commit <commit_id> review"
         exit 1
         ;;
 esac
