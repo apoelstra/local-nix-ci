@@ -81,13 +81,48 @@ run_ci_loop() {
         fi
         popd > /dev/null
         
+        # Compute cargoNix for Rust projects
+        local cargo_nixes="{}"
+        local lockfiles=($(git ls-tree -r --name-only "$commit_id" | grep "Cargo\.lock$" || true))
+        
+        if [ ${#lockfiles[@]} -gt 0 ]; then
+            local cargo_nix_entries=()
+            for lockfile in "${lockfiles[@]}"; do
+                echo "Found Cargo.lock at $lockfile, generating Cargo.nix..."
+                local cargo_nix_path
+                if cargo_nix_path=$("$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/taskwarrior/create-cargo-nix.sh" "$(pwd)" "$commit_id" "$lockfile" 2>/dev/null); then
+                    local lockfile_key=$(echo "$lockfile" | sed 's/[^a-zA-Z0-9_]/_/g')
+                    cargo_nix_entries+=("\"$lockfile_key\" = \"$cargo_nix_path\"")
+                    echo "Generated Cargo.nix for $lockfile: $cargo_nix_path"
+                else
+                    echo "Failed to generate Cargo.nix for $lockfile"
+                    warnings+=("Failed to generate Cargo.nix for $lockfile in commit $commit_id")
+                    task "$next_commit_uuid" modify "ci_status:failed"
+                    popd > /dev/null
+                    continue 2
+                fi
+            done
+            
+            if [ ${#cargo_nix_entries[@]} -gt 0 ]; then
+                cargo_nixes="{ $(IFS='; '; echo "${cargo_nix_entries[*]}") }"
+            fi
+        fi
+        
+        # If we have Rust code but no lockfiles, that's an error
+        if [ ${#lockfiles[@]} -eq 0 ] && git ls-tree -r --name-only "$commit_id" | grep -q "Cargo\.toml$"; then
+            warnings+=("Failing job for $commit_id with project $project since Cargo.toml files found but no Cargo.lock files")
+            task "$next_commit_uuid" modify "ci_status:failed"
+            popd > /dev/null
+            continue
+        fi
+
         # Build commit string for nix
         local is_tip=$(task "$next_commit_uuid" export | jq -r '.[0].tags // [] | contains(["TIP_COMMIT"])')
         local commit_str="{
             commit = \"$commit_id\";
             isTip = $is_tip;
             gitUrl = \"$(git rev-parse --git-dir)\";
-            cargoNixes = {};
+            cargoNixes = $cargo_nixes;
         }"
         
         # Try to instantiate derivation
