@@ -62,11 +62,6 @@ run_ci_loop() {
         # Change to repo directory
         pushd "$repo_root" > /dev/null
         
-        # Determine nixfile path based on project
-        local nixfile_path="$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/${project}.check-pr.nix"
-        if [ ! -f "$nixfile_path" ]; then
-            continue
-        fi
         # Compute nixfile path
         local nixfile_path="$(
             echo "$project" | sed "s#^local-ci.#$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/#"
@@ -101,7 +96,7 @@ run_ci_loop() {
             --arg inlineJsonConfig "{ gitDir = \"$(git rev-parse --git-dir)\"; projectName = \"$project\"; }" \
             --arg inlineCommitList "[ $commit_str ]" \
             --argstr prNum "" \
-            "$nixfile_path" 2>/dev/null)
+            "$nixfile_path")
         then
             echo "Instantiated derivation: $derivation_path"
             task "$next_commit_uuid" modify "derivation:$derivation_path"
