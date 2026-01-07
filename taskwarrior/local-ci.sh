@@ -74,6 +74,82 @@ source ./queue.sh
 source ./run.sh
 popd > /dev/null
 
+###
+# Utility functions
+###
+
+# Sets the REPO_ROOT and PROJECT environment variables.
+locate_repo() {
+    # Use 'gh' to determine project name.
+    # FIXME we should have some fallbacks here.
+    PROJECT=$(gh repo view --json 'owner,name' --jq '.owner.login + "." + .name')
+    REPO_ROOT=$(git rev-parse --show-toplevel)
+
+    export REPO_ROOT
+    export PROJECT
+}
+
+tw_unique_uuid() {
+    if [[ $# -lt 2 ]]; then
+        echo "usage: tw_uuid <search filter...>" >&2
+        return 2
+    fi
+
+    shift
+    local uuids
+    local count
+    uuids=$(task $@ export | jq -r '.[].uuid // empty')
+    count=$(echo "$uuids" | wc -w)
+    if [ "$count" -gt 1 ]; then
+        echo "Error: Multiple UUIDs found for filter $@" >&2
+        echo "UUIDs: $uuids" >&2
+        exit 1
+    else
+        echo "$uuids" # either empty or a single UUID
+    fi
+}
+
+tw_upsert() {
+    if [[ $# -lt 2 ]]; then
+        echo "usage: tw_upsert <search filter...> -- <modify filter...>" >&2
+        return 2
+    fi
+
+    # Split args at the literal "--"
+    local -a filter modify
+    local saw_sep=0
+    for a in "$@"; do
+        if [[ $saw_sep -eq 0 && $a == "--" ]]; then
+            saw_sep=1
+            continue
+        fi
+        if [[ $saw_sep -eq 0 ]]; then
+            filter+=("$a")
+        else
+            modify+=("$a")
+        fi
+    done
+    if [[ $saw_sep -eq 0 ]]; then
+        echo "tw_upsert: missing '--' separator" >&2
+        return 2
+    fi
+
+    local uuid
+    uuid="$(tw_unique_uuid "${filter[@]}")"
+    if [ -z "$uuid" ]; then
+        # Create new task and capture its UUID.
+        uuid="$(task rc.verbose=new-uuid add "${filter[@]}" "${modify[@]}" rc.confirmation=off | sed -n 's/.*Created task \([0-9a-f-]\{36\}\).*/\1/p')"
+        if [[ -z $uuid ]]; then
+            echo "tw_upsert: failed to extract uuid from add output" >&2
+            return 1
+        fi
+    else
+        task rc.verbose=nothing "$uuid" modify "${modify[@]}"
+    fi
+
+    echo "$uuid"
+}
+
 ####
 # Main logic
 ####
@@ -118,6 +194,66 @@ case "$ARG_COMMAND" in
         ;;
     list)
         task list
+        ;;
+    pr)
+        # First, sanity-check the PR number
+        pr_num="${ARG_COMMAND_ARGS[0]:-}"
+        case $pr_num in
+            '')
+                echo "PR number is required by pr command"
+                exit 1
+                ;;
+            *[!0-9]*)
+                echo "PR number must be a number, not $pr_num"
+                exit 1
+                ;;
+        esac
+        
+        # Figure out where we are and query Github for the PR info.
+        locate_repo
+        JSON_DATA=$(gh pr view "$pr_num" --json commits,title,author | jq -c)
+        
+        # Extract PR data
+        PR_TITLE=$(echo "$JSON_DATA" | jq -r .title)
+        PR_AUTHOR=$(echo "$JSON_DATA" | jq -r .author.login)
+        PR_COMMITS=$(echo "$JSON_DATA" | jq -r '.commits[].oid')
+        
+        # Create/modify PR task.
+        PR_FILTER=(
+            "project:local-ci.$PROJECT"
+            "pr_number:$pr_num"
+            commit_id:
+        )
+        PR_UPSERT=(
+            "repo_root:$REPO_ROOT"
+            "pr_title:$PR_TITLE"
+            "pr_author:$PR_AUTHOR"
+            "description:PR #$pr_num: $PR_TITLE"
+        )
+        PR_UUID=$(tw_upsert "${PR_FILTER[@]}" -- "${PR_UPSERT[@]}")
+
+        # Now handle individual commit tasks
+        echo "Processing commits for PR $pr_num..."
+        while IFS= read -r commit_id; do
+            if [ -n "$commit_id" ]; then
+                COMMIT_FILTER=(
+                    "project:local-ci.$PROJECT"
+                    "commit_id:$commit_id"
+                )
+                COMMIT_UPSERT=(
+                    "repo_root:$REPO_ROOT"
+                    "description:Commit $commit_id"
+                )
+                COMMIT_UUID=$(tw_upsert "${COMMIT_FILTER[@]}" -- "${COMMIT_UPSERT[@]}")
+                task "$PR_UUID" modify "depends:$COMMIT_UUID"
+            fi
+        done <<< "$PR_COMMITS"
+
+        if [ -n "$COMMIT_UUID" ]; then
+            task "$COMMIT_UUID" modify +TIP_COMMIT
+        fi
+        
+        echo "Finished processing PR $pr_num. Task UUID $PR_UUID"
         ;;
     run)
         run "${ARG_COMMAND_ARGS[@]}"

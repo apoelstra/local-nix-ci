@@ -1,17 +1,6 @@
 # Should be sourced from local-ci.sh.
 # Not intended to be run directly.
 
-# Sets the REPO_ROOT and PROJECT environment variables.
-locate_repo() {
-    # Use 'gh' to determine project name.
-    # FIXME we should have some fallbacks here.
-    PROJECT=$(gh repo view --json 'owner,name' --jq '.owner.login + "." + .name')
-    REPO_ROOT=$(git rev-parse --show-toplevel)
-
-    export REPO_ROOT
-    export PROJECT
-}
-
 # Queue a run on a specific commit
 #
 # Arguments

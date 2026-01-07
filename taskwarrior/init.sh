@@ -35,6 +35,7 @@ verbose=
 uda.ci_status.type=string
 uda.ci_status.label=Local CI Status
 uda.ci_status.values=unstarted,needsig,success,failed
+uda.ci_status.default=unstarted
 uda.derivation.type=string
 uda.derivation.label=Top-level derivation for commit CI run
 uda.claimedby.type=string
@@ -43,18 +44,25 @@ uda.claimedby.label=Local CI box which has claimed the job
 uda.repo_root.type=string
 uda.repo_root.label=Local repo directory
 
-# Commit ID -- for PRs this should be set to the tip commit.
+# Commit ID -- for PRs this should be empty.
+# For tip commits use the TIP_COMMIT tag.
 uda.commit_id.type=string
-uda.commit_id.label=PR number on Github
+uda.commit_id.label=git commit ID
 
-# PR data -- for commits these should be blank, and instead the 'parent'
-# field should be set to a PR.
+# PR data -- for commits these should be blank. (PRs have their own
+# tasks, which should depend on PRs).
 uda.pr_number.type=numeric
 uda.pr_number.label=PR number on Github
 uda.pr_title.type=string
 uda.pr_title.label=PR title from Github
 uda.pr_url.type=string
 uda.pr_url.label=URL
+uda.pr_author.type=string
+uda.pr_author.label=PR author from Github
+uda.review_status.type=string
+uda.review_status.label=Review Status
+uda.review_status.values=unreviewed,needschange,nacked,approved
+uda.review_status.default=unreviewed
  
 # Reports
 report.list.description=Default Task List
