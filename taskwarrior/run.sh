@@ -232,14 +232,15 @@ check_and_push_ready_prs() {
             
             # Check if JJ change has GPG signature
             if command -v jj >/dev/null 2>&1; then
+                echo jj log -r "$jj_change_id" --no-graph -T 'if(signature, "true", "false")' 2>/dev/null || echo "false"
                 local has_signature=$(jj log -r "$jj_change_id" --no-graph -T 'if(signature, "true", "false")' 2>/dev/null || echo "false")
                 
                 if [ "$has_signature" = "true" ]; then
                     echo "PR #$pr_number has GPG signature, pushing to $base_ref"
                     
-                    if git push origin "$fresh_merge_commit:$base_ref"; then
+                    if echo git push origin "$fresh_merge_commit:$base_ref"; then
                         echo "Successfully pushed PR #$pr_number to $base_ref"
-                        task "$pr_uuid" modify "merge_status:pushed"
+                        echo task "$pr_uuid" modify "merge_status:pushed"
                     else
                         echo "Failed to push PR #$pr_number to $base_ref"
                     fi
