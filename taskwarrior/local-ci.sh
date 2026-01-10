@@ -208,7 +208,7 @@ check_and_approve_prs() {
             
             # If all commits successful and PR is approved, post approval on GitHub
             if [ "$all_commits_successful" = "true" ]; then
-                echo "All commits in PR #$pr_number are successful and PR is approved. Posting GitHub approval..."
+                echo "All commits in PR #$pr_number are successful and PR is approved. Preparing GitHub approval..."
                 
                 # Get tip commit for the approval message
                 local tip_commit=$(task "depends:$pr_uuid" "+TIP_COMMIT" export | jq -r '.[0].commit_id // empty')
@@ -217,14 +217,71 @@ check_and_approve_prs() {
                     tip_commit=$(echo "$commit_uuids" | head -n1 | xargs -I {} task {} export | jq -r '.[0].commit_id')
                 fi
                 
-                pushd "$repo_root" > /dev/null
-                if gh pr review "$pr_number" -a -b "ACK $tip_commit; successfully ran local tests"; then
-                    echo "Successfully posted approval for PR #$pr_number"
+                # Create approval message template with review information
+                local temp_file=$(mktemp)
+                local editor_cmd="${EDITOR:-vim}"
+                
+                # Get PR review notes
+                local pr_review_notes=$(task "$pr_uuid" export | jq -r '.[0].review_notes // ""')
+                
+                # Write template to temp file
+                echo "ACK $tip_commit; successfully ran local tests" > "$temp_file"
+                echo "" >> "$temp_file"
+                echo "# Edit the approval message above. Lines starting with # will be removed." >> "$temp_file"
+                echo "# " >> "$temp_file"
+                echo "# PR Review Information:" >> "$temp_file"
+                if [ -n "$pr_review_notes" ]; then
+                    echo "# PR Review Notes: $pr_review_notes" >> "$temp_file"
                 else
-                    echo "Failed to post approval for PR #$pr_number - posting comment instead"
-                    gh pr review "$pr_number" -c -b "On $tip_commit successfully ran local tests"
+                    echo "# PR Review Notes: (none)" >> "$temp_file"
                 fi
-                popd > /dev/null
+                echo "# " >> "$temp_file"
+                echo "# Commit Review Information:" >> "$temp_file"
+                
+                # Add commit review information
+                while IFS= read -r commit_uuid_check; do
+                    if [ -n "$commit_uuid_check" ]; then
+                        local commit_data=$(task "$commit_uuid_check" export | jq -r '.[0]')
+                        local commit_id=$(echo "$commit_data" | jq -r '.commit_id')
+                        local commit_review_notes=$(echo "$commit_data" | jq -r '.review_notes // ""')
+                        local is_tip=$(echo "$commit_data" | jq -r '.tags // [] | contains(["TIP_COMMIT"])')
+                        
+                        echo -n "# $commit_id" >> "$temp_file"
+                        if [ "$is_tip" = "true" ]; then
+                            echo -n " (TIP)" >> "$temp_file"
+                        fi
+                        echo ":" >> "$temp_file"
+                        if [ -n "$commit_review_notes" ]; then
+                            echo "#   Review: $commit_review_notes" >> "$temp_file"
+                        else
+                            echo "#   Review: (none)" >> "$temp_file"
+                        fi
+                    fi
+                done <<< "$commit_uuids"
+                
+                echo "Opening $editor_cmd to edit approval message..."
+                if "$editor_cmd" "$temp_file"; then
+                    # Read approval message from temp file and remove comment lines
+                    local approval_message=$(grep -v '^#' "$temp_file" | sed '/^$/d' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+                    rm "$temp_file"
+                    
+                    if [ -n "$approval_message" ]; then
+                        pushd "$repo_root" > /dev/null
+                        if gh pr review "$pr_number" -a -b "$approval_message"; then
+                            echo "Successfully posted approval for PR #$pr_number"
+                        else
+                            echo "Failed to post approval for PR #$pr_number - posting comment instead"
+                            gh pr review "$pr_number" -c -b "$approval_message"
+                        fi
+                        popd > /dev/null
+                    else
+                        echo "Empty approval message - skipping GitHub approval"
+                    fi
+                else
+                    # Editor failed (e.g. user typed :cq in vim)
+                    rm "$temp_file"
+                    echo "Editor exited with error. Skipping GitHub approval."
+                fi
             fi
         fi
     done <<< "$pr_uuids"
