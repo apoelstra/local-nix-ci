@@ -163,7 +163,31 @@ check_and_approve_prs() {
             local pr_review_status=$(echo "$pr_data" | jq -r '.review_status // "unreviewed"')
             local repo_root=$(echo "$pr_data" | jq -r '.repo_root')
             
-            # Only proceed if PR is approved
+            # Check if we should auto-promote preapproved to approved
+            if [ "$pr_review_status" = "preapproved" ]; then
+                # Check if all commits are approved and CI successful
+                local all_commits_approved_and_ci=true
+                local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+                
+                while IFS= read -r commit_uuid_check; do
+                    if [ -n "$commit_uuid_check" ]; then
+                        local commit_review_status=$(task "$commit_uuid_check" export | jq -r '.[0].review_status // "unreviewed"')
+                        local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
+                        if [ "$commit_review_status" != "approved" ] || [ "$commit_ci_status" != "success" ]; then
+                            all_commits_approved_and_ci=false
+                            break
+                        fi
+                    fi
+                done <<< "$commit_uuids"
+                
+                if [ "$all_commits_approved_and_ci" = "true" ]; then
+                    echo "Auto-promoting PR #$pr_number from preapproved to approved (all conditions met)"
+                    task "$pr_uuid" modify "review_status:approved"
+                    pr_review_status="approved"
+                fi
+            fi
+            
+            # Only proceed if PR is approved (either originally or just promoted)
             if [ "$pr_review_status" != "approved" ]; then
                 continue
             fi
@@ -272,9 +296,12 @@ case "$ARG_COMMAND" in
             ''|info)
                 # Default behavior - show PR info
                 ;;
+            review)
+                # PR review workflow
+                ;;
             *)
                 echo "Unknown pr subcommand: $pr_subcommand"
-                echo "Available pr subcommands: info (default)"
+                echo "Available pr subcommands: info (default), review"
                 exit 1
                 ;;
         esac
@@ -376,17 +403,137 @@ case "$ARG_COMMAND" in
         
         echo
         
-        # Provide suggestions based on review status
-        if [ "$HAS_NACKED_COMMIT" = "true" ] && [ "$PR_REVIEW_STATUS" != "nacked" ]; then
-            echo "⚠️  Note: Some commits are nacked but the PR is not nacked."
-            echo "   Consider nacking the PR with: $0 pr nack $pr_num"
-            echo
-        fi
-        
-        if [ "$HAS_FAILED_CI" = "true" ]; then
-            echo "⚠️  Note: Some commits have failed CI status."
-            echo "   To restart CI for a commit, use: $0 commit <commit_id> reset-ci"
-            echo
+        # Handle review subcommand
+        if [ "$pr_subcommand" = "review" ]; then
+            # PR review workflow
+            while true; do
+                echo
+                echo "=== Reviewing PR #$pr_num: $PR_TITLE ==="
+                echo "Author: $PR_AUTHOR"
+                echo "Current PR Review Status: $PR_REVIEW_STATUS"
+                echo
+                
+                # Show commit status summary
+                echo "=== Commit Status Summary ==="
+                ALL_COMMITS_APPROVED=true
+                ALL_COMMITS_CI_SUCCESS=true
+                
+                while IFS= read -r commit_uuid; do
+                    if [ -n "$commit_uuid" ]; then
+                        COMMIT_DATA=$(task "$commit_uuid" export | jq -r '.[0]')
+                        COMMIT_ID=$(echo "$COMMIT_DATA" | jq -r '.commit_id // ""')
+                        COMMIT_REVIEW_STATUS=$(echo "$COMMIT_DATA" | jq -r '.review_status // "unreviewed"')
+                        COMMIT_CI_STATUS=$(echo "$COMMIT_DATA" | jq -r '.ci_status // "unstarted"')
+                        IS_TIP=$(echo "$COMMIT_DATA" | jq -r '.tags // [] | contains(["TIP_COMMIT"])')
+                        
+                        echo -n "  $COMMIT_ID: review=$COMMIT_REVIEW_STATUS, ci=$COMMIT_CI_STATUS"
+                        if [ "$IS_TIP" = "true" ]; then
+                            echo -n " (TIP)"
+                        fi
+                        echo
+                        
+                        if [ "$COMMIT_REVIEW_STATUS" != "approved" ]; then
+                            ALL_COMMITS_APPROVED=false
+                        fi
+                        if [ "$COMMIT_CI_STATUS" != "success" ]; then
+                            ALL_COMMITS_CI_SUCCESS=false
+                        fi
+                    fi
+                done <<< "$COMMIT_UUIDS"
+                
+                echo
+                echo "All commits approved: $ALL_COMMITS_APPROVED"
+                echo "All commits CI success: $ALL_COMMITS_CI_SUCCESS"
+                echo
+                
+                # Determine available actions
+                CAN_FULLY_APPROVE=false
+                if [ "$ALL_COMMITS_APPROVED" = "true" ] && [ "$ALL_COMMITS_CI_SUCCESS" = "true" ]; then
+                    CAN_FULLY_APPROVE=true
+                fi
+                
+                echo "What would you like to do?"
+                if [ "$CAN_FULLY_APPROVE" = "true" ]; then
+                    echo "1) Approve PR"
+                else
+                    echo "1) Pre-approve PR (will auto-approve when all commits are approved and CI passes)"
+                fi
+                echo "2) NACK PR"
+                echo "3) Request changes"
+                echo "4) View total diff"
+                echo "5) Cancel"
+                read -p "Choice (1-5): " choice
+                
+                case "$choice" in
+                    1)
+                        if [ "$CAN_FULLY_APPROVE" = "true" ]; then
+                            NEW_STATUS="approved"
+                            echo "Approving PR..."
+                        else
+                            NEW_STATUS="preapproved"
+                            echo "Pre-approving PR (will auto-approve when conditions are met)..."
+                        fi
+                        ;;
+                    2) NEW_STATUS="nacked" ;;
+                    3) NEW_STATUS="needschange" ;;
+                    4)
+                        echo "--- Total diff for PR #$pr_num ---"
+                        pushd "$REPO_ROOT" > /dev/null
+                        gh pr diff "$pr_num"
+                        popd > /dev/null
+                        continue
+                        ;;
+                    5)
+                        echo "Review cancelled."
+                        break
+                        ;;
+                    *)
+                        echo "Invalid choice. Please select 1-5."
+                        continue
+                        ;;
+                esac
+                
+                # Open editor for review notes
+                TEMP_FILE=$(mktemp)
+                EDITOR_CMD="${EDITOR:-vim}"
+                
+                # Populate temp file with template
+                echo "# Enter your PR review here. Updated review status: $NEW_STATUS" > "$TEMP_FILE"
+                
+                echo "Opening $EDITOR_CMD for review notes..."
+                if "$EDITOR_CMD" "$TEMP_FILE"; then
+                    # Read review notes from temp file and remove comment lines
+                    REVIEW_NOTES=$(grep -v '^#' "$TEMP_FILE" | sed '/^$/d')
+                    rm "$TEMP_FILE"
+                    
+                    # Update task with new status and notes
+                    task "$PR_UUID" modify "review_status:$NEW_STATUS" "review_notes:$REVIEW_NOTES"
+                    
+                    echo "PR #$pr_num review status updated to: $NEW_STATUS"
+                    if [ -n "$REVIEW_NOTES" ]; then
+                        echo "Review notes saved."
+                    fi
+                    break
+                else
+                    # Editor failed (e.g. user typed :cq in vim)
+                    rm "$TEMP_FILE"
+                    echo "Editor exited with error. Review cancelled."
+                    continue
+                fi
+            done
+        else
+            # Provide suggestions based on review status (info subcommand)
+            if [ "$HAS_NACKED_COMMIT" = "true" ] && [ "$PR_REVIEW_STATUS" != "nacked" ]; then
+                echo "⚠️  Note: Some commits are nacked but the PR is not nacked."
+                echo "   Consider nacking the PR with: $0 pr $pr_num review"
+                echo
+            fi
+            
+            if [ "$HAS_FAILED_CI" = "true" ]; then
+                echo "⚠️  Note: Some commits have failed CI status."
+                echo "   To restart CI for a commit, use: $0 commit <commit_id> reset-ci"
+                echo
+            fi
         fi
         ;;
     run)
