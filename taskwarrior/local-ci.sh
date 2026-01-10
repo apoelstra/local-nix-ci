@@ -161,7 +161,6 @@ check_and_approve_prs() {
             local pr_data=$(task "$pr_uuid" export | jq -r '.[0]')
             local pr_number=$(echo "$pr_data" | jq -r '.pr_number')
             local pr_review_status=$(echo "$pr_data" | jq -r '.review_status // "unreviewed"')
-            local repo_root=$(echo "$pr_data" | jq -r '.repo_root')
             
             # Check if we should auto-promote preapproved to approved
             if [ "$pr_review_status" = "preapproved" ]; then
@@ -183,108 +182,54 @@ check_and_approve_prs() {
                 if [ "$all_commits_approved_and_ci" = "true" ]; then
                     echo "Auto-promoting PR #$pr_number from preapproved to approved (all conditions met)"
                     task "$pr_uuid" modify "review_status:approved"
-                    pr_review_status="approved"
-                fi
-            fi
-            
-            # Only proceed if PR is approved (either originally or just promoted)
-            if [ "$pr_review_status" != "approved" ]; then
-                continue
-            fi
-            
-            # Get all commits for this PR
-            local all_commits_successful=true
-            local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
-            
-            while IFS= read -r commit_uuid_check; do
-                if [ -n "$commit_uuid_check" ]; then
-                    local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
-                    if [ "$commit_ci_status" != "success" ]; then
-                        all_commits_successful=false
-                        break
-                    fi
-                fi
-            done <<< "$commit_uuids"
-            
-            # If all commits successful and PR is approved, post approval on GitHub
-            if [ "$all_commits_successful" = "true" ]; then
-                echo "All commits in PR #$pr_number are successful and PR is approved. Preparing GitHub approval..."
-                
-                # Get tip commit for the approval message
-                local tip_commit=$(task "depends:$pr_uuid" "+TIP_COMMIT" export | jq -r '.[0].commit_id // empty')
-                if [ -z "$tip_commit" ]; then
-                    # Fallback: get any commit from the PR
-                    tip_commit=$(echo "$commit_uuids" | head -n1 | xargs -I {} task {} export | jq -r '.[0].commit_id')
-                fi
-                
-                # Create approval message template with review information
-                local temp_file=$(mktemp)
-                local editor_cmd="${EDITOR:-vim}"
-                
-                # Get PR review notes
-                local pr_review_notes=$(task "$pr_uuid" export | jq -r '.[0].review_notes // ""')
-                
-                # Write template to temp file
-                echo "ACK $tip_commit; successfully ran local tests" > "$temp_file"
-                echo "" >> "$temp_file"
-                echo "# Edit the approval message above. Lines starting with # will be removed." >> "$temp_file"
-                echo "# " >> "$temp_file"
-                echo "# PR Review Information:" >> "$temp_file"
-                if [ -n "$pr_review_notes" ]; then
-                    echo "# PR Review Notes: $pr_review_notes" >> "$temp_file"
-                else
-                    echo "# PR Review Notes: (none)" >> "$temp_file"
-                fi
-                echo "# " >> "$temp_file"
-                echo "# Commit Review Information:" >> "$temp_file"
-                
-                # Add commit review information
-                while IFS= read -r commit_uuid_check; do
-                    if [ -n "$commit_uuid_check" ]; then
-                        local commit_data=$(task "$commit_uuid_check" export | jq -r '.[0]')
-                        local commit_id=$(echo "$commit_data" | jq -r '.commit_id')
-                        local commit_review_notes=$(echo "$commit_data" | jq -r '.review_notes // ""')
-                        local is_tip=$(echo "$commit_data" | jq -r '.tags // [] | contains(["TIP_COMMIT"])')
-                        
-                        echo -n "# $commit_id" >> "$temp_file"
-                        if [ "$is_tip" = "true" ]; then
-                            echo -n " (TIP)" >> "$temp_file"
-                        fi
-                        echo ":" >> "$temp_file"
-                        if [ -n "$commit_review_notes" ]; then
-                            echo "#   Review: $commit_review_notes" >> "$temp_file"
-                        else
-                            echo "#   Review: (none)" >> "$temp_file"
-                        fi
-                    fi
-                done <<< "$commit_uuids"
-                
-                echo "Opening $editor_cmd to edit approval message..."
-                if "$editor_cmd" "$temp_file"; then
-                    # Read approval message from temp file and remove comment lines
-                    local approval_message=$(grep -v '^#' "$temp_file" | sed '/^$/d' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-                    rm "$temp_file"
-                    
-                    if [ -n "$approval_message" ]; then
-                        pushd "$repo_root" > /dev/null
-                        if gh pr review "$pr_number" -a -b "$approval_message"; then
-                            echo "Successfully posted approval for PR #$pr_number"
-                        else
-                            echo "Failed to post approval for PR #$pr_number - posting comment instead"
-                            gh pr review "$pr_number" -c -b "$approval_message"
-                        fi
-                        popd > /dev/null
-                    else
-                        echo "Empty approval message - skipping GitHub approval"
-                    fi
-                else
-                    # Editor failed (e.g. user typed :cq in vim)
-                    rm "$temp_file"
-                    echo "Editor exited with error. Skipping GitHub approval."
                 fi
             fi
         fi
     done <<< "$pr_uuids"
+}
+
+post_github_approval_if_ready() {
+    local pr_uuid="$1"
+    
+    local pr_data=$(task "$pr_uuid" export | jq -r '.[0]')
+    local pr_number=$(echo "$pr_data" | jq -r '.pr_number')
+    local pr_review_status=$(echo "$pr_data" | jq -r '.review_status // "unreviewed"')
+    local repo_root=$(echo "$pr_data" | jq -r '.repo_root')
+    
+    # Only proceed if PR is approved
+    if [ "$pr_review_status" != "approved" ]; then
+        return
+    fi
+    
+    # Get all commits for this PR
+    local all_commits_successful=true
+    local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+    
+    while IFS= read -r commit_uuid_check; do
+        if [ -n "$commit_uuid_check" ]; then
+            local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
+            if [ "$commit_ci_status" != "success" ]; then
+                all_commits_successful=false
+                break
+            fi
+        fi
+    done <<< "$commit_uuids"
+    
+    # If all commits successful and PR is approved, post approval on GitHub
+    if [ "$all_commits_successful" = "true" ]; then
+        echo "All commits in PR #$pr_number are successful and PR is approved. Posting GitHub approval..."
+        
+        # Get PR review notes
+        local pr_review_notes=$(task "$pr_uuid" export | jq -r '.[0].review_notes // ""')
+        pushd "$repo_root" > /dev/null
+        if gh pr review "$pr_number" -a -b "$pr_review_notes"; then
+            echo "Successfully posted approval for PR #$pr_number"
+        else
+            echo "Failed to post approval for PR #$pr_number - posting comment instead"
+            gh pr review "$pr_number" -c -b "$pr_review_notes"
+        fi
+        popd > /dev/null
+    fi
 }
 
 ####
@@ -463,6 +408,7 @@ case "$ARG_COMMAND" in
         # Handle review subcommand
         if [ "$pr_subcommand" = "review" ]; then
             # PR review workflow
+            TIP_COMMIT=
             while true; do
                 echo
                 echo "=== Reviewing PR #$pr_num: $PR_TITLE ==="
@@ -485,6 +431,7 @@ case "$ARG_COMMAND" in
                         
                         echo -n "  $COMMIT_ID: review=$COMMIT_REVIEW_STATUS, ci=$COMMIT_CI_STATUS"
                         if [ "$IS_TIP" = "true" ]; then
+                            TIP_COMMIT=$COMMIT_ID
                             echo -n " (TIP)"
                         fi
                         echo
@@ -503,18 +450,8 @@ case "$ARG_COMMAND" in
                 echo "All commits CI success: $ALL_COMMITS_CI_SUCCESS"
                 echo
                 
-                # Determine available actions
-                CAN_FULLY_APPROVE=false
-                if [ "$ALL_COMMITS_APPROVED" = "true" ] && [ "$ALL_COMMITS_CI_SUCCESS" = "true" ]; then
-                    CAN_FULLY_APPROVE=true
-                fi
-                
                 echo "What would you like to do?"
-                if [ "$CAN_FULLY_APPROVE" = "true" ]; then
-                    echo "1) Approve PR"
-                else
-                    echo "1) Pre-approve PR (will auto-approve when all commits are approved and CI passes)"
-                fi
+                echo "1) Approve PR"
                 echo "2) NACK PR"
                 echo "3) Request changes"
                 echo "4) View total diff"
@@ -523,13 +460,8 @@ case "$ARG_COMMAND" in
                 
                 case "$choice" in
                     1)
-                        if [ "$CAN_FULLY_APPROVE" = "true" ]; then
-                            NEW_STATUS="approved"
-                            echo "Approving PR..."
-                        else
-                            NEW_STATUS="preapproved"
-                            echo "Pre-approving PR (will auto-approve when conditions are met)..."
-                        fi
+                        NEW_STATUS="approved"
+                        echo "Approving PR..."
                         ;;
                     2) NEW_STATUS="nacked" ;;
                     3) NEW_STATUS="needschange" ;;
@@ -549,33 +481,71 @@ case "$ARG_COMMAND" in
                         continue
                         ;;
                 esac
-                
-                # Open editor for review notes
-                TEMP_FILE=$(mktemp)
-                EDITOR_CMD="${EDITOR:-vim}"
-                
-                # Populate temp file with template
-                echo "# Enter your PR review here. Updated review status: $NEW_STATUS" > "$TEMP_FILE"
-                
-                echo "Opening $EDITOR_CMD for review notes..."
-                if "$EDITOR_CMD" "$TEMP_FILE"; then
-                    # Read review notes from temp file and remove comment lines
-                    REVIEW_NOTES=$(grep -v '^#' "$TEMP_FILE" | sed '/^$/d')
-                    rm "$TEMP_FILE"
-                    
-                    # Update task with new status and notes
-                    task "$PR_UUID" modify "review_status:$NEW_STATUS" "review_notes:$REVIEW_NOTES"
-                    
-                    echo "PR #$pr_num review status updated to: $NEW_STATUS"
-                    if [ -n "$REVIEW_NOTES" ]; then
-                        echo "Review notes saved."
+
+                if [ -n "$NEW_STATUS" ]; then
+                    # Get tip commit for the approval message
+                    if [ -z "$TIP_COMMIT" ]; then
+                        echo "Warning: PR appears to have no tip commit set; please manually fix this. Cannot review." >&2
+                        break
                     fi
-                    break
-                else
-                    # Editor failed (e.g. user typed :cq in vim)
-                    rm "$TEMP_FILE"
-                    echo "Editor exited with error. Review cancelled."
-                    continue
+
+                    # Open editor for review notes
+                    TEMP_FILE=$(mktemp)
+                    # Populate temp file with template
+                    echo "# Enter your PR review here. Updated PR #$pr_num review status: $NEW_STATUS" >> "$TEMP_FILE"
+                    if [ "$NEW_STATUS" = "approved" ]; then
+                        echo "# This will be posted as a Github approval as soon as all CI runs have passed" >> "$TEMP_FILE"
+                        echo "# and all commits are approved." >> "$TEMP_FILE"
+                        echo "ACK $TIP_COMMIT; successfully ran local tests" > "$TEMP_FILE"
+                    fi
+
+                    echo "# Commit Review Information:" >> "$TEMP_FILE"
+                    # Add commit review information
+                    while IFS= read -r commit_uuid_check; do
+                        if [ -n "$commit_uuid_check" ]; then
+                            commit_data=$(task "$commit_uuid_check" export | jq -r '.[0]')
+                            commit_id=$(echo "$commit_data" | jq -r '.commit_id')
+                            commit_review_notes=$(echo "$commit_data" | jq -r '.review_notes // ""')
+                            is_tip=$(echo "$commit_data" | jq -r '.tags // [] | contains(["TIP_COMMIT"])')
+                
+                            echo -n "# $commit_id" >> "$TEMP_FILE"
+                            if [ "$is_tip" = "true" ]; then
+                                echo -n " (TIP)" >> "$TEMP_FILE"
+                            fi
+                            echo ":" >> "$TEMP_FILE"
+                            if [ -n "$commit_review_notes" ]; then
+                                echo "#   Review: $commit_review_notes" >> "$TEMP_FILE"
+                            else
+                                echo "#   Review: (none)" >> "$TEMP_FILE"
+                            fi
+                        fi
+                    done <<< "$COMMIT_UUIDS"
+                    echo "# Edit the approval message above. Lines starting with # will be removed." >> "$TEMP_FILE"
+                    EDITOR_CMD="${EDITOR:-vim}"
+                
+                    echo "Opening $EDITOR_CMD for review notes..."
+                    if "$EDITOR_CMD" "$TEMP_FILE"; then
+                        # Read review notes from temp file and remove comment lines
+                        REVIEW_NOTES=$(grep -v '^#' "$TEMP_FILE" | sed '/^$/d')
+                        rm "$TEMP_FILE"
+                    
+                        # Update task with new status and notes
+                        task "$PR_UUID" modify "review_status:$NEW_STATUS" "review_notes:$REVIEW_NOTES"
+                    
+                        echo "PR #$pr_num review status updated to: $NEW_STATUS"
+                        if [ -n "$REVIEW_NOTES" ]; then
+                            echo "Review notes saved."
+                        fi
+                    
+                        # Check if we should post GitHub approval
+                        post_github_approval_if_ready "$PR_UUID"
+                        break
+                    else
+                        # Editor failed (e.g. user typed :cq in vim)
+                        rm "$TEMP_FILE"
+                        echo "Editor exited with error. Review cancelled."
+                        continue
+                    fi
                 fi
             done
         else
@@ -741,7 +711,7 @@ case "$ARG_COMMAND" in
             EDITOR_CMD="${EDITOR:-vim}"
             
             # Populate temp file with template
-            echo "# Enter your review here. Updated review status: $NEW_STATUS" > "$TEMP_FILE"
+            echo "# Enter your review here. Updated commit $FULL_COMMIT_ID review status: $NEW_STATUS" > "$TEMP_FILE"
             
             echo "Opening $EDITOR_CMD for review notes..."
             if "$EDITOR_CMD" "$TEMP_FILE"; then
@@ -756,6 +726,14 @@ case "$ARG_COMMAND" in
                 if [ -n "$REVIEW_NOTES" ]; then
                     echo "Review notes saved."
                 fi
+                
+                # Check if any PRs containing this commit are now ready for GitHub approval
+                PR_UUIDS_FOR_COMMIT=$(task "project:local-ci.$PROJECT" "depends:$COMMIT_UUID" export 2>/dev/null | jq -r '.[] | select(.pr_number) | .uuid')
+                while IFS= read -r pr_uuid_check; do
+                    if [ -n "$pr_uuid_check" ]; then
+                        post_github_approval_if_ready "$pr_uuid_check"
+                    fi
+                done <<< "$PR_UUIDS_FOR_COMMIT"
                 break
             else
                 # Editor failed (e.g. user typed :cq in vim)
