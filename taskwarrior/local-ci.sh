@@ -310,12 +310,9 @@ case "$ARG_COMMAND" in
             review)
                 # PR review workflow
                 ;;
-            queue-merge)
-                # Queue merge commit for testing
-                ;;
             *)
                 echo "Unknown pr subcommand: $pr_subcommand"
-                echo "Available pr subcommands: info (default), review, queue-merge"
+                echo "Available pr subcommands: info (default), review"
                 exit 1
                 ;;
         esac
@@ -370,6 +367,9 @@ case "$ARG_COMMAND" in
         
         PR_UUID=$(tw_upsert "${PR_FILTER[@]}" -- "${PR_UPSERT[@]}")
 
+        # Get current dependencies to check for changes
+        CURRENT_DEPS=$(task "$PR_UUID" export | jq -r '.[0].depends // [] | .[]')
+        
         # Now handle individual commit tasks
         COMMIT_UUIDS=()
         while IFS= read -r commit_id; do
@@ -392,13 +392,9 @@ case "$ARG_COMMAND" in
             task "$COMMIT_UUID" modify +TIP_COMMIT
         fi
         
-        # Handle queue-merge subcommand
-        if [ "$pr_subcommand" = "queue-merge" ]; then
-            if [ -z "$PR_MERGE_COMMIT" ]; then
-                echo "No merge commit available for PR #$pr_num"
-                exit 1
-            fi
-            
+        # Handle merge commit - automatically add it if it exists
+        MERGE_COMMIT_UUID=""
+        if [ -n "$PR_MERGE_COMMIT" ]; then
             # Create merge commit task
             MERGE_COMMIT_FILTER=(
                 "project:local-ci.$PROJECT"
@@ -411,10 +407,29 @@ case "$ARG_COMMAND" in
             MERGE_COMMIT_UUID=$(tw_upsert "${MERGE_COMMIT_FILTER[@]}" -- "${MERGE_COMMIT_UPSERT[@]}")
             task "$MERGE_COMMIT_UUID" modify +MERGE_COMMIT
             task "$PR_UUID" modify "depends:$MERGE_COMMIT_UUID"
-            
-            echo "Queued merge commit $PR_MERGE_COMMIT for testing"
-            exit 0
+            COMMIT_UUIDS+=("$MERGE_COMMIT_UUID")
         fi
+        
+        # Remove old dependencies that are no longer part of this PR
+        NEW_DEPS=("${COMMIT_UUIDS[@]}")
+        while IFS= read -r old_dep; do
+            if [ -n "$old_dep" ]; then
+                # Check if this dependency is still needed
+                found=false
+                for new_dep in "${NEW_DEPS[@]}"; do
+                    if [ "$old_dep" = "$new_dep" ]; then
+                        found=true
+                        break
+                    fi
+                done
+                
+                if [ "$found" = "false" ]; then
+                    # This dependency is no longer needed, remove it
+                    task "$PR_UUID" modify "depends:-$old_dep"
+                    echo "Removed old dependency: $old_dep"
+                fi
+            fi
+        done <<< "$CURRENT_DEPS"
         
         echo "Finished processing PR $pr_num. Task UUID $PR_UUID"
         echo
@@ -475,13 +490,22 @@ case "$ARG_COMMAND" in
         echo
         echo "=== Merge Commit ==="
         if [ -n "$PR_MERGE_COMMIT" ]; then
-            echo "  Merge commit: $PR_MERGE_COMMIT"
+            MERGE_DATA=$(task "$MERGE_COMMIT_UUID" export | jq -r '.[0]')
+            MERGE_REVIEW_STATUS=$(echo "$MERGE_DATA" | jq -r '.review_status // "unreviewed"')
+            MERGE_CI_STATUS=$(echo "$MERGE_DATA" | jq -r '.ci_status // "unstarted"')
+            echo -n "  Merge commit: $PR_MERGE_COMMIT (review: $MERGE_REVIEW_STATUS"
+            if [ "$MERGE_REVIEW_STATUS" = "approved" ]; then
+                echo -n ", ci: $MERGE_CI_STATUS"
+            fi
+            echo ")"
+
             if [ -n "$MERGE_TREE_HASH" ]; then
                 echo "  Tree hash: $MERGE_TREE_HASH"
             fi
             if [ -n "$MERGE_JJ_CHANGE_ID" ]; then
                 echo "  JJ change ID: $MERGE_JJ_CHANGE_ID"
             fi
+            echo "  (Review the merge commit like any other commit to trigger CI)"
         else
             echo "  NO MERGE COMMIT AVAILABLE"
         fi
