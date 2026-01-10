@@ -254,6 +254,8 @@ case "$ARG_COMMAND" in
     pr)
         # First, sanity-check the PR number
         pr_num="${ARG_COMMAND_ARGS[0]:-}"
+        pr_subcommand="${ARG_COMMAND_ARGS[1]:-}"
+        
         case $pr_num in
             '')
                 echo "PR number is required by pr command"
@@ -261,6 +263,18 @@ case "$ARG_COMMAND" in
                 ;;
             *[!0-9]*)
                 echo "PR number must be a number, not $pr_num"
+                exit 1
+                ;;
+        esac
+        
+        # Handle subcommands
+        case $pr_subcommand in
+            ''|info)
+                # Default behavior - show PR info
+                ;;
+            *)
+                echo "Unknown pr subcommand: $pr_subcommand"
+                echo "Available pr subcommands: info (default)"
                 exit 1
                 ;;
         esac
