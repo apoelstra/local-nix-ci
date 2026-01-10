@@ -83,28 +83,21 @@ run_ci_loop() {
         
         # Compute cargoNix for Rust projects
         local cargo_nixes="{}"
-        local lockfiles=($(git ls-tree -r --name-only "$commit_id" | grep "Cargo\.lock$" || true))
+        local lockfiles=($(git ls-tree -r --name-only "$commit_id" | grep "Cargo.*\.lock$" || true))
         
         if [ ${#lockfiles[@]} -gt 0 ]; then
             local cargo_nix_entries=()
             for lockfile in "${lockfiles[@]}"; do
-                echo "Found Cargo.lock at $lockfile, generating Cargo.nix..."
-                local cargo_nix_path
-                if cargo_nix_path=$("$LOCAL_CI_PATH/$LOCAL_CI_WORKTREE/taskwarrior/create-cargo-nix.sh" "$(pwd)" "$commit_id" "$lockfile" 2>/dev/null); then
-                    local lockfile_key=$(echo "$lockfile" | sed 's/[^a-zA-Z0-9_]/_/g')
-                    cargo_nix_entries+=("\"$lockfile_key\" = \"$cargo_nix_path\"")
-                    echo "Generated Cargo.nix for $lockfile: $cargo_nix_path"
-                else
-                    echo "Failed to generate Cargo.nix for $lockfile"
-                    warnings+=("Failed to generate Cargo.nix for $lockfile in commit $commit_id")
-                    task "$next_commit_uuid" modify "ci_status:failed"
-                    popd > /dev/null
-                    continue 2
-                fi
+                echo "Found Cargo.lock at $lockfile."
+                # In theory this map should be "key = <path to Cargo.nix>" but I was unable to get
+                # that setup to work, or to convince myself it was even faster than the current
+                # setup, so instead the keys are used as lockfile paths and the values ignored.
+                # See block comments in andrew-util.nix about this.
+                cargo_nix_entries+=("\"$lockfile\" = null;")
             done
             
             if [ ${#cargo_nix_entries[@]} -gt 0 ]; then
-                cargo_nixes="{ $(IFS='; '; echo "${cargo_nix_entries[*]}") }"
+                cargo_nixes="{ ${cargo_nix_entries[@]} }"
             fi
         fi
         
@@ -121,14 +114,14 @@ run_ci_loop() {
         local commit_str="{
             commit = \"$commit_id\";
             isTip = $is_tip;
-            gitUrl = \"$(git rev-parse --git-dir)\";
+            gitUrl = \"$repo_root\";
             cargoNixes = $cargo_nixes;
         }"
         
         # Try to instantiate derivation
         local derivation_path
         if derivation_path=$(nix-instantiate \
-            --arg inlineJsonConfig "{ gitDir = \"$(git rev-parse --git-dir)\"; projectName = \"$project\"; }" \
+            --arg inlineJsonConfig "{ gitDir = \"$repo_root\"; projectName = \"$project\"; }" \
             --arg inlineCommitList "[ $commit_str ]" \
             --argstr prNum "" \
             "$nixfile_path")
