@@ -34,8 +34,12 @@ verbose=
 # status in local CI system
 uda.ci_status.type=string
 uda.ci_status.label=Local CI Status
-uda.ci_status.values=unstarted,started,needsig,success,failed
+uda.ci_status.values=unstarted,started,success,failed
 uda.ci_status.default=unstarted
+uda.merge_status.type=string
+uda.merge_status.label=Local CI merge Status
+uda.merge_status.values=unstarted,needsig,pushed
+uda.merge_status.default=unstarted
 uda.derivation.type=string
 uda.derivation.label=Top-level derivation for commit CI run
 uda.claimedby.type=string
@@ -61,10 +65,16 @@ uda.pr_author.type=string
 uda.pr_author.label=PR author from Github
 uda.review_status.type=string
 uda.review_status.label=Review Status
-uda.review_status.values=unreviewed,needschange,nacked,approved
+uda.review_status.values=unreviewed,needschange,nacked,preapproved,approved
 uda.review_status.default=unreviewed
 uda.review_notes.type=string
 uda.review_notes.label=Review Notes
+
+# Merge commit data -- for commits these should be blank
+uda.tree_hash.type=string
+uda.tree_hash.label=Git tree hash of merge commit
+uda.jj_change_id.type=string
+uda.jj_change_id.label=JJ change ID of merge commit
  
 # Reports
 report.list.description=Default Task List

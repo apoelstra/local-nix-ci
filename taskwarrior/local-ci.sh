@@ -150,42 +150,30 @@ tw_upsert() {
     echo "$uuid"
 }
 
-check_and_approve_prs() {
+check_for_pushable_merges() {
     local commit_uuid="$1"
     
-    # Find PRs that depend on this commit
-    local pr_uuids=$(task "depends:$commit_uuid" export | jq -r '.[] | select(.pr_number) | .uuid')
+    # Check if this is a merge commit that just succeeded
+    local commit_data=$(task "$commit_uuid" export | jq -r '.[0]')
+    local is_merge=$(echo "$commit_data" | jq -r '.tags // [] | contains(["MERGE_COMMIT"])')
+    local ci_status=$(echo "$commit_data" | jq -r '.ci_status // "unstarted"')
     
-    while IFS= read -r pr_uuid; do
-        if [ -n "$pr_uuid" ]; then
-            local pr_data=$(task "$pr_uuid" export | jq -r '.[0]')
-            local pr_number=$(echo "$pr_data" | jq -r '.pr_number')
-            local pr_review_status=$(echo "$pr_data" | jq -r '.review_status // "unreviewed"')
-            
-            # Check if we should auto-promote preapproved to approved
-            if [ "$pr_review_status" = "preapproved" ]; then
-                # Check if all commits are approved and CI successful
-                local all_commits_approved_and_ci=true
-                local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
-                
-                while IFS= read -r commit_uuid_check; do
-                    if [ -n "$commit_uuid_check" ]; then
-                        local commit_review_status=$(task "$commit_uuid_check" export | jq -r '.[0].review_status // "unreviewed"')
-                        local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
-                        if [ "$commit_review_status" != "approved" ] || [ "$commit_ci_status" != "success" ]; then
-                            all_commits_approved_and_ci=false
-                            break
-                        fi
-                    fi
-                done <<< "$commit_uuids"
-                
-                if [ "$all_commits_approved_and_ci" = "true" ]; then
-                    echo "Auto-promoting PR #$pr_number from preapproved to approved (all conditions met)"
-                    task "$pr_uuid" modify "review_status:approved"
+    if [ "$is_merge" = "true" ] && [ "$ci_status" = "success" ]; then
+        local commit_id=$(echo "$commit_data" | jq -r '.commit_id')
+        local tree_hash=$(git rev-parse "$commit_id^{tree}" 2>/dev/null || echo "")
+        
+        if [ -n "$tree_hash" ]; then
+            # Find PRs with matching tree hash and update their merge_status
+            local pr_uuids=$(task "tree_hash:$tree_hash" "pr_number.any:" export | jq -r '.[].uuid')
+            while IFS= read -r pr_uuid; do
+                if [ -n "$pr_uuid" ]; then
+                    local pr_number=$(task "$pr_uuid" export | jq -r '.[0].pr_number')
+                    echo "Updating merge_status to needsig for PR #$pr_number (tree hash matches)"
+                    task "$pr_uuid" modify "merge_status:needsig"
                 fi
-            fi
+            done <<< "$pr_uuids"
         fi
-    done <<< "$pr_uuids"
+    fi
 }
 
 post_github_approval_if_ready() {
@@ -196,7 +184,31 @@ post_github_approval_if_ready() {
     local pr_review_status=$(echo "$pr_data" | jq -r '.review_status // "unreviewed"')
     local repo_root=$(echo "$pr_data" | jq -r '.repo_root')
     
-    # Only proceed if PR is approved
+    # Check if we should auto-promote preapproved to approved
+    if [ "$pr_review_status" = "preapproved" ]; then
+        # Check if all commits are approved and CI successful
+        local all_commits_approved_and_ci=true
+        local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+        
+        while IFS= read -r commit_uuid_check; do
+            if [ -n "$commit_uuid_check" ]; then
+                local commit_review_status=$(task "$commit_uuid_check" export | jq -r '.[0].review_status // "unreviewed"')
+                local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
+                if [ "$commit_review_status" != "approved" ] || [ "$commit_ci_status" != "success" ]; then
+                    all_commits_approved_and_ci=false
+                    break
+                fi
+            fi
+        done <<< "$commit_uuids"
+        
+        if [ "$all_commits_approved_and_ci" = "true" ]; then
+            echo "Auto-promoting PR #$pr_number from preapproved to approved (all conditions met)"
+            task "$pr_uuid" modify "review_status:approved"
+            pr_review_status="approved"
+        fi
+    fi
+    
+    # Only proceed if PR is approved (either originally or just promoted)
     if [ "$pr_review_status" != "approved" ]; then
         return
     fi
@@ -301,22 +313,43 @@ case "$ARG_COMMAND" in
             review)
                 # PR review workflow
                 ;;
+            queue-merge)
+                # Queue merge commit for testing
+                ;;
             *)
                 echo "Unknown pr subcommand: $pr_subcommand"
-                echo "Available pr subcommands: info (default), review"
+                echo "Available pr subcommands: info (default), review, queue-merge"
                 exit 1
                 ;;
         esac
         
         # Figure out where we are and query Github for the PR info.
         locate_repo
-        JSON_DATA=$(gh pr view "$pr_num" --json commits,title,author | jq -c)
+        JSON_DATA=$(gh pr view "$pr_num" --json commits,title,author,mergeCommit,baseRefName | jq -c)
         
         # Extract PR data
         PR_TITLE=$(echo "$JSON_DATA" | jq -r .title)
         PR_AUTHOR=$(echo "$JSON_DATA" | jq -r .author.login)
         PR_COMMITS=$(echo "$JSON_DATA" | jq -r '.commits[].oid')
+        PR_MERGE_COMMIT=$(echo "$JSON_DATA" | jq -r '.mergeCommit.oid // empty')
+        PR_BASE_REF=$(echo "$JSON_DATA" | jq -r '.baseRefName // "master"')
         
+        # Handle merge commit data
+        MERGE_TREE_HASH=""
+        MERGE_JJ_CHANGE_ID=""
+        if [ -n "$PR_MERGE_COMMIT" ]; then
+            # Fetch to ensure we have the merge commit locally
+            git fetch origin "$PR_MERGE_COMMIT" 2>/dev/null || true
+            
+            # Get tree hash
+            MERGE_TREE_HASH=$(git rev-parse "$PR_MERGE_COMMIT^{tree}" 2>/dev/null || echo "")
+            
+            # Get JJ change ID if available
+            if command -v jj >/dev/null 2>&1; then
+                MERGE_JJ_CHANGE_ID=$(jj log -r "$PR_MERGE_COMMIT" --no-graph -T 'change_id' 2>/dev/null || echo "")
+            fi
+        fi
+
         # Create/modify PR task.
         PR_FILTER=(
             "project:local-ci.$PROJECT"
@@ -329,6 +362,15 @@ case "$ARG_COMMAND" in
             "pr_author:$PR_AUTHOR"
             "description:PR #$pr_num: $PR_TITLE"
         )
+        
+        # Add merge commit data if available
+        if [ -n "$MERGE_TREE_HASH" ]; then
+            PR_UPSERT+=("tree_hash:$MERGE_TREE_HASH")
+        fi
+        if [ -n "$MERGE_JJ_CHANGE_ID" ]; then
+            PR_UPSERT+=("jj_change_id:$MERGE_JJ_CHANGE_ID")
+        fi
+        
         PR_UUID=$(tw_upsert "${PR_FILTER[@]}" -- "${PR_UPSERT[@]}")
 
         # Now handle individual commit tasks
@@ -351,6 +393,30 @@ case "$ARG_COMMAND" in
 
         if [ -n "$COMMIT_UUID" ]; then
             task "$COMMIT_UUID" modify +TIP_COMMIT
+        fi
+        
+        # Handle queue-merge subcommand
+        if [ "$pr_subcommand" = "queue-merge" ]; then
+            if [ -z "$PR_MERGE_COMMIT" ]; then
+                echo "No merge commit available for PR #$pr_num"
+                exit 1
+            fi
+            
+            # Create merge commit task
+            MERGE_COMMIT_FILTER=(
+                "project:local-ci.$PROJECT"
+                "commit_id:$PR_MERGE_COMMIT"
+            )
+            MERGE_COMMIT_UPSERT=(
+                "repo_root:$REPO_ROOT"
+                "description:Merge commit $PR_MERGE_COMMIT for PR #$pr_num"
+            )
+            MERGE_COMMIT_UUID=$(tw_upsert "${MERGE_COMMIT_FILTER[@]}" -- "${MERGE_COMMIT_UPSERT[@]}")
+            task "$MERGE_COMMIT_UUID" modify +MERGE_COMMIT
+            task "$PR_UUID" modify "depends:$MERGE_COMMIT_UUID"
+            
+            echo "Queued merge commit $PR_MERGE_COMMIT for testing"
+            exit 0
         fi
         
         echo "Finished processing PR $pr_num. Task UUID $PR_UUID"
@@ -379,6 +445,7 @@ case "$ARG_COMMAND" in
                 COMMIT_REVIEW_STATUS=$(echo "$COMMIT_DATA" | jq -r '.review_status // "unreviewed"')
                 COMMIT_CI_STATUS=$(echo "$COMMIT_DATA" | jq -r '.ci_status // "unstarted"')
                 IS_TIP=$(echo "$COMMIT_DATA" | jq -r '.tags // [] | contains(["TIP_COMMIT"])')
+                IS_MERGE=$(echo "$COMMIT_DATA" | jq -r '.tags // [] | contains(["MERGE_COMMIT"])')
                 
                 echo -n "  $COMMIT_ID (review: $COMMIT_REVIEW_STATUS"
                 
@@ -399,9 +466,28 @@ case "$ARG_COMMAND" in
                     echo -n ", TIP"
                 fi
                 
+                if [ "$IS_MERGE" = "true" ]; then
+                    echo -n ", MERGE"
+                fi
+                
                 echo ")"
             fi
         done <<< "$COMMIT_UUIDS"
+        
+        # Display merge commit status
+        echo
+        echo "=== Merge Commit ==="
+        if [ -n "$PR_MERGE_COMMIT" ]; then
+            echo "  Merge commit: $PR_MERGE_COMMIT"
+            if [ -n "$MERGE_TREE_HASH" ]; then
+                echo "  Tree hash: $MERGE_TREE_HASH"
+            fi
+            if [ -n "$MERGE_JJ_CHANGE_ID" ]; then
+                echo "  JJ change ID: $MERGE_JJ_CHANGE_ID"
+            fi
+        else
+            echo "  NO MERGE COMMIT AVAILABLE"
+        fi
         
         echo
         
@@ -450,8 +536,18 @@ case "$ARG_COMMAND" in
                 echo "All commits CI success: $ALL_COMMITS_CI_SUCCESS"
                 echo
                 
+                # Determine available actions
+                CAN_FULLY_APPROVE=false
+                if [ "$ALL_COMMITS_APPROVED" = "true" ] && [ "$ALL_COMMITS_CI_SUCCESS" = "true" ]; then
+                    CAN_FULLY_APPROVE=true
+                fi
+                
                 echo "What would you like to do?"
-                echo "1) Approve PR"
+                if [ "$CAN_FULLY_APPROVE" = "true" ]; then
+                    echo "1) Approve PR"
+                else
+                    echo "1) Pre-approve PR (will auto-approve when all commits are approved and CI passes)"
+                fi
                 echo "2) NACK PR"
                 echo "3) Request changes"
                 echo "4) View total diff"
@@ -460,8 +556,13 @@ case "$ARG_COMMAND" in
                 
                 case "$choice" in
                     1)
-                        NEW_STATUS="approved"
-                        echo "Approving PR..."
+                        if [ "$CAN_FULLY_APPROVE" = "true" ]; then
+                            NEW_STATUS="approved"
+                            echo "Approving PR..."
+                        else
+                            NEW_STATUS="preapproved"
+                            echo "Pre-approving PR (will auto-approve when conditions are met)..."
+                        fi
                         ;;
                     2) NEW_STATUS="nacked" ;;
                     3) NEW_STATUS="needschange" ;;
