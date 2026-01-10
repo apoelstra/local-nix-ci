@@ -187,8 +187,8 @@ check_and_push_ready_prs() {
             pushd "$repo_root" > /dev/null
             
             # Refresh merge commit info from GitHub
-            local fresh_json=$(gh pr view "$pr_number" --json mergeCommit,baseRefName | jq -c)
-            local fresh_merge_commit=$(echo "$fresh_json" | jq -r '.mergeCommit.oid // empty')
+            local fresh_json=$(gh pr view "$pr_number" --json potentialMergeCommit,baseRefName | jq -c)
+            local fresh_merge_commit=$(echo "$fresh_json" | jq -r '.potentialMergeCommit.oid // empty')
             local base_ref=$(echo "$fresh_json" | jq -r '.baseRefName // "master"')
             
             if [ -z "$fresh_merge_commit" ]; then
