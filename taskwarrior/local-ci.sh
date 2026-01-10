@@ -184,32 +184,29 @@ post_github_approval_if_ready() {
     local pr_review_status=$(echo "$pr_data" | jq -r '.review_status // "unreviewed"')
     local repo_root=$(echo "$pr_data" | jq -r '.repo_root')
     
-    # Check if we should auto-promote preapproved to approved
-    if [ "$pr_review_status" = "preapproved" ]; then
-        # Check if all commits are approved and CI successful
-        local all_commits_approved_and_ci=true
-        local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
-        
-        while IFS= read -r commit_uuid_check; do
-            if [ -n "$commit_uuid_check" ]; then
-                local commit_review_status=$(task "$commit_uuid_check" export | jq -r '.[0].review_status // "unreviewed"')
-                local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
-                if [ "$commit_review_status" != "approved" ] || [ "$commit_ci_status" != "success" ]; then
-                    all_commits_approved_and_ci=false
-                    break
-                fi
-            fi
-        done <<< "$commit_uuids"
-        
-        if [ "$all_commits_approved_and_ci" = "true" ]; then
-            echo "Auto-promoting PR #$pr_number from preapproved to approved (all conditions met)"
-            task "$pr_uuid" modify "review_status:approved"
-            pr_review_status="approved"
-        fi
+    # Only proceed if PR is approved
+    if [ "$pr_review_status" != "approved" ]; then
+        return
     fi
     
-    # Only proceed if PR is approved (either originally or just promoted)
-    if [ "$pr_review_status" != "approved" ]; then
+    # Check if all commits are approved and CI successful
+    local all_commits_approved_and_ci=true
+    local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+    
+    while IFS= read -r commit_uuid_check; do
+        if [ -n "$commit_uuid_check" ]; then
+            local commit_review_status=$(task "$commit_uuid_check" export | jq -r '.[0].review_status // "unreviewed"')
+            local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
+            if [ "$commit_review_status" != "approved" ] || [ "$commit_ci_status" != "success" ]; then
+                all_commits_approved_and_ci=false
+                break
+            fi
+        fi
+    done <<< "$commit_uuids"
+    
+    # Only post approval if all conditions are met
+    if [ "$all_commits_approved_and_ci" != "true" ]; then
+        echo "PR #$pr_number is approved but not all commits are approved and CI successful yet"
         return
     fi
     
@@ -325,13 +322,13 @@ case "$ARG_COMMAND" in
         
         # Figure out where we are and query Github for the PR info.
         locate_repo
-        JSON_DATA=$(gh pr view "$pr_num" --json commits,title,author,mergeCommit,baseRefName | jq -c)
+        JSON_DATA=$(gh pr view "$pr_num" --json commits,title,author,potentialMergeCommit,baseRefName | jq -c)
         
         # Extract PR data
         PR_TITLE=$(echo "$JSON_DATA" | jq -r .title)
         PR_AUTHOR=$(echo "$JSON_DATA" | jq -r .author.login)
         PR_COMMITS=$(echo "$JSON_DATA" | jq -r '.commits[].oid')
-        PR_MERGE_COMMIT=$(echo "$JSON_DATA" | jq -r '.mergeCommit.oid // empty')
+        PR_MERGE_COMMIT=$(echo "$JSON_DATA" | jq -r '.potentialMergeCommit.oid // empty')
         PR_BASE_REF=$(echo "$JSON_DATA" | jq -r '.baseRefName // "master"')
         
         # Handle merge commit data
@@ -536,18 +533,8 @@ case "$ARG_COMMAND" in
                 echo "All commits CI success: $ALL_COMMITS_CI_SUCCESS"
                 echo
                 
-                # Determine available actions
-                CAN_FULLY_APPROVE=false
-                if [ "$ALL_COMMITS_APPROVED" = "true" ] && [ "$ALL_COMMITS_CI_SUCCESS" = "true" ]; then
-                    CAN_FULLY_APPROVE=true
-                fi
-                
                 echo "What would you like to do?"
-                if [ "$CAN_FULLY_APPROVE" = "true" ]; then
-                    echo "1) Approve PR"
-                else
-                    echo "1) Pre-approve PR (will auto-approve when all commits are approved and CI passes)"
-                fi
+                echo "1) Approve PR"
                 echo "2) NACK PR"
                 echo "3) Request changes"
                 echo "4) View total diff"
@@ -556,13 +543,8 @@ case "$ARG_COMMAND" in
                 
                 case "$choice" in
                     1)
-                        if [ "$CAN_FULLY_APPROVE" = "true" ]; then
-                            NEW_STATUS="approved"
-                            echo "Approving PR..."
-                        else
-                            NEW_STATUS="preapproved"
-                            echo "Pre-approving PR (will auto-approve when conditions are met)..."
-                        fi
+                        NEW_STATUS="approved"
+                        echo "Approving PR..."
                         ;;
                     2) NEW_STATUS="nacked" ;;
                     3) NEW_STATUS="needschange" ;;
