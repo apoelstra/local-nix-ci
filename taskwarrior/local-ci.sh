@@ -368,13 +368,12 @@ case "$ARG_COMMAND" in
                     echo "Warning: Could not parse merge commit data from output"
                     cat "$MERGE_OUTPUT"
                 fi
-            else
-                echo "Failed to create synthetic merge commit:"
-                cat "$MERGE_OUTPUT"
                 rm "$MERGE_OUTPUT"
-                exit 1
+            else
+                echo "Warning: failed to create synthetic merge commit:"
+                cat "$MERGE_OUTPUT"
+                rm "$MERGE_OUTPUT" || true
             fi
-            rm "$MERGE_OUTPUT"
         else
             echo "Using existing merge commit (base commit unchanged)"
             MERGE_JJ_CHANGE_ID="$CURRENT_JJ_CHANGE_ID"
