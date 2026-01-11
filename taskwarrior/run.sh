@@ -224,7 +224,6 @@ check_and_push_ready_prs() {
             
             # Check if JJ change has GPG signature
             if command -v jj >/dev/null 2>&1; then
-                echo jj log -r "$jj_change_id" --no-graph -T 'if(signature, "true", "false")' 2>/dev/null || echo "false"
                 local has_signature=$(jj log -r "$jj_change_id" --no-graph -T 'if(signature, "true", "false")' 2>/dev/null || echo "false")
                 
                 # Get the merge commit ID from JJ change
