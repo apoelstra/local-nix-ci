@@ -71,8 +71,9 @@ fi
 
 # Obtain its description and do initial sanity checks. If anything looks funny about
 # the PR (e.g. having @s in the commit message) the user will be given an opportunity
-# to bail here.
-description=$("$COMPUTE_MERGE_DESC" $requeue_flag -c "$local_merge_change_id" "$pr_num")
+# to bail here. We whitelist the "no ACKs" check since this only really has value at
+# the check-and-sign.sh stage which the user does separately.
+description=$("$COMPUTE_MERGE_DESC" -c "$local_merge_change_id" "$pr_num" $requeue_flag --no-acks-ok)
 
 # Copy the tree hash out of the description to avoid computing it twice
 tree_hash=$(echo "$description" | grep "^Tree-SHA512: " | cut -d' ' -f2)
@@ -92,7 +93,7 @@ echo "  Tree hash: $tree_hash"
 echo "  Base ref: $base_ref"
 
 # Output the data in a format that can be easily parsed by the caller
-cat <<EOF
+cat >&3 <<EOF
 MERGE_COMMIT_DATA
 change_id=$local_merge_change_id
 commit_id=$merge_commit

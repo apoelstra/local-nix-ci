@@ -188,7 +188,7 @@ def make_acks_message(head_commit, acks) -> str:
         ack_str ='\n\nTop commit has no ACKs.\n'
     return ack_str
 
-def print_merge_details(pull_reference, title, branch, base_branch, head_branch, acks, message):
+def print_merge_details(pull_reference, title, branch, base_branch, head_branch, acks, message, no_acks_ok=False):
     has_warnings = False
 
     print('{}{}{} {} {}into {}{}'.format(ATTR_RESET+ATTR_PR,pull_reference,ATTR_RESET,title,ATTR_RESET+ATTR_PR,branch,ATTR_RESET))
@@ -198,7 +198,7 @@ def print_merge_details(pull_reference, title, branch, base_branch, head_branch,
             print('{}ACKs:{}'.format(ATTR_PR, ATTR_RESET))
             for ack_name, ack_msg in acks.items():
                 print('* {} {}({}){}'.format(ack_msg, ATTR_NAME, ack_name, ATTR_RESET))
-        else:
+        elif not no_acks_ok:
             print('{}Top commit has no ACKs!{}'.format(ATTR_WARN, ATTR_RESET))
     show_message = False
     if message is not None and '@' in message:
@@ -235,6 +235,8 @@ def parse_arguments():
         help='The git ref or jj change ID of the local merge to describe.')
     parser.add_argument('--yes', '-y', action='store_true',
         help='Noninteractive mode (do not prompt the user if warnings are present)')
+    parser.add_argument('--no-acks-ok', '-A', action='store_true',
+        help='Skip the warning about there being no ACKs on the PR.')
     parser.add_argument('pull', metavar='PULL', type=int, nargs=1,
         help='Pull request ID to merge')
     parser.add_argument('branch', metavar='BRANCH', type=str, nargs='?',
@@ -364,7 +366,7 @@ def main():
         sys.exit(1)
 
     acks = get_acks_from_comments(head_commit=head_commit, comments=comments)
-    if not acks:
+    if not acks and not args.no_acks_ok:
         stderr.write(f'{ATTR_WARN}Top commit has no ACKs!{ATTR_RESET}\n')
         has_warnings = True
     message += make_acks_message(head_commit=head_commit, acks=acks)

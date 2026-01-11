@@ -362,7 +362,7 @@ case "$ARG_COMMAND" in
             fi
             
             MERGE_OUTPUT=$(mktemp)
-            if "$LOCAL_CI_PATH/taskwarrior/create-merge-commit.sh" "$pr_num" > "$MERGE_OUTPUT" 2>&1; then
+            if "$LOCAL_CI_PATH/taskwarrior/create-merge-commit.sh" "$pr_num" 3> "$MERGE_OUTPUT"; then
                 # Parse the output to get merge commit data
                 if grep -q "MERGE_COMMIT_DATA" "$MERGE_OUTPUT"; then
                     eval $(grep -A5 "MERGE_COMMIT_DATA" "$MERGE_OUTPUT" | tail -5)
