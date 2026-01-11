@@ -226,12 +226,15 @@ check_and_push_ready_prs() {
                 echo jj log -r "$jj_change_id" --no-graph -T 'if(signature, "true", "false")' 2>/dev/null || echo "false"
                 local has_signature=$(jj log -r "$jj_change_id" --no-graph -T 'if(signature, "true", "false")' 2>/dev/null || echo "false")
                 
+                # Get the merge commit ID from JJ change
+                local merge_commit_id=$(jj log --no-graph -r "$jj_change_id" -T commit_id 2>/dev/null || echo "")
+                
                 if [ "$has_signature" = "true" ]; then
                     echo "PR #$pr_number has GPG signature, pushing to $base_ref"
                     
-                    if echo git push origin "$fresh_merge_commit:$base_ref"; then
+                    if [ -n "$merge_commit_id" ] && git push origin "$merge_commit_id:$base_ref"; then
                         echo "Successfully pushed PR #$pr_number to $base_ref"
-                        echo task "$pr_uuid" modify "merge_status:pushed"
+                        task "$pr_uuid" modify "merge_status:pushed"
                     else
                         echo "Failed to push PR #$pr_number to $base_ref"
                     fi
