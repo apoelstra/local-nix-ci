@@ -304,6 +304,11 @@ case "$ARG_COMMAND" in
         
         # Handle subcommands
         case $pr_subcommand in
+            task-info)
+                locate_repo
+                task "project:local-ci.$PROJECT" "pr_number:$pr_num" commit_id: info
+                exit 0
+                ;;
             ''|info)
                 # Default behavior - show PR info
                 ;;
