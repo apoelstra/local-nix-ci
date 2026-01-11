@@ -186,7 +186,10 @@ check_and_push_ready_prs() {
             
             pushd "$repo_root" > /dev/null
             
-            # Refresh merge commit info from GitHub
+            # Refresh merge commit info from GitHub -- FIXME if this causes problems
+            #  we may want to re-run create-merge-commit.sh or some noninteractive
+            #  variant of it. Alternately, maybe we should be checking whether the
+            #  baseRef has changed rather than the tree?
             local fresh_json=$(gh pr view "$pr_number" --json potentialMergeCommit,baseRefName | jq -c)
             local fresh_merge_commit=$(echo "$fresh_json" | jq -r '.potentialMergeCommit.oid // empty')
             local base_ref=$(echo "$fresh_json" | jq -r '.baseRefName // "master"')
