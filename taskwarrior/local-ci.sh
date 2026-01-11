@@ -309,6 +309,12 @@ case "$ARG_COMMAND" in
                 task "project:local-ci.$PROJECT" "pr_number:$pr_num" commit_id: info
                 exit 0
                 ;;
+            task-edit)
+                locate_repo
+                UUID=$(tw_unique_uuid "project:local-ci.$PROJECT" "pr_number:$pr_num" commit_id:)
+                task "$UUID" edit
+                exit 0
+                ;;
             ''|info)
                 # Default behavior - show PR info
                 ;;
@@ -317,7 +323,7 @@ case "$ARG_COMMAND" in
                 ;;
             *)
                 echo "Unknown pr subcommand: $pr_subcommand"
-                echo "Available pr subcommands: info (default), review"
+                echo "Available pr subcommands: info (default), task-info, task-edit, review"
                 exit 1
                 ;;
         esac
