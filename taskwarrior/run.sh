@@ -171,7 +171,7 @@ check_and_push_ready_prs() {
     # Find PRs with merge_status:needsig
     local needsig_pr_uuids=$(task "merge_status:needsig" "pr_number.any:" export | jq -r '.[].uuid')
         
-    while IFS= read -r pr_uuid; do
+    for pr_uuid in $needsig_pr_uuids; do
         if [ -n "$pr_uuid" ]; then
             local pr_data=$(task "$pr_uuid" export | jq -r '.[0]')
             local pr_number=$(echo "$pr_data" | jq -r '.pr_number')
@@ -210,11 +210,11 @@ check_and_push_ready_prs() {
                     
                 # Remove old merge commit dependency
                 local old_merge_uuids=$(task "project:local-ci.$PROJECT" "commit_id.any:" "+MERGE_COMMIT" export | jq -r --arg base "$stored_base_commit" '.[] | select(.description | contains($base)) | .uuid')
-                while IFS= read -r old_uuid; do
+                for old_uuid in $old_merge_uuids; do
                     if [ -n "$old_uuid" ]; then
                         task "$pr_uuid" modify "depends:-$old_uuid"
                     fi
-                done <<< "$old_merge_uuids"
+                done
                     
                 # Reset PR status - user needs to recreate merge commit interactively
                 task "$pr_uuid" modify "merge_status:unstarted" "base_commit:" "jj_change_id:"
@@ -247,5 +247,5 @@ check_and_push_ready_prs() {
             
             popd > /dev/null
         fi
-    done <<< "$needsig_pr_uuids"
+    done
 }

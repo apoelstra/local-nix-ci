@@ -165,13 +165,13 @@ check_for_pushable_merges() {
         if [ -n "$tree_hash" ]; then
             # Find PRs with matching tree hash and update their merge_status
             local pr_uuids=$(task "tree_hash:$tree_hash" "pr_number.any:" export | jq -r '.[].uuid')
-            while IFS= read -r pr_uuid; do
+            for pr_uuid in $pr_uuids; do
                 if [ -n "$pr_uuid" ]; then
                     local pr_number=$(task "$pr_uuid" export | jq -r '.[0].pr_number')
                     echo "Updating merge_status to needsig for PR #$pr_number (tree hash matches)"
                     task "$pr_uuid" modify "merge_status:needsig"
                 fi
-            done <<< "$pr_uuids"
+            done
         fi
     fi
 }
@@ -193,7 +193,7 @@ post_github_approval_if_ready() {
     local all_commits_approved_and_ci=true
     local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
     
-    while IFS= read -r commit_uuid_check; do
+    for commit_uuid_check in $commit_uuids; do
         if [ -n "$commit_uuid_check" ]; then
             local commit_review_status=$(task "$commit_uuid_check" export | jq -r '.[0].review_status // "unreviewed"')
             local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
@@ -202,7 +202,7 @@ post_github_approval_if_ready() {
                 break
             fi
         fi
-    done <<< "$commit_uuids"
+    done
     
     # Only post approval if all conditions are met
     if [ "$all_commits_approved_and_ci" != "true" ]; then
@@ -214,7 +214,7 @@ post_github_approval_if_ready() {
     local all_commits_successful=true
     local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
     
-    while IFS= read -r commit_uuid_check; do
+    for commit_uuid_check in $commit_uuids; do
         if [ -n "$commit_uuid_check" ]; then
             local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
             if [ "$commit_ci_status" != "success" ]; then
@@ -222,7 +222,7 @@ post_github_approval_if_ready() {
                 break
             fi
         fi
-    done <<< "$commit_uuids"
+    done
     
     # If all commits successful and PR is approved, post approval on GitHub
     if [ "$all_commits_successful" = "true" ]; then
@@ -427,7 +427,7 @@ case "$ARG_COMMAND" in
         
         # Now handle individual commit tasks
         COMMIT_UUIDS=()
-        while IFS= read -r commit_id; do
+        for commit_id in $PR_COMMITS; do
             if [ -n "$commit_id" ]; then
                 COMMIT_FILTER=(
                     "project:local-ci.$PROJECT"
@@ -441,7 +441,7 @@ case "$ARG_COMMAND" in
                 COMMIT_UUIDS+=("$COMMIT_UUID")
                 task "$PR_UUID" modify "depends:$COMMIT_UUID"
             fi
-        done <<< "$PR_COMMITS"
+        done
 
         if [ -n "$COMMIT_UUID" ]; then
             task "$COMMIT_UUID" modify +TIP_COMMIT
@@ -467,7 +467,7 @@ case "$ARG_COMMAND" in
         
         # Remove old dependencies that are no longer part of this PR
         NEW_DEPS=("${COMMIT_UUIDS[@]}")
-        while IFS= read -r old_dep; do
+        for old_dep in $CURRENT_DEPS; do
             if [ -n "$old_dep" ]; then
                 # Check if this dependency is still needed
                 found=false
@@ -484,7 +484,7 @@ case "$ARG_COMMAND" in
                     echo "Removed old dependency: $old_dep"
                 fi
             fi
-        done <<< "$CURRENT_DEPS"
+        done
         
         echo "Finished processing PR $pr_num. Task UUID $PR_UUID"
         echo
@@ -505,7 +505,7 @@ case "$ARG_COMMAND" in
         HAS_APPROVED_COMMIT=false
         HAS_FAILED_CI=false
         
-        while IFS= read -r commit_uuid; do
+        for commit_uuid in "${COMMIT_UUIDS[@]}"; do
             if [ -n "$commit_uuid" ]; then
                 COMMIT_DATA=$(task "$commit_uuid" export | jq -r '.[0]')
                 COMMIT_ID=$(echo "$COMMIT_DATA" | jq -r '.commit_id // ""')
@@ -539,7 +539,7 @@ case "$ARG_COMMAND" in
                 
                 echo ")"
             fi
-        done <<< "$COMMIT_UUIDS"
+        done
         
         # Display merge commit status
         echo
@@ -586,7 +586,7 @@ case "$ARG_COMMAND" in
                 ALL_COMMITS_APPROVED=true
                 ALL_COMMITS_CI_SUCCESS=true
                 
-                while IFS= read -r commit_uuid; do
+                for commit_uuid in "${COMMIT_UUIDS[@]}"; do
                     if [ -n "$commit_uuid" ]; then
                         COMMIT_DATA=$(task "$commit_uuid" export | jq -r '.[0]')
                         COMMIT_ID=$(echo "$COMMIT_DATA" | jq -r '.commit_id // ""')
@@ -608,7 +608,7 @@ case "$ARG_COMMAND" in
                             ALL_COMMITS_CI_SUCCESS=false
                         fi
                     fi
-                done <<< "$COMMIT_UUIDS"
+                done
                 
                 echo
                 echo "All commits approved: $ALL_COMMITS_APPROVED"
@@ -666,7 +666,7 @@ case "$ARG_COMMAND" in
 
                     echo "# Commit Review Information:" >> "$TEMP_FILE"
                     # Add commit review information
-                    while IFS= read -r commit_uuid_check; do
+                    for commit_uuid_check in "${COMMIT_UUIDS[@]}"; do
                         if [ -n "$commit_uuid_check" ]; then
                             commit_data=$(task "$commit_uuid_check" export | jq -r '.[0]')
                             commit_id=$(echo "$commit_data" | jq -r '.commit_id')
@@ -684,7 +684,7 @@ case "$ARG_COMMAND" in
                                 echo "#   Review: (none)" >> "$TEMP_FILE"
                             fi
                         fi
-                    done <<< "$COMMIT_UUIDS"
+                    done
                     echo "# Edit the approval message above. Lines starting with # will be removed." >> "$TEMP_FILE"
                     EDITOR_CMD="${EDITOR:-vim}"
                 
@@ -894,11 +894,11 @@ case "$ARG_COMMAND" in
                 
                 # Check if any PRs containing this commit are now ready for GitHub approval
                 PR_UUIDS_FOR_COMMIT=$(task "project:local-ci.$PROJECT" "depends:$COMMIT_UUID" export 2>/dev/null | jq -r '.[] | select(.pr_number) | .uuid')
-                while IFS= read -r pr_uuid_check; do
+                for pr_uuid_check in $PR_UUIDS_FOR_COMMIT; do
                     if [ -n "$pr_uuid_check" ]; then
                         post_github_approval_if_ready "$pr_uuid_check"
                     fi
-                done <<< "$PR_UUIDS_FOR_COMMIT"
+                done
                 break
             else
                 # Editor failed (e.g. user typed :cq in vim)
