@@ -77,6 +77,9 @@ description=$("$COMPUTE_MERGE_DESC" $requeue_flag -c "$local_merge_change_id" "$
 # Copy the tree hash out of the description to avoid computing it twice
 tree_hash=$(echo "$description" | grep "^Tree-SHA512: " | cut -d' ' -f2)
 
+# Get the base commit ID
+base_commit=$(git rev-parse "pull/$pr_num/base")
+
 # If we made it this far, the PR looks ok (or at least, the users says keep going).
 # Add the initial message.
 jj describe --quiet -r "$local_merge_change_id" -m "$description"
@@ -95,4 +98,5 @@ change_id=$local_merge_change_id
 commit_id=$merge_commit
 tree_hash=$tree_hash
 base_ref=$base_ref
+base_commit=$base_commit
 EOF

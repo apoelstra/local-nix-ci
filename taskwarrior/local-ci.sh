@@ -328,36 +328,66 @@ case "$ARG_COMMAND" in
         PR_MERGE_COMMIT=$(echo "$JSON_DATA" | jq -r '.potentialMergeCommit.oid // empty')
         PR_BASE_REF=$(echo "$JSON_DATA" | jq -r '.baseRefName // "master"')
         
-        # Handle merge commit data - create synthetic merge commit instead of using potentialMergeCommit
+        # Handle merge commit data - check if we need to create/recreate merge commit
         MERGE_TREE_HASH=""
         MERGE_JJ_CHANGE_ID=""
         MERGE_COMMIT_ID=""
+        MERGE_BASE_COMMIT=""
         
-        # Create synthetic merge commit using our script
-        echo "Creating synthetic merge commit for PR #$pr_num..."
-        MERGE_OUTPUT=$(mktemp)
-        if "$LOCAL_CI_PATH/taskwarrior/create-merge-commit.sh" "$pr_num" > "$MERGE_OUTPUT" 2>&1; then
-            # Parse the output to get merge commit data
-            if grep -q "MERGE_COMMIT_DATA" "$MERGE_OUTPUT"; then
-                eval $(grep -A4 "MERGE_COMMIT_DATA" "$MERGE_OUTPUT" | tail -4)
-                MERGE_JJ_CHANGE_ID="$change_id"
-                MERGE_COMMIT_ID="$commit_id"
-                MERGE_TREE_HASH="$tree_hash"
-                echo "Successfully created merge commit:"
-                echo "  Change ID: $MERGE_JJ_CHANGE_ID"
-                echo "  Commit ID: $MERGE_COMMIT_ID"
-                echo "  Tree hash: $MERGE_TREE_HASH"
+        # Get current PR data to check if merge commit exists and is still valid
+        PR_DATA=$(task "project:local-ci.$PROJECT" "pr_number:$pr_num" export 2>/dev/null | jq -r '.[0] // {}')
+        CURRENT_BASE_COMMIT=$(echo "$PR_DATA" | jq -r '.base_commit // ""')
+        CURRENT_JJ_CHANGE_ID=$(echo "$PR_DATA" | jq -r '.jj_change_id // ""')
+        
+        # Get the current base commit from GitHub
+        FRESH_BASE_COMMIT=$(git rev-parse "pull/$pr_num/base" 2>/dev/null || echo "")
+        
+        # Only create merge commit if it doesn't exist or base commit has changed
+        if [ -z "$CURRENT_JJ_CHANGE_ID" ] || [ "$CURRENT_BASE_COMMIT" != "$FRESH_BASE_COMMIT" ]; then
+            if [ -n "$CURRENT_JJ_CHANGE_ID" ] && [ "$CURRENT_BASE_COMMIT" != "$FRESH_BASE_COMMIT" ]; then
+                echo "Base commit changed from $CURRENT_BASE_COMMIT to $FRESH_BASE_COMMIT, recreating merge commit..."
             else
-                echo "Warning: Could not parse merge commit data from output"
-                cat "$MERGE_OUTPUT"
+                echo "Creating synthetic merge commit for PR #$pr_num..."
             fi
-        else
-            echo "Failed to create synthetic merge commit:"
-            cat "$MERGE_OUTPUT"
+            
+            MERGE_OUTPUT=$(mktemp)
+            if "$LOCAL_CI_PATH/taskwarrior/create-merge-commit.sh" "$pr_num" > "$MERGE_OUTPUT" 2>&1; then
+                # Parse the output to get merge commit data
+                if grep -q "MERGE_COMMIT_DATA" "$MERGE_OUTPUT"; then
+                    eval $(grep -A5 "MERGE_COMMIT_DATA" "$MERGE_OUTPUT" | tail -5)
+                    MERGE_JJ_CHANGE_ID="$change_id"
+                    MERGE_COMMIT_ID="$commit_id"
+                    MERGE_TREE_HASH="$tree_hash"
+                    MERGE_BASE_COMMIT="$base_commit"
+                    echo "Successfully created merge commit:"
+                    echo "  Change ID: $MERGE_JJ_CHANGE_ID"
+                    echo "  Commit ID: $MERGE_COMMIT_ID"
+                    echo "  Tree hash: $MERGE_TREE_HASH"
+                    echo "  Base commit: $MERGE_BASE_COMMIT"
+                else
+                    echo "Warning: Could not parse merge commit data from output"
+                    cat "$MERGE_OUTPUT"
+                fi
+            else
+                echo "Failed to create synthetic merge commit:"
+                cat "$MERGE_OUTPUT"
+                rm "$MERGE_OUTPUT"
+                exit 1
+            fi
             rm "$MERGE_OUTPUT"
-            exit 1
+        else
+            echo "Using existing merge commit (base commit unchanged)"
+            MERGE_JJ_CHANGE_ID="$CURRENT_JJ_CHANGE_ID"
+            MERGE_BASE_COMMIT="$CURRENT_BASE_COMMIT"
+            
+            # Get other merge commit details from JJ
+            if command -v jj >/dev/null 2>&1; then
+                MERGE_COMMIT_ID=$(jj log --no-graph -r "$MERGE_JJ_CHANGE_ID" -T commit_id 2>/dev/null || echo "")
+                if [ -n "$MERGE_COMMIT_ID" ]; then
+                    MERGE_TREE_HASH=$(git rev-parse "$MERGE_COMMIT_ID^{tree}" 2>/dev/null || echo "")
+                fi
+            fi
         fi
-        rm "$MERGE_OUTPUT"
 
         # Create/modify PR task.
         PR_FILTER=(
@@ -373,8 +403,8 @@ case "$ARG_COMMAND" in
         )
         
         # Add merge commit data if available
-        if [ -n "$MERGE_TREE_HASH" ]; then
-            PR_UPSERT+=("tree_hash:$MERGE_TREE_HASH")
+        if [ -n "$MERGE_BASE_COMMIT" ]; then
+            PR_UPSERT+=("base_commit:$MERGE_BASE_COMMIT")
         fi
         if [ -n "$MERGE_JJ_CHANGE_ID" ]; then
             PR_UPSERT+=("jj_change_id:$MERGE_JJ_CHANGE_ID")
@@ -516,6 +546,9 @@ case "$ARG_COMMAND" in
 
             if [ -n "$MERGE_TREE_HASH" ]; then
                 echo "  Tree hash: $MERGE_TREE_HASH"
+            fi
+            if [ -n "$MERGE_BASE_COMMIT" ]; then
+                echo "  Base commit: $MERGE_BASE_COMMIT"
             fi
             if [ -n "$MERGE_JJ_CHANGE_ID" ]; then
                 echo "  JJ change ID: $MERGE_JJ_CHANGE_ID"
