@@ -328,21 +328,36 @@ case "$ARG_COMMAND" in
         PR_MERGE_COMMIT=$(echo "$JSON_DATA" | jq -r '.potentialMergeCommit.oid // empty')
         PR_BASE_REF=$(echo "$JSON_DATA" | jq -r '.baseRefName // "master"')
         
-        # Handle merge commit data
+        # Handle merge commit data - create synthetic merge commit instead of using potentialMergeCommit
         MERGE_TREE_HASH=""
         MERGE_JJ_CHANGE_ID=""
-        if [ -n "$PR_MERGE_COMMIT" ]; then
-            # Fetch to ensure we have the merge commit locally
-            git fetch origin "$PR_MERGE_COMMIT" 2>/dev/null || true
-            
-            # Get tree hash
-            MERGE_TREE_HASH=$(git rev-parse "$PR_MERGE_COMMIT^{tree}" 2>/dev/null || echo "")
-            
-            # Get JJ change ID if available
-            if command -v jj >/dev/null 2>&1; then
-                MERGE_JJ_CHANGE_ID=$(jj log -r "$PR_MERGE_COMMIT" --no-graph -T 'change_id' 2>/dev/null || echo "")
+        MERGE_COMMIT_ID=""
+        
+        # Create synthetic merge commit using our script
+        echo "Creating synthetic merge commit for PR #$pr_num..."
+        MERGE_OUTPUT=$(mktemp)
+        if "$LOCAL_CI_PATH/taskwarrior/create-merge-commit.sh" "$pr_num" > "$MERGE_OUTPUT" 2>&1; then
+            # Parse the output to get merge commit data
+            if grep -q "MERGE_COMMIT_DATA" "$MERGE_OUTPUT"; then
+                eval $(grep -A4 "MERGE_COMMIT_DATA" "$MERGE_OUTPUT" | tail -4)
+                MERGE_JJ_CHANGE_ID="$change_id"
+                MERGE_COMMIT_ID="$commit_id"
+                MERGE_TREE_HASH="$tree_hash"
+                echo "Successfully created merge commit:"
+                echo "  Change ID: $MERGE_JJ_CHANGE_ID"
+                echo "  Commit ID: $MERGE_COMMIT_ID"
+                echo "  Tree hash: $MERGE_TREE_HASH"
+            else
+                echo "Warning: Could not parse merge commit data from output"
+                cat "$MERGE_OUTPUT"
             fi
+        else
+            echo "Failed to create synthetic merge commit:"
+            cat "$MERGE_OUTPUT"
+            rm "$MERGE_OUTPUT"
+            exit 1
         fi
+        rm "$MERGE_OUTPUT"
 
         # Create/modify PR task.
         PR_FILTER=(
@@ -392,17 +407,17 @@ case "$ARG_COMMAND" in
             task "$COMMIT_UUID" modify +TIP_COMMIT
         fi
         
-        # Handle merge commit - automatically add it if it exists
+        # Handle merge commit - use our synthetic merge commit
         MERGE_COMMIT_UUID=""
-        if [ -n "$PR_MERGE_COMMIT" ]; then
+        if [ -n "$MERGE_COMMIT_ID" ]; then
             # Create merge commit task
             MERGE_COMMIT_FILTER=(
                 "project:local-ci.$PROJECT"
-                "commit_id:$PR_MERGE_COMMIT"
+                "commit_id:$MERGE_COMMIT_ID"
             )
             MERGE_COMMIT_UPSERT=(
                 "repo_root:$REPO_ROOT"
-                "description:Merge commit $PR_MERGE_COMMIT for PR #$pr_num"
+                "description:Merge commit $MERGE_COMMIT_ID for PR #$pr_num"
             )
             MERGE_COMMIT_UUID=$(tw_upsert "${MERGE_COMMIT_FILTER[@]}" -- "${MERGE_COMMIT_UPSERT[@]}")
             task "$MERGE_COMMIT_UUID" modify +MERGE_COMMIT
@@ -489,11 +504,11 @@ case "$ARG_COMMAND" in
         # Display merge commit status
         echo
         echo "=== Merge Commit ==="
-        if [ -n "$PR_MERGE_COMMIT" ]; then
+        if [ -n "$MERGE_COMMIT_ID" ]; then
             MERGE_DATA=$(task "$MERGE_COMMIT_UUID" export | jq -r '.[0]')
             MERGE_REVIEW_STATUS=$(echo "$MERGE_DATA" | jq -r '.review_status // "unreviewed"')
             MERGE_CI_STATUS=$(echo "$MERGE_DATA" | jq -r '.ci_status // "unstarted"')
-            echo -n "  Merge commit: $PR_MERGE_COMMIT (review: $MERGE_REVIEW_STATUS"
+            echo -n "  Merge commit: $MERGE_COMMIT_ID (review: $MERGE_REVIEW_STATUS"
             if [ "$MERGE_REVIEW_STATUS" = "approved" ]; then
                 echo -n ", ci: $MERGE_CI_STATUS"
             fi
@@ -507,7 +522,7 @@ case "$ARG_COMMAND" in
             fi
             echo "  (Review the merge commit like any other commit to trigger CI)"
         else
-            echo "  NO MERGE COMMIT AVAILABLE"
+            echo "  NO MERGE COMMIT CREATED"
         fi
         
         echo
