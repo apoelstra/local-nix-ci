@@ -71,8 +71,8 @@ uda.review_notes.type=string
 uda.review_notes.label=Review Notes
 
 # Merge commit data -- for commits these should be blank
-uda.tree_hash.type=string
-uda.tree_hash.label=Git tree hash of merge commit
+uda.base_commit.type=string
+uda.base_commit.label=Base commit ID of merge commit
 uda.jj_change_id.type=string
 uda.jj_change_id.label=JJ change ID of merge commit
  

@@ -10,6 +10,9 @@ run_ci_loop() {
     local warnings=()
 
     while true; do
+        # Check for PRs ready to push, before doing anything else.
+        check_and_push_ready_prs
+
         # Find next approved commit that needs CI
         local next_commit_uuid=$(task "review_status:approved" "ci_status:unstarted" "commit_id.any:" export | jq -r '.[0].uuid // empty')
 
@@ -161,9 +164,6 @@ run_ci_loop() {
         popd > /dev/null
         echo "Finished processing commit $commit_id"
         echo
-        
-        # Check for PRs ready to push
-        check_and_push_ready_prs
     done
 }
 
@@ -180,7 +180,8 @@ check_and_push_ready_prs() {
             local repo_root=$(echo "$pr_data" | jq -r '.repo_root')
                 
             if [ -z "$jj_change_id" ]; then
-                echo "PR #$pr_number has no JJ change ID, skipping push check"
+                local project=$(echo "$pr_data" | jq -r '.project')
+                echo "$project PR #$pr_number has no JJ change ID, skipping push check"
                 continue
             fi
                 
