@@ -732,8 +732,9 @@ case "$ARG_COMMAND" in
                             echo "Review notes saved."
                         fi
                     
-                        # Check if we should post GitHub approval
+                        # Check if we should post GitHub approval and/or push a merge.
                         post_github_approval_if_ready "$PR_UUID"
+                        check_for_pushable_merges "$MERGE_COMMIT_UUID"
                         break
                     else
                         # Editor failed (e.g. user typed :cq in vim)
