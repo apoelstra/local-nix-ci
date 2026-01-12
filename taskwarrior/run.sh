@@ -210,7 +210,7 @@ check_and_push_ready_prs() {
                 echo "   Resetting merge_status to unstarted."
                     
                 # Remove old merge commit dependency
-                local old_merge_uuids=$(task "project:local-ci.$PROJECT" "commit_id.any:" "+MERGE_COMMIT" export | jq -r --arg base "$stored_base_commit" '.[] | select(.description | contains($base)) | .uuid')
+                local old_merge_uuids=$(task "project:local-ci.$project" "commit_id.any:" "+MERGE_COMMIT" export | jq -r --arg base "$stored_base_commit" '.[] | select(.description | contains($base)) | .uuid')
                 for old_uuid in $old_merge_uuids; do
                     if [ -n "$old_uuid" ]; then
                         task "$pr_uuid" modify "depends:-$old_uuid"

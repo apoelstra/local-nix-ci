@@ -165,7 +165,7 @@ check_for_pushable_merges() {
         
         if [ -n "$tree_hash" ]; then
             # Find PRs with matching tree hash
-            local pr_uuids=$(task "tree_hash:$tree_hash" "pr_number.any:" export | jq -r '.[].uuid')
+            local pr_uuids=$(task "tree_hash:$tree_hash" "merge_status:unstarted" "pr_number.any:" export | jq -r '.[].uuid')
             for pr_uuid in $pr_uuids; do
                 if [ -n "$pr_uuid" ]; then
                     local pr_data=$(task "$pr_uuid" export | jq -r '.[0]')
