@@ -29,10 +29,7 @@ case $pr_num in
 esac
 
 # Get the path to compute_merge_description.py
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOCAL_CI_PATH="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPUTE_MERGE_DESC="$LOCAL_CI_PATH/sqlite/compute_merge_description.py"
-
 if [ ! -f "$COMPUTE_MERGE_DESC" ]; then
     echo "Error: compute_merge_description.py not found at $COMPUTE_MERGE_DESC" >&2
     exit 1

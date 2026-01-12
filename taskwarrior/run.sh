@@ -229,7 +229,21 @@ check_and_push_ready_prs() {
             # Check if JJ change has GPG signature
             if command -v jj >/dev/null 2>&1; then
                 local has_signature=$(jj log -r "$jj_change_id" --no-graph -T 'if(signature, "true", "false")' 2>/dev/null || echo "false")
-                
+
+                # Recompute description to get latest ACK set
+                COMPUTE_MERGE_DESC="$LOCAL_CI_PATH/sqlite/compute_merge_description.py"
+                if [ ! -f "$COMPUTE_MERGE_DESC" ]; then
+                    echo "Error: compute_merge_description.py not found at $COMPUTE_MERGE_DESC" >&2
+                    exit 1
+                fi
+                local description
+                local ack_count
+                description=$("$COMPUTE_MERGE_DESC" -c "$jj_change_id" "$pr_num" $requeue_flag --no-acks-ok)
+                # This is a little goofy; it would be better to use a real programming language and
+                # to have compute_merge_description.py just return the list of ACKs. But okay.
+                ack_count=$(echo "$description" | awk '/^    ACKs for top commit:$/ {found=1} found && /^        .*ACK/')
+                jj describe --quiet -r "$jj_change_id" -m "$description"
+                                
                 # Get the merge commit ID from JJ change
                 local merge_commit_id=$(jj log --no-graph -r "$jj_change_id" -T commit_id 2>/dev/null || echo "")
                 
@@ -237,13 +251,13 @@ check_and_push_ready_prs() {
                     echo "$project PR #$pr_number has GPG signature, pushing to $base_ref"
                     
                     if [ -n "$merge_commit_id" ] && git push origin "$merge_commit_id:$base_ref"; then
-                        echo "Successfully pushed PR #$pr_number to $base_ref"
+                        echo "Successfully pushed PR #$pr_number to $base_ref ($ack_count ACKs)"
                         task "$pr_uuid" modify "merge_status:pushed"
                     else
                         echo "Failed to push PR #$pr_number to $base_ref"
                     fi
                 else
-                    echo "$project PR #$pr_number JJ change $jj_change_id does not have GPG signature yet"
+                    echo "$project PR #$pr_number JJ change $jj_change_id does not have GPG signature yet ($ack_count ACKs)"
                 fi
             else
                 echo "jj command not available, cannot check GPG signature for PR #$pr_number"

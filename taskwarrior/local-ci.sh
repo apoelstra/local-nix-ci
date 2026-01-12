@@ -3,6 +3,7 @@
 set -euo pipefail
 shopt -s nullglob
 
+command -v awk >/dev/null 2>&1 || { echo "awk is required but not installed. Aborting." >&2; exit 1; }
 command -v gh >/dev/null 2>&1 || { echo "gh is required but not installed. Aborting." >&2; exit 1; }
 command -v git >/dev/null 2>&1 || { echo "git is required but not installed. Aborting." >&2; exit 1; }
 command -v jj >/dev/null 2>&1 || { echo "jj is required but not installed. Aborting." >&2; exit 1; }
