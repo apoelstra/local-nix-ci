@@ -42,9 +42,6 @@ run_ci_loop() {
                     echo "(You need to Ctrl+C and restart local-ci.sh run to reset the warnings.)" >&2
                 fi
                 sleep_sec=1
-            else
-                # Sleeping, but not echoing
-                check_and_push_ready_prs > /dev/null
             fi
         fi
 
@@ -238,7 +235,7 @@ check_and_push_ready_prs() {
                 fi
                 local description
                 local ack_count
-                description=$("$COMPUTE_MERGE_DESC" -c "$jj_change_id" "$pr_num" $requeue_flag --no-acks-ok)
+                description=$("$COMPUTE_MERGE_DESC" -c "$jj_change_id" "$pr_number" --no-acks-ok)
                 # This is a little goofy; it would be better to use a real programming language and
                 # to have compute_merge_description.py just return the list of ACKs. But okay.
                 ack_count=$(echo "$description" | awk '/^    ACKs for top commit:$/ {found=1} found && /^        .*ACK/')
