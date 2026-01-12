@@ -496,6 +496,8 @@ case "$ARG_COMMAND" in
         # Get PR review status
         PR_REVIEW_STATUS=$(task "$PR_UUID" export | jq -r '.[0].review_status // "unreviewed"')
         echo "PR Review Status: $PR_REVIEW_STATUS"
+        PR_MERGE_STATUS=$(task "$PR_UUID" export | jq -r '.[0].merge_status // "unreviewed"')
+        echo "PR Merge Status: $PR_MERGE_STATUS"
         echo
         
         # Display commit information
