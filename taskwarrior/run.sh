@@ -10,42 +10,46 @@ run_ci_loop() {
     local warnings=()
 
     while true; do
-        # Check for PRs ready to push, before doing anything else.
-        check_and_push_ready_prs
-
         # Find next approved commit that needs CI
         local next_commit_uuid=$(task "review_status:approved" "ci_status:unstarted" "commit_id.any:" export | jq -r '.[0].uuid // empty')
 
-        if [ -z "$next_commit_uuid" ]; then
-            # Done work. If we did something, reset the sleep counter and
-            # loop around. If we did nothing, sleep and periodically
-            # output a "nothing to do" message.
-            if [ "$busy" != "false" ]; then
-                backoff_sec=30
+        # Do status echos. If we've been idle, sleep and periodically
+        # output a "nothing to do" message.
+        if [ "$busy" != "false" ]; then
+            check_and_push_ready_prs
+            backoff_sec=30
+            sleep_sec=1
+        else
+            sleep 1
+            ((sleep_sec++))
+
+            if [ "$sleep_sec" -ge "$backoff_sec" ]; then
+                    # Will max out at 480, 960, 1920, etc., whichever is greater than
+                # the number written here. (64 minutes apparently.)
+                if [ "$backoff_sec" -lt 2400 ]; then
+                    backoff_sec=$((backoff_sec * 2))
+                    sleep_sec=0
+                fi
+
+                check_and_push_ready_prs
+
+                echo "([$(date +"%F %T")] Nothing to do. (Next message in $((backoff_sec / 60)) minutes.)"
+                if [ ${#warnings[@]} -gt 0 ]; then
+                    echo "Current warnings:" >&2
+                    for warning in "${warnings[@]}"; do
+                        echo "    $warning"
+                    done
+                    echo "(You need to Ctrl+C and restart local-ci.sh run to reset the warnings.)" >&2
+                fi
                 sleep_sec=1
             else
-                sleep 1
-                ((sleep_sec++))
-
-                if [ "$sleep_sec" -ge "$backoff_sec" ]; then
-                    # Will max out at 480, 960, 1920, etc., whichever is greater than
-                    # the number written here. (64 minutes apparently.)
-                    if [ "$backoff_sec" -lt 2400 ]; then
-                        backoff_sec=$((backoff_sec * 2))
-                        sleep_sec=0
-                    fi
-
-                    echo "([$(date +"%F %T")] Nothing to do. (Next message in $((backoff_sec / 60)) minutes.)"
-                    if [ ${#warnings[@]} -gt 0 ]; then
-                        echo "Current warnings:" >&2
-                        for warning in "${warnings[@]}"; do
-                            echo "    $warning"
-                        done
-                        echo "(You need to Ctrl+C and restart local-ci.sh run to reset the warnings.)" >&2
-                    fi
-                    sleep_sec=1
-                fi
+                # Sleeping, but not echoing
+                check_and_push_ready_prs > /dev/null
             fi
+        fi
+
+        # Check whether there's anything to build this loop.
+        if [ -z "$next_commit_uuid" ]; then
             busy=false
             continue
         fi
@@ -178,9 +182,9 @@ check_and_push_ready_prs() {
             local jj_change_id=$(echo "$pr_data" | jq -r '.jj_change_id // ""')
             local stored_base_commit=$(echo "$pr_data" | jq -r '.base_commit // ""')
             local repo_root=$(echo "$pr_data" | jq -r '.repo_root')
-                
+            local project=$(echo "$pr_data" | jq -r .project | sed "s/^local-ci.//")
+
             if [ -z "$jj_change_id" ]; then
-                local project=$(echo "$pr_data" | jq -r '.project')
                 echo "$project PR #$pr_number has no JJ change ID, skipping push check"
                 continue
             fi
@@ -224,13 +228,14 @@ check_and_push_ready_prs() {
             
             # Check if JJ change has GPG signature
             if command -v jj >/dev/null 2>&1; then
+                local project=
                 local has_signature=$(jj log -r "$jj_change_id" --no-graph -T 'if(signature, "true", "false")' 2>/dev/null || echo "false")
                 
                 # Get the merge commit ID from JJ change
                 local merge_commit_id=$(jj log --no-graph -r "$jj_change_id" -T commit_id 2>/dev/null || echo "")
                 
                 if [ "$has_signature" = "true" ]; then
-                    echo "PR #$pr_number has GPG signature, pushing to $base_ref"
+                    echo "$project PR #$pr_number has GPG signature, pushing to $base_ref"
                     
                     if [ -n "$merge_commit_id" ] && git push origin "$merge_commit_id:$base_ref"; then
                         echo "Successfully pushed PR #$pr_number to $base_ref"
@@ -239,7 +244,7 @@ check_and_push_ready_prs() {
                         echo "Failed to push PR #$pr_number to $base_ref"
                     fi
                 else
-                    echo "PR #$pr_number JJ change $jj_change_id does not have GPG signature yet"
+                    echo "$project PR #$pr_number JJ change $jj_change_id does not have GPG signature yet"
                 fi
             else
                 echo "jj command not available, cannot check GPG signature for PR #$pr_number"
