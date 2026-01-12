@@ -163,13 +163,41 @@ check_for_pushable_merges() {
         local tree_hash=$(git rev-parse "$commit_id^{tree}" 2>/dev/null || echo "")
         
         if [ -n "$tree_hash" ]; then
-            # Find PRs with matching tree hash and update their merge_status
+            # Find PRs with matching tree hash
             local pr_uuids=$(task "tree_hash:$tree_hash" "pr_number.any:" export | jq -r '.[].uuid')
             for pr_uuid in $pr_uuids; do
                 if [ -n "$pr_uuid" ]; then
-                    local pr_number=$(task "$pr_uuid" export | jq -r '.[0].pr_number')
-                    echo "Updating merge_status to needsig for PR #$pr_number (tree hash matches)"
-                    task "$pr_uuid" modify "merge_status:needsig"
+                    local pr_data=$(task "$pr_uuid" export | jq -r '.[0]')
+                    local pr_number=$(echo "$pr_data" | jq -r '.pr_number')
+                    local pr_review_status=$(echo "$pr_data" | jq -r '.review_status // "unreviewed"')
+                    
+                    # Only update merge_status if PR itself is approved
+                    if [ "$pr_review_status" != "approved" ]; then
+                        echo "PR #$pr_number merge commit succeeded but PR is not approved (status: $pr_review_status)"
+                        continue
+                    fi
+                    
+                    # Check if all commits in this PR are approved and have passed CI
+                    local all_commits_ready=true
+                    local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+                    
+                    for commit_uuid_check in $commit_uuids; do
+                        if [ -n "$commit_uuid_check" ]; then
+                            local commit_review_status=$(task "$commit_uuid_check" export | jq -r '.[0].review_status // "unreviewed"')
+                            local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
+                            if [ "$commit_review_status" != "approved" ] || [ "$commit_ci_status" != "success" ]; then
+                                all_commits_ready=false
+                                break
+                            fi
+                        fi
+                    done
+                    
+                    if [ "$all_commits_ready" = "true" ]; then
+                        echo "Updating merge_status to needsig for PR #$pr_number (all conditions met)"
+                        task "$pr_uuid" modify "merge_status:needsig"
+                    else
+                        echo "PR #$pr_number merge commit succeeded but not all commits are approved and CI successful"
+                    fi
                 fi
             done
         fi
