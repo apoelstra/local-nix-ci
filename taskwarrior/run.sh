@@ -238,7 +238,7 @@ check_and_push_ready_prs() {
                 description=$("$COMPUTE_MERGE_DESC" -c "$jj_change_id" "$pr_number" --no-acks-ok)
                 # This is a little goofy; it would be better to use a real programming language and
                 # to have compute_merge_description.py just return the list of ACKs. But okay.
-                ack_count=$(echo "$description" | awk '/^    ACKs for top commit:$/ {found=1} found && /^        .*ACK/')
+                ack_count=$(echo "$description" | awk '/^ACKs for top commit:$/ {found=1} found && /^    .*ACK/' | wc -l)
                 jj describe --quiet -r "$jj_change_id" -m "$description"
                                 
                 # Get the merge commit ID from JJ change
