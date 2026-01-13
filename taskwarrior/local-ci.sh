@@ -224,6 +224,10 @@ post_github_approval_if_ready() {
     
     for commit_uuid_check in $commit_uuids; do
         if [ -n "$commit_uuid_check" ]; then
+            local commit_is_merge=$(task "$commit_uuid_check" export | jq -r '.[0].tags // [] | contains(["MERGE_COMMIT"])')
+            if [ "$commit_is_merge" = "true" ]; then
+                continue
+            fi
             local commit_review_status=$(task "$commit_uuid_check" export | jq -r '.[0].review_status // "unreviewed"')
             local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
             if [ "$commit_review_status" != "approved" ] || [ "$commit_ci_status" != "success" ]; then
@@ -233,28 +237,8 @@ post_github_approval_if_ready() {
         fi
     done
     
-    # Only post approval if all conditions are met
-    if [ "$all_commits_approved_and_ci" != "true" ]; then
-        echo "PR #$pr_number is approved but not all commits are approved and CI successful yet"
-        return
-    fi
-    
-    # Get all commits for this PR
-    local all_commits_successful=true
-    local commit_uuids=$(task "$pr_uuid" export | jq -r '.[0].depends.[]')
-    
-    for commit_uuid_check in $commit_uuids; do
-        if [ -n "$commit_uuid_check" ]; then
-            local commit_ci_status=$(task "$commit_uuid_check" export | jq -r '.[0].ci_status // "unstarted"')
-            if [ "$commit_ci_status" != "success" ]; then
-                all_commits_successful=false
-                break
-            fi
-        fi
-    done
-    
     # If all commits successful and PR is approved, post approval on GitHub
-    if [ "$all_commits_successful" = "true" ]; then
+    if [ "$all_commits_approved_and_ci" = "true" ]; then
         echo "All commits in PR #$pr_number are successful and PR is approved. Posting GitHub approval..."
         
         # Get PR review notes
@@ -267,6 +251,8 @@ post_github_approval_if_ready() {
             gh pr review "$pr_number" -c -b "$pr_review_notes"
         fi
         popd > /dev/null
+    else
+        echo "PR #$pr_number is approved but not all commits are approved and CI successful yet"
     fi
 }
 
