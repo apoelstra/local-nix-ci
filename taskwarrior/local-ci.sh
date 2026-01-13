@@ -180,7 +180,7 @@ check_for_pushable_merges() {
                     
                     # Check if all commits in this PR are approved and have passed CI
                     local all_commits_ready=true
-                    local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+                    local commit_uuids=$(task "$pr_uuid" export | jq -r '.[0].depends.[]')
                     
                     for commit_uuid_check in $commit_uuids; do
                         if [ -n "$commit_uuid_check" ]; then
@@ -220,7 +220,7 @@ post_github_approval_if_ready() {
     
     # Check if all commits are approved and CI successful
     local all_commits_approved_and_ci=true
-    local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+    local commit_uuids=$(task "$pr_uuid" export | jq -r '.[0].depends.[]')
     
     for commit_uuid_check in $commit_uuids; do
         if [ -n "$commit_uuid_check" ]; then
@@ -241,7 +241,7 @@ post_github_approval_if_ready() {
     
     # Get all commits for this PR
     local all_commits_successful=true
-    local commit_uuids=$(task "depends:$pr_uuid" export | jq -r '.[] | select(.commit_id) | .uuid')
+    local commit_uuids=$(task "$pr_uuid" export | jq -r '.[0].depends.[]')
     
     for commit_uuid_check in $commit_uuids; do
         if [ -n "$commit_uuid_check" ]; then
