@@ -383,7 +383,9 @@ case "$ARG_COMMAND" in
         FRESH_BASE_COMMIT=$(git rev-parse "pull/$pr_num/base" 2>/dev/null || echo "")
         
         # Only create merge commit if it doesn't exist or base commit has changed
+        RESET_MERGE_STATUS=false
         if [ -z "$CURRENT_JJ_CHANGE_ID" ] || [ "$CURRENT_BASE_COMMIT" != "$FRESH_BASE_COMMIT" ]; then
+            RESET_MERGE_STATUS=true
             if [ -n "$CURRENT_JJ_CHANGE_ID" ] && [ "$CURRENT_BASE_COMMIT" != "$FRESH_BASE_COMMIT" ]; then
                 echo "Base commit changed from $CURRENT_BASE_COMMIT to $FRESH_BASE_COMMIT, recreating merge commit..."
             else
@@ -447,6 +449,9 @@ case "$ARG_COMMAND" in
         fi
         if [ -n "$MERGE_JJ_CHANGE_ID" ]; then
             PR_UPSERT+=("jj_change_id:$MERGE_JJ_CHANGE_ID")
+        fi
+        if [ "$RESET_MERGE_STATUS" = "true" ]; then
+            PR_UPSERT+=("merge_status:unstarted")
         fi
         
         PR_UUID=$(tw_upsert "${PR_FILTER[@]}" -- "${PR_UPSERT[@]}")
