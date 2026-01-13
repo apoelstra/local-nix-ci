@@ -2,13 +2,14 @@
 
 mod lexer;
 
+use core::fmt;
 use std::process;
 use std::sync::OnceLock;
 use lexer::{ArgToken, lexed_args};
 
 static PROGRAM_NAME: OnceLock<String> = OnceLock::new();
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Approve,
     Info,
@@ -16,6 +17,19 @@ pub enum Action {
     Refresh,
     Review,
     Run,
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Approve => f.write_str("approve"),
+            Self::Info => f.write_str("info"),
+            Self::Nack => f.write_str("nack"),
+            Self::Refresh => f.write_str("refresh"),
+            Self::Review => f.write_str("review"),
+            Self::Run => f.write_str("run"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,12 +47,11 @@ pub struct CliArguments {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParseError {
-    MultipleActions(String, String),
-    MultipleTargetTypes(String, String),
-    MultipleTargets,
-    MergeRefWithPrType(usize),
+    MultipleActions(Action, Action),
+    MultipleTargetTypes(&'static str, &'static str),
+    MultipleTargets(String, String),
     InvalidPrNumber(String),
-    MissingTarget(String),
+    MissingTarget(&'static str),
 }
 
 impl std::fmt::Display for ParseError {
@@ -50,11 +63,8 @@ impl std::fmt::Display for ParseError {
             Self::MultipleTargetTypes(first, second) => {
                 write!(f, "Multiple target types provided: '{}' and '{}'. If '{}' is meant to be a git reference, try 'refs/heads/{}'.", first, second, second, second)
             }
-            Self::MultipleTargets => {
-                write!(f, "Multiple targets provided. Please specify only one target.")
-            }
-            Self::MergeRefWithPrType(pr_num) => {
-                write!(f, "Cannot use merge reference 'merge-{}' with target type 'pr'. Did you mean to use 'commit' instead of 'pr'?", pr_num)
+            Self::MultipleTargets(first, second) => {
+                write!(f, "Multiple targets provided ('{}' and '{}'). Please specify only one target.", first, second)
             }
             Self::InvalidPrNumber(s) => {
                 write!(f, "Invalid PR number: '{}'. PR numbers must be numeric.", s)
@@ -69,6 +79,26 @@ impl std::fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 fn parse_args() -> Result<CliArguments, ParseError> {
+    fn set_once<T>(existing: &mut Option<T>, new: T, error: fn(T, T) -> ParseError) -> Result<(), ParseError> {
+        if let Some(existing) = existing.take() {
+            return Err(error(existing, new));
+        }
+        *existing = Some(new);
+        Ok(())
+    }
+
+    fn set_action(action: &mut Option<Action>, new: Action) -> Result<(), ParseError> {
+        set_once(action, new, ParseError::MultipleActions)
+    }
+
+    fn set_target_type(target_type: &mut Option<&'static str>, new: &'static str) -> Result<(), ParseError> {
+        set_once(target_type, new, ParseError::MultipleTargetTypes)
+    }
+
+    fn set_target(target: &mut Option<String>, new: String) -> Result<(), ParseError> {
+        set_once(target, new, ParseError::MultipleTargets)
+    }
+    
     let mut action = None;
     let mut target_type = None;
     let mut target = None;
@@ -79,97 +109,33 @@ fn parse_args() -> Result<CliArguments, ParseError> {
                 PROGRAM_NAME.set(s).ok(); // Ignore error if already set
                 continue;
             }
-            ArgToken::Approve => {
-                if let Some(existing) = action {
-                    return Err(ParseError::MultipleActions(
-                        format!("{:?}", existing).to_lowercase(),
-                        "approve".to_string()
-                    ));
-                }
-                action = Some(Action::Approve);
-            }
-            ArgToken::Info => {
-                if let Some(existing) = action {
-                    return Err(ParseError::MultipleActions(
-                        format!("{:?}", existing).to_lowercase(),
-                        "info".to_string()
-                    ));
-                }
-                action = Some(Action::Info);
-            }
-            ArgToken::Nack => {
-                if let Some(existing) = action {
-                    return Err(ParseError::MultipleActions(
-                        format!("{:?}", existing).to_lowercase(),
-                        "nack".to_string()
-                    ));
-                }
-                action = Some(Action::Nack);
-            }
-            ArgToken::Refresh => {
-                if let Some(existing) = action {
-                    return Err(ParseError::MultipleActions(
-                        format!("{:?}", existing).to_lowercase(),
-                        "refresh".to_string()
-                    ));
-                }
-                action = Some(Action::Refresh);
-            }
-            ArgToken::Review => {
-                if let Some(existing) = action {
-                    return Err(ParseError::MultipleActions(
-                        format!("{:?}", existing).to_lowercase(),
-                        "review".to_string()
-                    ));
-                }
-                action = Some(Action::Review);
-            }
-            ArgToken::Run => {
-                if let Some(existing) = action {
-                    return Err(ParseError::MultipleActions(
-                        format!("{:?}", existing).to_lowercase(),
-                        "run".to_string()
-                    ));
-                }
-                action = Some(Action::Run);
-            }
+            ArgToken::Approve => set_once(&mut action, Action::Approve, ParseError::MultipleActions)?,
+            ArgToken::Info => set_once(&mut action, Action::Info, ParseError::MultipleActions)?,
+            ArgToken::Nack=> set_once(&mut action, Action::Nack, ParseError::MultipleActions)?,
+            ArgToken::Refresh => set_once(&mut action, Action::Refresh, ParseError::MultipleActions)?,
+            ArgToken::Review => set_once(&mut action, Action::Review, ParseError::MultipleActions)?,
+            ArgToken::Run => set_once(&mut action, Action::Run, ParseError::MultipleActions)?,
             
-            ArgToken::Pr => {
-                if target_type.is_some() {
-                    return Err(ParseError::MultipleTargetTypes(
-                        "pr".to_string(),
-                        "pr".to_string() // This will be overwritten by the actual second type
-                    ));
-                }
-                target_type = Some("pr");
-            }
-            ArgToken::Commit => {
-                if let Some(existing) = target_type {
-                    return Err(ParseError::MultipleTargetTypes(
-                        existing.to_string(),
-                        "commit".to_string()
-                    ));
-                }
-                target_type = Some("commit");
-            }
+            ArgToken::Pr => set_once(&mut target_type, "pr", ParseError::MultipleTargetTypes)?,
+            ArgToken::Commit => set_once(&mut target_type, "commit", ParseError::MultipleTargetTypes)?,
             
             ArgToken::PrNumber(num) => {
-                if target.is_some() {
-                    return Err(ParseError::MultipleTargets);
+                if target_type.is_none() {
+                    target_type = Some("pr");
                 }
-                target = Some(("pr_number", num.to_string()));
+                set_once(&mut target, num.to_string(), ParseError::MultipleTargets)?;
             }
             ArgToken::MergeRef(num) => {
-                if target.is_some() {
-                    return Err(ParseError::MultipleTargets);
+                if target_type.is_none() {
+                    target_type = Some("commit");
                 }
-                target = Some(("merge_ref", num.to_string()));
+                set_once(&mut target, format!("merge-{num}"), ParseError::MultipleTargets)?;
             }
             ArgToken::MaybeRef(s) => {
-                if target.is_some() {
-                    return Err(ParseError::MultipleTargets);
+                if target_type.is_none() {
+                    target_type = Some("commit");
                 }
-                target = Some(("maybe_ref", s));
+                set_once(&mut target, s, ParseError::MultipleTargets)?;
             }
         }
     }
@@ -178,43 +144,17 @@ fn parse_args() -> Result<CliArguments, ParseError> {
     
     let final_target = match (target_type, target) {
         (None, None) => Target::None,
-        (None, Some(("pr_number", num_str))) => {
-            Target::Pr(num_str.parse().unwrap()) // This should always succeed since lexer validated it
-        }
-        (None, Some(("merge_ref", num_str))) => {
-            Target::Commit(format!("merge-{}", num_str))
-        }
-        (None, Some(("maybe_ref", s))) => {
-            Target::Commit(s)
-        }
-        (Some("pr"), None) => {
-            return Err(ParseError::MissingTarget("pr".to_string()));
-        }
-        (Some("commit"), None) => {
-            return Err(ParseError::MissingTarget("commit".to_string()));
-        }
-        (Some("pr"), Some(("pr_number", num_str))) => {
-            Target::Pr(num_str.parse().unwrap())
-        }
-        (Some("pr"), Some(("merge_ref", num_str))) => {
-            return Err(ParseError::MergeRefWithPrType(num_str.parse().unwrap()));
-        }
-        (Some("pr"), Some(("maybe_ref", s))) => {
-            match s.parse::<usize>() {
+        (Some(x), None) => return Err(ParseError::MissingTarget(x)),
+
+        (Some("pr"), Some(s)) => {
+            match s.parse() {
                 Ok(num) => Target::Pr(num),
                 Err(_) => return Err(ParseError::InvalidPrNumber(s)),
             }
         }
-        (Some("commit"), Some(("pr_number", num_str))) => {
-            Target::Commit(num_str)
-        }
-        (Some("commit"), Some(("merge_ref", num_str))) => {
-            Target::Commit(format!("merge-{}", num_str))
-        }
-        (Some("commit"), Some(("maybe_ref", s))) => {
-            Target::Commit(s)
-        }
-        _ => unreachable!("Invalid target type"),
+        (Some("commit"), Some(s)) => Target::Commit(s),
+        (None, Some(_)) => unreachable!("target without inferred target type"),
+        (Some(_), _) => unreachable!("invalid target type"),
     };
     
     Ok(CliArguments {
