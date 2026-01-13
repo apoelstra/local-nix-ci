@@ -66,7 +66,7 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
                     return ArgToken::PrNumber(res);
                 }
 
-                return ArgToken::MaybeRef(s_arg);
+                ArgToken::MaybeRef(s_arg)
             }
         }
     })
