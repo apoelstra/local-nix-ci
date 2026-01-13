@@ -870,6 +870,11 @@ case "$ARG_COMMAND" in
                 if [ "$IS_TIP" = "true" ]; then
                     echo "  ⚠️  This is a tip commit for at least one of the above PR(s)"
                 fi
+                IS_MERGE=$(task "$COMMIT_UUID" export | jq -r '.[0].tags // [] | contains(["MERGE_COMMIT"])')
+                if [ "$IS_MERGE" = "true" ]; then
+                    echo "  ⚠️  This is a merge commit for at least one of the above PR(s)"
+                fi
+
                 echo
                 echo "  Note: Remember to review the PR(s) separately from individual commits."
             else
@@ -930,7 +935,7 @@ case "$ARG_COMMAND" in
                 # Check if any PRs containing this commit are now ready for GitHub approval
                 PR_UUIDS_FOR_COMMIT=$(task "project:local-ci.$PROJECT" "depends:$COMMIT_UUID" export 2>/dev/null | jq -r '.[] | select(.pr_number) | .uuid')
                 for pr_uuid_check in $PR_UUIDS_FOR_COMMIT; do
-                    if [ -n "$pr_uuid_check" ]; then
+                    if [ -n "$pr_uuid_check" ] && ! [ "$IS_MERGE" = "true" ]; then
                         post_github_approval_if_ready "$pr_uuid_check"
                     fi
                 done
