@@ -14,8 +14,8 @@ pub enum ArgToken {
     MergeRef(usize),
     /// The literal `approve`. (Never interpreted as a number or ref.)
     Approve,
-    /// The literal `list`. (Never interpreted as a number or ref.)
-    List,
+    /// The literal `info`. (Never interpreted as a number or ref.)
+    Info,
     /// The literal `nack`. (Never interpreted as a number or ref.)
     Nack,
     /// The literal `refresh`. (Never interpreted as a number or ref.)
@@ -50,7 +50,7 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
 
         match s_arg.as_str() {
             "approve" => ArgToken::Approve,
-            "list" => ArgToken::List,
+            "info" => ArgToken::Info,
             "nack" => ArgToken::Nack,
             "refresh" => ArgToken::Refresh,
             "review" => ArgToken::Review,

@@ -3,7 +3,10 @@
 mod lexer;
 
 use std::process;
+use std::sync::OnceLock;
 use lexer::{ArgToken, lexed_args};
+
+static PROGRAM_NAME: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -29,39 +32,35 @@ pub struct CliArguments {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParseError {
+enum ParseError {
     MultipleActions(String, String),
     MultipleTargetTypes(String, String),
     MultipleTargets,
     MergeRefWithPrType(usize),
     InvalidPrNumber(String),
     MissingTarget(String),
-    InvalidTargetForCommitType(String),
 }
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::MultipleActions(first, second) => {
+            Self::MultipleActions(first, second) => {
                 write!(f, "Multiple actions provided: '{}' and '{}'. If '{}' is meant to be a git reference, try 'refs/heads/{}'.", first, second, second, second)
             }
-            ParseError::MultipleTargetTypes(first, second) => {
+            Self::MultipleTargetTypes(first, second) => {
                 write!(f, "Multiple target types provided: '{}' and '{}'. If '{}' is meant to be a git reference, try 'refs/heads/{}'.", first, second, second, second)
             }
-            ParseError::MultipleTargets => {
+            Self::MultipleTargets => {
                 write!(f, "Multiple targets provided. Please specify only one target.")
             }
-            ParseError::MergeRefWithPrType(pr_num) => {
+            Self::MergeRefWithPrType(pr_num) => {
                 write!(f, "Cannot use merge reference 'merge-{}' with target type 'pr'. Did you mean to use 'commit' instead of 'pr'?", pr_num)
             }
-            ParseError::InvalidPrNumber(s) => {
+            Self::InvalidPrNumber(s) => {
                 write!(f, "Invalid PR number: '{}'. PR numbers must be numeric.", s)
             }
-            ParseError::MissingTarget(target_type) => {
+            Self::MissingTarget(target_type) => {
                 write!(f, "Target type '{}' specified but no target provided.", target_type)
-            }
-            ParseError::InvalidTargetForCommitType(s) => {
-                write!(f, "Invalid target '{}' for commit type.", s)
             }
         }
     }
@@ -74,10 +73,12 @@ fn parse_args() -> Result<CliArguments, ParseError> {
     let mut target_type = None;
     let mut target = None;
     
-    for token in lexed_args().skip(1) { // Skip program name
+    for token in lexed_args() {
         match token {
-            ArgToken::ProgramName(_) => unreachable!("Should have been skipped"),
-            
+            ArgToken::ProgramName(s) => { 
+                PROGRAM_NAME.set(s).ok(); // Ignore error if already set
+                continue;
+            }
             ArgToken::Approve => {
                 if let Some(existing) = action {
                     return Err(ParseError::MultipleActions(
@@ -222,10 +223,9 @@ fn parse_args() -> Result<CliArguments, ParseError> {
     })
 }
 
-fn usage(error: ParseError) {
-    eprintln!("Error: {}", error);
-    eprintln!();
-    eprintln!("Usage: tw-rs [ACTION] [TARGET_TYPE] [TARGET]");
+pub fn usage() {
+    let name = PROGRAM_NAME.get().map(|s| s.as_str()).unwrap_or("tw-rs");
+    eprintln!("Usage: {} [ACTION] [TARGET_TYPE] [TARGET]", name);
     eprintln!();
     eprintln!("Actions:");
     eprintln!("  approve    Approve a PR");
@@ -258,7 +258,9 @@ pub fn parse_cli() {
             // Later this will be used by the main function
         }
         Err(error) => {
-            usage(error);
+            eprintln!("Error: {}", error);
+            eprintln!();
+            usage();
             process::exit(1);
         }
     }
