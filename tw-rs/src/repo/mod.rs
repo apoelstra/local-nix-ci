@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::path::PathBuf;
-use std::process::Command;
+use xshell::{Shell, cmd};
 
 #[derive(Debug, Clone)]
 pub struct Repository {
@@ -33,34 +33,19 @@ impl std::fmt::Display for RepoError {
 impl std::error::Error for RepoError {}
 
 pub fn current_repo() -> Result<Repository, RepoError> {
+    let sh = Shell::new().map_err(|_| RepoError::GitCommandFailed)?;
+    
     // Get repository root using git
-    let git_output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
+    let repo_root_str = cmd!(sh, "git rev-parse --show-toplevel")
+        .read()
         .map_err(|_| RepoError::GitCommandFailed)?;
     
-    if !git_output.status.success() {
-        return Err(RepoError::GitCommandFailed);
-    }
-    
-    let repo_root = PathBuf::from(
-        String::from_utf8(git_output.stdout)
-            .map_err(|_| RepoError::Utf8Error)?
-            .trim()
-    );
+    let repo_root = PathBuf::from(repo_root_str.trim());
     
     // Get project name using gh
-    let gh_output = Command::new("gh")
-        .args(["repo", "view", "--json", "owner,name", "--jq", ".owner.login + \".\" + .name"])
-        .output()
-        .map_err(|_| RepoError::GhCommandFailed)?;
-    
-    if !gh_output.status.success() {
-        return Err(RepoError::GhCommandFailed);
-    }
-    
-    let project_name = String::from_utf8(gh_output.stdout)
-        .map_err(|_| RepoError::Utf8Error)?
+    let project_name = cmd!(sh, "gh repo view --json owner,name --jq .owner.login + \".\" + .name")
+        .read()
+        .map_err(|_| RepoError::GhCommandFailed)?
         .trim()
         .to_string();
     

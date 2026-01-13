@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-xtask = "0.1"
+xshell = "0.3"
 
 [workspace.lints.clippy]
 # Exclude lints we don't think are valuable.

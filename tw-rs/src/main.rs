@@ -3,22 +3,20 @@
 mod args;
 mod repo;
 
-use std::process::Command;
+use xshell::{Shell, cmd};
 
-fn check_required_tools() {
+fn check_required_tools() -> xshell::Result<()> {
+    let sh = Shell::new()?;
     let tools = ["gh", "git", "jj", "nix", "task"];
     
     for tool in &tools {
-        match Command::new(tool).arg("--version").output() {
-            Ok(output) if output.status.success() => {
-                // Tool is available
-            }
-            _ => {
-                eprintln!("Error: Required tool '{}' is not available or not in PATH", tool);
-                std::process::exit(1);
-            }
+        if cmd!(sh, "{tool} --version").quiet().run().is_err() {
+            eprintln!("Error: Required tool '{}' is not available or not in PATH", tool);
+            std::process::exit(1);
         }
     }
+    
+    Ok(())
 }
 
 fn main() {
@@ -27,7 +25,10 @@ fn main() {
     args::parse_cli();
 
     // Check that all required tools are available
-    check_required_tools();
+    if let Err(e) = check_required_tools() {
+        eprintln!("Error checking required tools: {}", e);
+        std::process::exit(1);
+    }
 
     println!("Hello, world!");
 }
