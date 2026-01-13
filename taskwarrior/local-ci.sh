@@ -514,6 +514,9 @@ case "$ARG_COMMAND" in
                 fi
             fi
         done
+
+        # Mark "needsig" if it needs a sig.
+        check_for_pushable_merges "$MERGE_COMMIT_UUID"
         
         echo "Finished processing PR $pr_num. Task UUID $PR_UUID"
         echo
