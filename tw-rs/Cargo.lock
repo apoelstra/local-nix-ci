@@ -5,3 +5,12 @@ version = 4
 [[package]]
 name = "local-ci"
 version = "0.1.0"
+dependencies = [
+ "xtask",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c542b3b93477808b864b70db51920341794dbe8eff8e68074b2bbc1164254955"
