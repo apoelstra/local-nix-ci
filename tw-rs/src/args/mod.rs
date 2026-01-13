@@ -251,12 +251,9 @@ pub fn usage() {
     eprintln!("  tw-rs approve commit main");
 }
 
-pub fn parse_cli() {
+pub fn parse_cli() -> CliArguments {
     match parse_args() {
-        Ok(_args) => {
-            // For now, just succeed silently
-            // Later this will be used by the main function
-        }
+        Ok(args) => args,
         Err(error) => {
             eprintln!("Error: {}", error);
             eprintln!();
