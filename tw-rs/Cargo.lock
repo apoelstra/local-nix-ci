@@ -170,6 +170,7 @@ dependencies = [
  "anyhow",
  "bitcoin_hashes",
  "tasklib",
+ "uuid",
  "xshell",
 ]
 
