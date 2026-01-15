@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0"
 bitcoin_hashes = { version = "0.18", default-features = false, features = [ "hex" ] }
 xshell = "0.2"
 # Tasklib brings in serde, chrono, uuid, so those are free deps

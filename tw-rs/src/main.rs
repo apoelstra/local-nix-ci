@@ -4,6 +4,8 @@ mod args;
 mod repo;
 mod tw;
 
+use anyhow::Context;
+use std::io::BufRead as _; // for lines
 use xshell::{Shell, cmd};
 
 fn check_required_tools() -> xshell::Result<()> {
@@ -20,7 +22,7 @@ fn check_required_tools() -> xshell::Result<()> {
     Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), anyhow::Error> {
     // Parse CLI arguments -- if this fails it will just terminate the program
     // with a usage message.
     let args = args::parse_cli();
@@ -43,6 +45,21 @@ fn main() {
                 std::process::exit(1);
             },
             args::Action::Info => {
+                let shell = tw::task_shell()
+                    .context("creating task shell")?;
+                let lines = cmd!(shell, "task rc.json.array=off project:local-ci export")
+                    .output()
+                    .context("running global task export")?;
+                if lines.stderr.is_empty() {
+                    eprintln!("{}", String::from_utf8_lossy(&lines.stderr));
+                }
+                for line in lines.stdout.lines() {
+                    let task = line
+                        .context("converting line to utf8")?
+                        .parse::<tasklib::Task>()
+                        .context("parsing line as task")?;
+                    println!("{}", task.uuid());
+                }
                 eprintln!("[info here]");
             },
             args::Action::Refresh => {
@@ -52,7 +69,7 @@ fn main() {
                 eprintln!("[run loop here]");
             },
         }
-        return;
+        return Ok(());
     } else {
         // Error out tfor actions which don't have any target.
         if args.action == args::Action::Run {
@@ -73,5 +90,5 @@ fn main() {
         Ok(repo) => repo,
     };
 
-    println!("Hello, world! In {repo:?}");
+    Ok(())
 }
