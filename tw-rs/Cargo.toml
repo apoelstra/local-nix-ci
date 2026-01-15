@@ -7,8 +7,7 @@ edition = "2024"
 anyhow = "1.0"
 bitcoin_hashes = { version = "0.18", default-features = false, features = [ "hex" ] }
 xshell = "0.2"
-# Tasklib brings in serde, chrono, uuid, so those are free deps
-tasklib = { version = "0.4.0", default-features = false }
+serde_json = { version = "1.0.149", default-features = false, features = [ "std" ] }
 uuid = { version = "1.19", default-features = false }
 
 [workspace.lints.clippy]

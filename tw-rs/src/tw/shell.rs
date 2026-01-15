@@ -82,9 +82,9 @@ uda.review_notes.label=Review Notes
 
 # Merge commit data -- for commits these should be blank
 uda.base_commit.type=string
-uda.base_commit.label=Base commit ID of merge commit
-uda.jj_change_id.type=string
-uda.jj_change_id.label=JJ change ID of merge commit
+uda.base_commit.label=Base commit ID of merge (first parent of merge)
+uda.merge_change_id.type=string
+uda.merge_change_id.label=JJ change ID of merge commit
 
 # Reports
 report.list.description=Default Task List
@@ -137,8 +137,8 @@ pub fn task_shell() -> Result<xshell::Shell, Error> {
         .map_err(|_| Error::HomeNotSet)?;
 
     // Set TASKRC and TASKDATA environment variables as done in local-ci.sh
-    let taskrc_path = format!("{}/.config/local-ci.taskrc", home);
-    let taskdata_path = format!("{}/.local-ci.task", home);
+    let taskrc_path = format!("{}/.config/local-ci2.taskrc", home);
+    let taskdata_path = format!("{}/.local-ci2.task", home);
 
     // Initialize TASKRC if needed
     initialize_taskrc(Path::new(&taskrc_path), &taskdata_path)?;

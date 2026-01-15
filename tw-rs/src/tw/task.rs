@@ -1,22 +1,85 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use uuid::Uuid;
 use serde_json;
 
-#[derive(Debug, Clone)]
-pub struct Task {
-    pub uuid: Uuid,
-    pub project: String,
-    pub repo_dir: PathBuf,
-    pub ci_status: CiStatus,
-    pub data: TaskData,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrTask {
+    uuid: Uuid,
+    description: String,
+    tip_commit_uuid: Uuid,
+
+    project: String,
+    repo_dir: PathBuf,
+    review_status: ReviewStatus,
+    review_notes: String,
+
+    title: String,
+    author: String,
+    number: usize,
+    url: String,
+    merge_status: MergeStatus,
+    base_commit: Option<String>,
+    merge_change_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl PrTask {
+    /// The UUID of the taskwarrior task backing this [`Task`].
+    pub fn uuid(&self) -> &Uuid { &self.uuid }
+
+    /// The project in the form `org.repo`. The taskwarrior project is this
+    /// string prefixed by `local-ci.`.
+    pub fn project(&self) -> &str { &self.project }
+
+    /// The path to the git toplevel directory of the project.
+    pub fn repo_dir(&self) -> &Path { &self.repo_dir }
+
+    pub fn title(&self) -> &str { &self.title }
+
+    pub fn number(&self) -> usize { self.number }
+
+    pub(super) fn dep_uuid(&self) -> &Uuid { &self.tip_commit_uuid }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitTask {
+    uuid: Uuid,
+    description: String,
+    // For merge commits this will be the non-trunk parent.
+    // If the PR itself contains merge commits it will just be rejected when
+    // it's added.
+    parent_commit_uuid: Option<Uuid>,
+
+    project: String,
+    repo_dir: PathBuf,
+    review_status: ReviewStatus,
+    review_notes: String,
+
+    commit_id: String,
+    is_tip: bool,
+    ci_status: CiStatus,
+    derivation: Option<String>,
+    claimed_by: Option<String>,
+}
+
+impl CommitTask {
+    /// The UUID of the taskwarrior task backing this [`Task`].
+    pub fn uuid(&self) -> &Uuid { &self.uuid }
+
+    /// The project in the form `org.repo`. The taskwarrior project is this
+    /// string prefixed by `local-ci.`.
+    pub fn project(&self) -> &str { &self.project }
+
+    /// The path to the git toplevel directory of the project.
+    pub fn repo_dir(&self) -> &Path { &self.repo_dir }
+
+    pub(super) fn dep_uuid(&self) -> Option<&Uuid> { self.parent_commit_uuid.as_ref() }
+}
+
+#[derive(Copy, Debug, Clone, PartialEq, Eq)]
 pub enum ReviewStatus {
     Unreviewed,
     NeedsChange,
@@ -24,7 +87,7 @@ pub enum ReviewStatus {
     Approved,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq)]
 pub enum CiStatus {
     Unstarted,
     Started,
@@ -32,47 +95,11 @@ pub enum CiStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq)]
 pub enum MergeStatus {
     Unstarted,
     NeedSig,
     Pushed,
-}
-
-#[derive(Debug, Clone)]
-pub enum TaskData {
-    Commit {
-        commit_id: String,
-        /// Whether this is the merge commit for some PR.
-        is_merge: bool,
-        /// Whether this is the tip commit of some PR and should be tested in detail.
-        is_tip: bool,
-        /// List of PRs this commit appears in
-        pr_refs: Vec<Uuid>,
-        /// Derivation path for CI
-        derivation: Option<String>,
-        /// Which CI box has claimed this job
-        claimed_by: Option<String>,
-    },
-    Pr {
-        title: String,
-        author: String,
-        number: usize,
-        url: String,
-        review_status: ReviewStatus,
-        review_notes: Option<String>,
-        merge_status: MergeStatus,
-        /// Ordered list of commit UUIDs in this PR
-        commit_refs: Vec<Uuid>,
-        /// UUID of the merge commit for this PR
-        merge_commit_ref: Option<Uuid>,
-        /// UUID of the tip commit for this PR
-        tip_commit_ref: Option<Uuid>,
-        /// Base commit ID for merge
-        base_commit: Option<String>,
-        /// JJ change ID of merge commit
-        jj_change_id: Option<String>,
-    },
 }
 
 #[derive(Debug)]
@@ -90,6 +117,11 @@ pub enum TaskParseError {
     CommitMissingId,
     PrHasCommitId,
     UnknownTaskType,
+    PrMissingTipCommit,
+    PrMultipleDependencies,
+    CommitMultipleDependencies,
+    MissingDependencyUuid,
+    InvalidDependencyUuid(uuid::Error),
 }
 
 impl fmt::Display for TaskParseError {
@@ -108,6 +140,11 @@ impl fmt::Display for TaskParseError {
             Self::CommitMissingId => write!(f, "Commit task missing commit_id (expected for commit tasks)"),
             Self::PrHasCommitId => write!(f, "PR task has commit_id (should be empty for PR tasks)"),
             Self::UnknownTaskType => write!(f, "Unable to determine if task is commit or PR type"),
+            Self::PrMissingTipCommit => write!(f, "PR task must have exactly one dependency (tip commit)"),
+            Self::PrMultipleDependencies => write!(f, "PR task has multiple dependencies, expected exactly one"),
+            Self::CommitMultipleDependencies => write!(f, "Commit task has multiple dependencies, expected at most one"),
+            Self::MissingDependencyUuid => write!(f, "Dependency UUID string is missing or null"),
+            Self::InvalidDependencyUuid(e) => write!(f, "Invalid dependency UUID: {}", e),
         }
     }
 }
@@ -155,8 +192,13 @@ impl FromStr for MergeStatus {
     }
 }
 
-impl Task {
-    pub fn from_str(task_str: &str) -> Result<Self, TaskParseError> {
+pub(super) enum PrOrCommitTask {
+    Pr(PrTask),
+    Commit(CommitTask),
+}
+
+impl PrOrCommitTask {
+    pub fn from_json(task_str: &str) -> Result<Self, TaskParseError> {
         // Parse TaskWarrior JSON format
         let task_json: serde_json::Value = serde_json::from_str(task_str)
             .map_err(|e| TaskParseError::TaskWarriorParse(e.to_string()))?;
@@ -181,35 +223,43 @@ impl Task {
             return Err(TaskParseError::InvalidRepoRoot);
         }
 
+        let description = task_json["description"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        let review_status = task_json["review_status"]
+            .as_str()
+            .unwrap_or("unreviewed")
+            .parse()?;
+
         let ci_status = task_json["ci_status"]
             .as_str()
             .unwrap_or("unstarted")
             .parse()?;
 
+        let depends = task_json["depends"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+
         // Determine task type based on presence of commit_id
         let commit_id = task_json["commit_id"]
             .as_str()
             .unwrap_or("");
-        let has_commit_id = !commit_id.is_empty();
 
-        let data = if has_commit_id {
-            // This is a commit task
-            let is_merge = task_json["base_commit"].as_str().is_some();
-            
-            // Check if TIP_COMMIT tag is present
-            let tags = task_json["tags"].as_array().unwrap_or(&vec![]);
-            let is_tip = tags.iter().any(|tag| tag.as_str() == Some("TIP_COMMIT"));
-
-            TaskData::Commit {
-                commit_id: commit_id.to_string(),
-                is_merge,
-                is_tip,
-                pr_refs: Vec::new(), // Will be populated when building task collection
-                derivation: task_json["derivation"].as_str().map(|s| s.to_string()),
-                claimed_by: task_json["claimedby"].as_str().map(|s| s.to_string()),
+        if commit_id.is_empty() {
+            // This is a PR task - must have exactly one dependency (tip commit)
+            if depends.is_empty() {
+                return Err(TaskParseError::PrMissingTipCommit);
             }
-        } else {
-            // This is a PR task
+            if depends.len() > 1 {
+                return Err(TaskParseError::PrMultipleDependencies);
+            }
+
+            let tip_commit_uuid_str = depends[0]
+                .as_str()
+                .ok_or(TaskParseError::MissingDependencyUuid)?;
+            let tip_commit_uuid = tip_commit_uuid_str.parse()
+                .map_err(TaskParseError::InvalidDependencyUuid)?;
+
             let pr_number_str = task_json["pr_number"]
                 .as_str()
                 .ok_or(TaskParseError::UnknownTaskType)?;
@@ -220,148 +270,65 @@ impl Task {
             let author = task_json["pr_author"].as_str().unwrap_or("").to_string();
             let url = task_json["pr_url"].as_str().unwrap_or("").to_string();
 
-            let review_status = task_json["review_status"]
-                .as_str()
-                .unwrap_or("unreviewed")
-                .parse()?;
-
             let merge_status = task_json["merge_status"]
                 .as_str()
                 .unwrap_or("unstarted")
                 .parse()?;
 
-            TaskData::Pr {
+            Ok(PrOrCommitTask::Pr(PrTask {
+                uuid,
+                tip_commit_uuid,
+                project,
+                repo_dir,
+                review_status,
+                review_notes: task_json["review_notes"].as_str().unwrap_or("").to_string(),
+                description,
+                
                 title,
                 author,
                 number,
                 url,
-                review_status,
-                review_notes: task_json["review_notes"].as_str().map(|s| s.to_string()),
                 merge_status,
-                commit_refs: Vec::new(), // Will be populated when building task collection
-                merge_commit_ref: None,
-                tip_commit_ref: None,
                 base_commit: task_json["base_commit"].as_str().map(|s| s.to_string()),
-                jj_change_id: task_json["jj_change_id"].as_str().map(|s| s.to_string()),
+                merge_change_id: task_json["jj_change_id"].as_str().map(|s| s.to_string()),
+            }))
+        } else {
+            // This is a commit task - can have 0 or 1 dependencies (parent commit)
+            if depends.len() > 1 {
+                return Err(TaskParseError::CommitMultipleDependencies);
             }
-        };
 
-        Ok(Task {
-            uuid,
-            project,
-            repo_dir,
-            ci_status,
-            data,
-        })
-    }
+            let parent_commit_uuid = if depends.is_empty() {
+                None
+            } else {
+                let parent_uuid_str = depends[0]
+                    .as_str()
+                    .ok_or(TaskParseError::MissingDependencyUuid)?;
+                Some(parent_uuid_str.parse()
+                    .map_err(TaskParseError::InvalidDependencyUuid)?)
+            };
+            
+            // Check if TIP_COMMIT tag is present
+            let tags = task_json["tags"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+            let is_tip = tags.iter().any(|tag| tag.as_str() == Some("TIP_COMMIT"));
 
-    pub fn is_commit(&self) -> bool {
-        matches!(self.data, TaskData::Commit { .. })
-    }
+            Ok(PrOrCommitTask::Commit(CommitTask {
+                uuid,
+                parent_commit_uuid,
+                
+                commit_id: commit_id.to_string(),
+                project,
+                repo_dir,
+                review_status,
+                review_notes: task_json["review_notes"].as_str().unwrap_or("").to_string(),
+                description,
 
-    pub fn is_pr(&self) -> bool {
-        matches!(self.data, TaskData::Pr { .. })
-    }
-}
-
-#[derive(Debug)]
-pub struct TaskCollection {
-    tasks: HashMap<Uuid, Task>,
-}
-
-impl TaskCollection {
-    pub fn new() -> Self {
-        Self {
-            tasks: HashMap::new(),
-        }
-    }
-
-    pub fn add_task(&mut self, mut task: Task) -> Result<(), TaskCollectionError> {
-        let uuid = task.uuid;
-        
-        // Insert the task first
-        self.tasks.insert(uuid, task);
-        
-        // Now update cross-references
-        self.update_cross_references()?;
-        
-        Ok(())
-    }
-
-    pub fn get_task(&self, uuid: &Uuid) -> Option<&Task> {
-        self.tasks.get(uuid)
-    }
-
-    pub fn get_task_mut(&mut self, uuid: &Uuid) -> Option<&mut Task> {
-        self.tasks.get_mut(uuid)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&Uuid, &Task)> {
-        self.tasks.iter()
-    }
-
-    fn update_cross_references(&mut self) -> Result<(), TaskCollectionError> {
-        // First pass: collect all PR numbers and their UUIDs
-        let mut pr_map: HashMap<usize, Uuid> = HashMap::new();
-        for (uuid, task) in &self.tasks {
-            if let TaskData::Pr { number, .. } = &task.data {
-                pr_map.insert(*number, *uuid);
-            }
-        }
-
-        // Second pass: update cross-references
-        // We need to collect updates first to avoid borrowing issues
-        let mut updates: Vec<(Uuid, TaskData)> = Vec::new();
-
-        for (uuid, task) in &self.tasks {
-            match &task.data {
-                TaskData::Commit { .. } => {
-                    // For commits, find which PRs they belong to by checking dependencies
-                    // This is a simplified approach - in practice you'd need to parse
-                    // TaskWarrior dependencies or use other mechanisms
-                    let mut new_data = task.data.clone();
-                    if let TaskData::Commit { ref mut pr_refs, .. } = new_data {
-                        pr_refs.clear();
-                        // TODO: Implement proper PR membership detection
-                    }
-                    updates.push((*uuid, new_data));
-                }
-                TaskData::Pr { .. } => {
-                    // For PRs, find their commits by checking dependencies
-                    let mut new_data = task.data.clone();
-                    if let TaskData::Pr { ref mut commit_refs, ref mut merge_commit_ref, ref mut tip_commit_ref, .. } = new_data {
-                        commit_refs.clear();
-                        *merge_commit_ref = None;
-                        *tip_commit_ref = None;
-                        // TODO: Implement proper commit collection from dependencies
-                    }
-                    updates.push((*uuid, new_data));
-                }
-            }
-        }
-
-        // Apply updates
-        for (uuid, new_data) in updates {
-            if let Some(task) = self.tasks.get_mut(&uuid) {
-                task.data = new_data;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub enum TaskCollectionError {
-    CrossReferenceUpdate(String),
-}
-
-impl fmt::Display for TaskCollectionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CrossReferenceUpdate(msg) => write!(f, "Failed to update cross-references: {}", msg),
+                ci_status,
+                is_tip,
+                derivation: task_json["derivation"].as_str().map(|s| s.to_string()),
+                claimed_by: task_json["claimedby"].as_str().map(|s| s.to_string()),
+            }))
         }
     }
 }
 
-impl std::error::Error for TaskCollectionError {}

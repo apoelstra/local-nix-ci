@@ -47,20 +47,12 @@ fn main() -> Result<(), anyhow::Error> {
             args::Action::Info => {
                 let shell = tw::task_shell()
                     .context("creating task shell")?;
-                let lines = cmd!(shell, "task rc.json.array=off project:local-ci export")
-                    .output()
-                    .context("running global task export")?;
-                if lines.stderr.is_empty() {
-                    eprintln!("{}", String::from_utf8_lossy(&lines.stderr));
+                let tasks = tw::TaskCollection::new(&shell)
+                    .context("loading tasks from taskwarrior")?;
+
+                for (_, pull) in tasks.pulls() {
+                    println!("{} PR #{}: {}", pull.project(), pull.number(), pull.title());
                 }
-                for line in lines.stdout.lines() {
-                    let task = line
-                        .context("converting line to utf8")?
-                        .parse::<tasklib::Task>()
-                        .context("parsing line as task")?;
-                    println!("{}", task.uuid());
-                }
-                eprintln!("[info here]");
             },
             args::Action::Refresh => {
                 eprintln!("[invoking gh here]");
