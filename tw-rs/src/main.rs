@@ -52,7 +52,7 @@ fn main() -> Result<(), anyhow::Error> {
         // and which can avoid invoking gh (except refresh, which does on
         // purpose).
         match args.action {
-            Action::Approve | Action::Nack | Action::Review => {
+            Action::Review => {
                 eprintln!("Nothing to review. (Did you mean to provide a PR number or commit ID?");
                 eprintln!();
                 args::usage();
@@ -112,11 +112,9 @@ fn main() -> Result<(), anyhow::Error> {
             };
 
             match args.action {
-                Action::Approve => todo!(),
                 Action::Info => {
                     println!("{} #{}: {}", pull.project(), pull.number(), pull.title());
                 }
-                Action::Nack => todo!(),
                 Action::Refresh => todo!(),
                 Action::Review => todo!(),
                 Action::Run => unreachable!("checked above"),

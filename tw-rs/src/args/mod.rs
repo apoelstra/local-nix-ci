@@ -11,9 +11,7 @@ static PROGRAM_NAME: OnceLock<String> = OnceLock::new();
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    Approve,
     Info,
-    Nack,
     Refresh,
     Review,
     Run,
@@ -24,9 +22,7 @@ pub enum Action {
 impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Approve => f.write_str("approve"),
             Self::Info => f.write_str("info"),
-            Self::Nack => f.write_str("nack"),
             Self::Refresh => f.write_str("refresh"),
             Self::Review => f.write_str("review"),
             Self::Run => f.write_str("run"),
@@ -101,9 +97,7 @@ fn parse_args() -> Result<CliArguments, ParseError> {
                 PROGRAM_NAME.set(s).ok(); // Ignore error if already set
                 continue;
             }
-            ArgToken::Approve => set_once(&mut action, Action::Approve, ParseError::MultipleActions)?,
             ArgToken::Info => set_once(&mut action, Action::Info, ParseError::MultipleActions)?,
-            ArgToken::Nack=> set_once(&mut action, Action::Nack, ParseError::MultipleActions)?,
             ArgToken::Refresh => set_once(&mut action, Action::Refresh, ParseError::MultipleActions)?,
             ArgToken::Review => set_once(&mut action, Action::Review, ParseError::MultipleActions)?,
             ArgToken::Run => set_once(&mut action, Action::Run, ParseError::MultipleActions)?,

@@ -13,12 +13,8 @@ pub enum ArgToken {
     /// A reference to the merge commit of a PR. The string `merge-` followed
     /// by a `PrNumber` will be lexed as this.
     MergeRef(usize),
-    /// The literal `approve`. (Never interpreted as a number or ref.)
-    Approve,
     /// The literal `info`. (Never interpreted as a number or ref.)
     Info,
-    /// The literal `nack`. (Never interpreted as a number or ref.)
-    Nack,
     /// The literal `task-edit`. (Never interpreted as a number or ref.)
     TaskEdit,
     /// The literal `task-info`. (Never interpreted as a number or ref.)
@@ -53,9 +49,7 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
         if is_first { is_first = false; return ArgToken::ProgramName(s_arg); }
 
         match s_arg.as_str() {
-            "approve" => ArgToken::Approve,
             "info" => ArgToken::Info,
-            "nack" => ArgToken::Nack,
             "task-edit" => ArgToken::TaskEdit,
             "task-info" => ArgToken::TaskInfo,
             "refresh" => ArgToken::Refresh,
