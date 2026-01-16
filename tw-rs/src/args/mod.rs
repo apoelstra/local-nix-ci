@@ -87,18 +87,6 @@ fn parse_args() -> Result<CliArguments, ParseError> {
         Ok(())
     }
 
-    fn set_action(action: &mut Option<Action>, new: Action) -> Result<(), ParseError> {
-        set_once(action, new, ParseError::MultipleActions)
-    }
-
-    fn set_target_type(target_type: &mut Option<&'static str>, new: &'static str) -> Result<(), ParseError> {
-        set_once(target_type, new, ParseError::MultipleTargetTypes)
-    }
-
-    fn set_target(target: &mut Option<String>, new: String) -> Result<(), ParseError> {
-        set_once(target, new, ParseError::MultipleTargets)
-    }
-    
     let mut action = None;
     let mut target_type = None;
     let mut target = None;

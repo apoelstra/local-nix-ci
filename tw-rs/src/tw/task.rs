@@ -104,9 +104,39 @@ pub enum MergeStatus {
 
 #[derive(Debug)]
 pub enum TaskParseError {
-    TaskWarriorParse(String),
+    TaskWarriorParse(serde_json::Error),
     MissingUuid,
     InvalidUuid(uuid::Error),
+    BadTask {
+        uuid: Uuid,
+        error: BadTaskError,
+    },
+}
+
+impl fmt::Display for TaskParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TaskWarriorParse(_) => write!(f, "failed to parse task json"),
+            Self::MissingUuid => write!(f, "task missing UUID"),
+            Self::InvalidUuid(_) => write!(f, "invalid UUID"),
+            Self::BadTask { uuid, .. } => write!(f, "malformed local-ci task {uuid}"),
+        }
+    }
+}
+
+impl std::error::Error for TaskParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TaskWarriorParse(e) => Some(e),
+            Self::MissingUuid => None,
+            Self::InvalidUuid(e) => Some(e),
+            Self::BadTask { error, .. } => Some(error),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum BadTaskError {
     MissingProject,
     MissingRepoRoot,
     InvalidRepoRoot,
@@ -114,8 +144,6 @@ pub enum TaskParseError {
     InvalidReviewStatus(String),
     InvalidMergeStatus(String),
     InvalidPrNumber(String),
-    CommitMissingId,
-    PrHasCommitId,
     UnknownTaskType,
     PrMissingTipCommit,
     PrMultipleDependencies,
@@ -124,12 +152,9 @@ pub enum TaskParseError {
     InvalidDependencyUuid(uuid::Error),
 }
 
-impl fmt::Display for TaskParseError {
+impl fmt::Display for BadTaskError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TaskWarriorParse(msg) => write!(f, "TaskWarrior parse error: {}", msg),
-            Self::MissingUuid => write!(f, "Task missing UUID"),
-            Self::InvalidUuid(e) => write!(f, "Invalid UUID: {}", e),
             Self::MissingProject => write!(f, "Task missing project"),
             Self::MissingRepoRoot => write!(f, "Task missing repo_root"),
             Self::InvalidRepoRoot => write!(f, "Invalid repo_root path"),
@@ -137,8 +162,6 @@ impl fmt::Display for TaskParseError {
             Self::InvalidReviewStatus(s) => write!(f, "Invalid review_status: {}", s),
             Self::InvalidMergeStatus(s) => write!(f, "Invalid merge_status: {}", s),
             Self::InvalidPrNumber(s) => write!(f, "Invalid PR number: {}", s),
-            Self::CommitMissingId => write!(f, "Commit task missing commit_id (expected for commit tasks)"),
-            Self::PrHasCommitId => write!(f, "PR task has commit_id (should be empty for PR tasks)"),
             Self::UnknownTaskType => write!(f, "Unable to determine if task is commit or PR type"),
             Self::PrMissingTipCommit => write!(f, "PR task must have exactly one dependency (tip commit)"),
             Self::PrMultipleDependencies => write!(f, "PR task has multiple dependencies, expected exactly one"),
@@ -149,10 +172,26 @@ impl fmt::Display for TaskParseError {
     }
 }
 
-impl std::error::Error for TaskParseError {}
+impl std::error::Error for BadTaskError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidDependencyUuid(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl BadTaskError {
+    fn with_uuid(self, uuid: Uuid) -> TaskParseError {
+        TaskParseError::BadTask {
+            uuid,
+            error: self,
+        }
+    }
+}
 
 impl FromStr for ReviewStatus {
-    type Err = TaskParseError;
+    type Err = BadTaskError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -160,13 +199,13 @@ impl FromStr for ReviewStatus {
             "needschange" => Ok(Self::NeedsChange),
             "nacked" => Ok(Self::Nacked),
             "approved" => Ok(Self::Approved),
-            _ => Err(TaskParseError::InvalidReviewStatus(s.to_string())),
+            _ => Err(BadTaskError::InvalidReviewStatus(s.to_string())),
         }
     }
 }
 
 impl FromStr for CiStatus {
-    type Err = TaskParseError;
+    type Err = BadTaskError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -174,20 +213,20 @@ impl FromStr for CiStatus {
             "started" => Ok(Self::Started),
             "success" => Ok(Self::Success),
             "failed" => Ok(Self::Failed),
-            _ => Err(TaskParseError::InvalidCiStatus(s.to_string())),
+            _ => Err(BadTaskError::InvalidCiStatus(s.to_string())),
         }
     }
 }
 
 impl FromStr for MergeStatus {
-    type Err = TaskParseError;
+    type Err = BadTaskError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "unstarted" => Ok(Self::Unstarted),
             "needsig" => Ok(Self::NeedSig),
             "pushed" => Ok(Self::Pushed),
-            _ => Err(TaskParseError::InvalidMergeStatus(s.to_string())),
+            _ => Err(BadTaskError::InvalidMergeStatus(s.to_string())),
         }
     }
 }
@@ -201,7 +240,7 @@ impl PrOrCommitTask {
     pub fn from_json(task_str: &str) -> Result<Self, TaskParseError> {
         // Parse TaskWarrior JSON format
         let task_json: serde_json::Value = serde_json::from_str(task_str)
-            .map_err(|e| TaskParseError::TaskWarriorParse(e.to_string()))?;
+            .map_err(TaskParseError::TaskWarriorParse)?;
 
         // Extract common fields
         let uuid_str = task_json["uuid"]
@@ -212,15 +251,17 @@ impl PrOrCommitTask {
 
         let project = task_json["project"]
             .as_str()
-            .ok_or(TaskParseError::MissingProject)?
+            .ok_or(BadTaskError::MissingProject)
+            .map_err(|e| e.with_uuid(uuid))?
             .to_string();
 
         let repo_root_str = task_json["repo_root"]
             .as_str()
-            .ok_or(TaskParseError::MissingRepoRoot)?;
+            .ok_or(BadTaskError::MissingRepoRoot)
+            .map_err(|e| e.with_uuid(uuid))?;
         let repo_dir = PathBuf::from(repo_root_str);
         if !repo_dir.is_absolute() {
-            return Err(TaskParseError::InvalidRepoRoot);
+            return Err(BadTaskError::InvalidRepoRoot.with_uuid(uuid));
         }
 
         let description = task_json["description"]
@@ -231,12 +272,14 @@ impl PrOrCommitTask {
         let review_status = task_json["review_status"]
             .as_str()
             .unwrap_or("unreviewed")
-            .parse()?;
+            .parse::<ReviewStatus>()
+            .map_err(|e| e.with_uuid(uuid))?;
 
         let ci_status = task_json["ci_status"]
             .as_str()
             .unwrap_or("unstarted")
-            .parse()?;
+            .parse::<CiStatus>()
+            .map_err(|e| e.with_uuid(uuid))?;
 
         let depends = task_json["depends"].as_array().map(Vec::as_slice).unwrap_or(&[]);
 
@@ -248,23 +291,27 @@ impl PrOrCommitTask {
         if commit_id.is_empty() {
             // This is a PR task - must have exactly one dependency (tip commit)
             if depends.is_empty() {
-                return Err(TaskParseError::PrMissingTipCommit);
+                return Err(BadTaskError::PrMissingTipCommit.with_uuid(uuid));
             }
             if depends.len() > 1 {
-                return Err(TaskParseError::PrMultipleDependencies);
+                return Err(BadTaskError::PrMultipleDependencies.with_uuid(uuid));
             }
 
             let tip_commit_uuid_str = depends[0]
                 .as_str()
-                .ok_or(TaskParseError::MissingDependencyUuid)?;
+                .ok_or(BadTaskError::MissingDependencyUuid)
+                .map_err(|e| e.with_uuid(uuid))?;
             let tip_commit_uuid = tip_commit_uuid_str.parse()
-                .map_err(TaskParseError::InvalidDependencyUuid)?;
+                .map_err(BadTaskError::InvalidDependencyUuid)
+                .map_err(|e| e.with_uuid(uuid))?;
 
             let pr_number_str = task_json["pr_number"]
                 .as_str()
-                .ok_or(TaskParseError::UnknownTaskType)?;
+                .ok_or(BadTaskError::UnknownTaskType)
+                .map_err(|e| e.with_uuid(uuid))?;
             let number = pr_number_str.parse()
-                .map_err(|_| TaskParseError::InvalidPrNumber(pr_number_str.to_string()))?;
+                .map_err(|_| BadTaskError::InvalidPrNumber(pr_number_str.to_string()))
+                .map_err(|e| e.with_uuid(uuid))?;
 
             let title = task_json["pr_title"].as_str().unwrap_or("").to_string();
             let author = task_json["pr_author"].as_str().unwrap_or("").to_string();
@@ -273,7 +320,8 @@ impl PrOrCommitTask {
             let merge_status = task_json["merge_status"]
                 .as_str()
                 .unwrap_or("unstarted")
-                .parse()?;
+                .parse::<MergeStatus>()
+                .map_err(|e| e.with_uuid(uuid))?;
 
             Ok(PrOrCommitTask::Pr(PrTask {
                 uuid,
@@ -295,7 +343,7 @@ impl PrOrCommitTask {
         } else {
             // This is a commit task - can have 0 or 1 dependencies (parent commit)
             if depends.len() > 1 {
-                return Err(TaskParseError::CommitMultipleDependencies);
+                return Err(BadTaskError::CommitMultipleDependencies.with_uuid(uuid));
             }
 
             let parent_commit_uuid = if depends.is_empty() {
@@ -303,9 +351,11 @@ impl PrOrCommitTask {
             } else {
                 let parent_uuid_str = depends[0]
                     .as_str()
-                    .ok_or(TaskParseError::MissingDependencyUuid)?;
+                    .ok_or(BadTaskError::MissingDependencyUuid)
+                    .map_err(|e| e.with_uuid(uuid))?;
                 Some(parent_uuid_str.parse()
-                    .map_err(TaskParseError::InvalidDependencyUuid)?)
+                    .map_err(BadTaskError::InvalidDependencyUuid)
+                    .map_err(|e| e.with_uuid(uuid))?)
             };
             
             // Check if TIP_COMMIT tag is present

@@ -6,21 +6,54 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
+use uuid::Uuid;
+use xshell::{cmd, Shell};
 
 #[derive(Debug)]
 pub enum Error {
     HomeNotSet,
     ShellCreationFailed(xshell::Error),
     IoError(io::Error),
+    UniqueUuidQuery(UniqueUuidError),
+}
+
+#[derive(Debug)]
+pub enum UniqueUuidError {
+    TaskCommandFailed(xshell::Error),
+    ParseUuid(uuid::Error),
+    MultipleUuidsFound(Uuid, Uuid),
+    NoUuidFound,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::HomeNotSet => write!(f, "HOME environment variable not set"),
-            Self::ShellCreationFailed(msg) => write!(f, "Failed to create shell: {}",
-msg),
+            Self::ShellCreationFailed(msg) => write!(f, "Failed to create shell: {}", msg),
             Self::IoError(e) => write!(f, "IO error: {}", e),
+            Self::UniqueUuidQuery(e) => write!(f, "Unique UUID query failed: {}", e),
+        }
+    }
+}
+
+impl fmt::Display for UniqueUuidError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TaskCommandFailed(e) => write!(f, "Task command failed: {}", e),
+            Self::ParseUuid(e) => write!(f, "JSON parse error: {}", e),
+            Self::MultipleUuidsFound(first, second) => write!(f, "Multiple UUIDs found: {}, {}", first, second),
+            Self::NoUuidFound => write!(f, "No UUID found matching filter"),
+        }
+    }
+}
+
+impl std::error::Error for UniqueUuidError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TaskCommandFailed(e) => Some(e),
+            Self::ParseUuid(e) => Some(e),
+            Self::MultipleUuidsFound(..) => None,
+            Self::NoUuidFound => None,
         }
     }
 }
@@ -30,6 +63,12 @@ impl std::error::Error for Error {}
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Self::IoError(e)
+    }
+}
+
+impl From<UniqueUuidError> for Error {
+    fn from(e: UniqueUuidError) -> Self {
+        Self::UniqueUuidQuery(e)
     }
 }
 
@@ -57,6 +96,9 @@ uda.claimedby.label=Local CI box which has claimed the job
 
 uda.repo_root.type=string
 uda.repo_root.label=Local repo directory
+
+uda.last_refresh.type=date
+uda.last_refresh.label=Time of last refresh against local git repo and Github
 
 # Commit ID -- for PRs this should be empty.
 # For tip commits use the TIP_COMMIT tag.
@@ -147,4 +189,30 @@ pub fn task_shell() -> Result<xshell::Shell, Error> {
     sh.set_var("TASKDATA", &taskdata_path);
 
     Ok(sh)
+}
+
+/// Query task to obtain a unique UUID matching the given filter.
+/// Returns an error if zero or multiple UUIDs are found.
+/// 
+/// This is equivalent to the `tw_unique_uuid` bash function in local-ci.sh.
+pub fn get_unique_uuid(sh: &Shell, filter: &[&str]) -> Result<Option<Uuid>, UniqueUuidError> {
+    // Run task export with the filter to get JSON output
+    let mut task_cmd = cmd!(sh, "task");
+    for arg in filter {
+        task_cmd = task_cmd.arg(arg);
+    }
+    task_cmd = task_cmd.arg("uuids");
+    
+    let output = task_cmd.output().map_err(UniqueUuidError::TaskCommandFailed)?;
+    
+    // Parse JSON output
+    let mut ret = None;
+    for uuid_str in output.stdout.split(|x| *x == b' ') {
+        let uuid = Uuid::try_parse_ascii(uuid_str)
+            .map_err(UniqueUuidError::ParseUuid)?;
+        if let Some(existing) = ret.replace(uuid) {
+            return Err(UniqueUuidError::MultipleUuidsFound(existing, uuid));
+        }
+    }
+    Ok(ret)
 }

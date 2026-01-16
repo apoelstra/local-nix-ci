@@ -3,6 +3,7 @@
 use std::env;
 
 /// A command-line argument.
+#[derive(Debug)]
 pub enum ArgToken {
     /// The 0th argument, which is typically the string used to invoke the program.
     ProgramName(String),
@@ -45,8 +46,7 @@ fn parse_as_pr_number(s: &str) -> Option<usize> {
 pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
     let mut is_first = true;
     env::args().map(move |s_arg| {
-        if is_first { return ArgToken::ProgramName(s_arg); }
-        is_first = false;
+        if is_first { is_first = false; return ArgToken::ProgramName(s_arg); }
 
         match s_arg.as_str() {
             "approve" => ArgToken::Approve,

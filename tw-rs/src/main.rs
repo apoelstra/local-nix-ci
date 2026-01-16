@@ -5,8 +5,9 @@ mod repo;
 mod tw;
 
 use anyhow::Context;
-use std::io::BufRead as _; // for lines
 use xshell::{Shell, cmd};
+
+use self::args::{Action, Target};
 
 fn check_required_tools() -> xshell::Result<()> {
     let sh = Shell::new()?;
@@ -33,38 +34,43 @@ fn main() -> Result<(), anyhow::Error> {
         std::process::exit(1);
     }
 
-    if args.target == args::Target::None {
+    // Load task database. When this gets too slow to invoke on every command we
+    // we will move it into the daemon that runs when we do 'local-ci run' and
+    // then do RPC calls against that (and add some sort of "reload" command
+    // hooked to TW adds and modifies). But for now we just query taskwarrior
+    // every time.
+    let shell = tw::task_shell()
+        .context("creating task shell")?;
+    let mut tasks = tw::TaskCollection::new(&shell)
+        .context("loading tasks from taskwarrior")?;
+
+    if args.target == Target::None {
         // Handle "global" actions, which don't need to be in an active repo
         // and which can avoid invoking gh (except refresh, which does on
         // purpose).
         match args.action {
-            args::Action::Approve | args::Action::Nack | args::Action::Review => {
+            Action::Approve | Action::Nack | Action::Review => {
                 eprintln!("Nothing to review. (Did you mean to provide a PR number or commit ID?");
                 eprintln!();
                 args::usage();
                 std::process::exit(1);
             },
-            args::Action::Info => {
-                let shell = tw::task_shell()
-                    .context("creating task shell")?;
-                let tasks = tw::TaskCollection::new(&shell)
-                    .context("loading tasks from taskwarrior")?;
-
+            Action::Info => {
                 for (_, pull) in tasks.pulls() {
                     println!("{} PR #{}: {}", pull.project(), pull.number(), pull.title());
                 }
             },
-            args::Action::Refresh => {
+            Action::Refresh => {
                 eprintln!("[invoking gh here]");
             },
-            args::Action::Run => {
+            Action::Run => {
                 eprintln!("[run loop here]");
             },
         }
         return Ok(());
     } else {
         // Error out tfor actions which don't have any target.
-        if args.action == args::Action::Run {
+        if args.action == Action::Run {
             eprintln!("'run' cannot be invoked with any target.");
             eprintln!();
             args::usage();
@@ -72,7 +78,8 @@ fn main() -> Result<(), anyhow::Error> {
         }
     }
 
-    // Orient ourselves.
+    // Orient ourselves. (In practice this is the slowest step but unfortunately
+    // there is no real way to cache it.)
     let repo = match repo::current_repo() {
         Err(e) => {
             eprintln!("Failed to locate repo: {e}");
@@ -81,6 +88,27 @@ fn main() -> Result<(), anyhow::Error> {
         }
         Ok(repo) => repo,
     };
+
+    println!("In repository: {}", repo.project_name);
+    println!("Repo root: {}", repo.repo_root.display());
+    println!();
+
+    // Look up PR.
+    match args.target {
+        Target::Pr(num) => {
+            let pull = match tasks.pull_by_number(&repo.project_name, num) {
+                Some(task) => task,
+                None => tasks.insert_or_refresh_pr(&shell, &repo, num)
+                    .context("adding new PR")?
+            };
+
+            println!("{} #{}: {}", pull.project(), pull.number(), pull.title());
+        },
+        Target::Commit(_) => {
+            todo!()
+        },
+        Target::None => unreachable!("this case handled above, before current_repo()"),
+    }
 
     Ok(())
 }
