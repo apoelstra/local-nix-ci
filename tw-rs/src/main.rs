@@ -105,7 +105,9 @@ fn main() -> Result<(), anyhow::Error> {
     // Look up PR.
     match args.target {
         Target::Pr(num) => {
-            let pull = match tasks.pull_by_number(&repo.project_name, num) {
+            let lookup = tasks.pull_by_number(&repo.project_name, num);
+            let just_created = lookup.is_none();
+            let pull = match lookup {
                 Some(task) => task,
                 None => tasks.insert_or_refresh_pr(&shell, &repo, num)
                     .context("adding new PR")?
@@ -115,7 +117,12 @@ fn main() -> Result<(), anyhow::Error> {
                 Action::Info => {
                     println!("{} #{}: {}", pull.project(), pull.number(), pull.title());
                 }
-                Action::Refresh => todo!(),
+                Action::Refresh => {
+                    if !just_created {
+                        tasks.insert_or_refresh_pr(&shell, &repo, num)
+                            .context("refreshing PR")?;
+                    }
+                },
                 Action::Review => todo!(),
                 Action::Run => unreachable!("checked above"),
                 Action::TaskEdit => {

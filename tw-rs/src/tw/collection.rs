@@ -139,15 +139,12 @@ impl TaskCollection {
             });
         }
         
-        // Check that none of the commits in the PR are merge commits (have multiple parents)
-        for commit_id in pr_data.commits.iter().map(|c| &c.oid) {
-            let parents_output = cmd!(task_shell, "git rev-list --parents -n 1 {commit_id}")
-                .read()
-                .map_err(TaskCollectionError::Shell)?;
-            let parents: Vec<&str> = parents_output.trim().split_whitespace().collect();
-            
-            // First element is the commit itself, rest are parents
-            if parents.len() > 2 {
+        // Before invoking task/jj/git fetch, check for merge commits and bail early, to make
+        // an effort not to pollute the task database with crap from bad PRs.
+        for commit_id in pr_data.commit_ids() {
+            let parents = git::list_parents(task_shell, commit_id)
+                .map_err(TaskCollectionError::Git)?;
+            if parents.len() > 1 {
                 return Err(TaskCollectionError::IllegalMergeCommit {
                     commit_id: commit_id.clone(),
                     pr_number: num,
@@ -176,19 +173,6 @@ impl TaskCollection {
             .map_err(TaskCollectionError::Jj)?;
         let has_conflicts = !conflicts_check.is_empty();
 
-        // Before invoking task, check for merge commits and bail early, to make an
-        // effort not to pollute the task database with crap from bad PRs.
-        for commit_id in pr_data.commit_ids() {
-            let parents = git::list_parents(task_shell, commit_id)
-                .map_err(TaskCollectionError::Git)?;
-            if parents.len() > 1 {
-                return Err(TaskCollectionError::IllegalMergeCommit {
-                    commit_id: commit_id.clone(),
-                    pr_number: num,
-                });
-            }
-        }
-        
         // Add PR-specific fields to the task command, and run it.
         let description = format!("PR #{}: {}", num, pr_data.title);
         let task_cmd = task_cmd
