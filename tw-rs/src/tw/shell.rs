@@ -57,9 +57,6 @@ uda.claimedby.label=Local CI box which has claimed the job
 uda.repo_root.type=string
 uda.repo_root.label=Local repo directory
 
-uda.last_refresh.type=date
-uda.last_refresh.label=Time of last refresh against local git repo and Github
-
 # Commit ID -- for PRs this should be empty.
 # For tip commits use the TIP_COMMIT tag.
 uda.commit_id.type=string
