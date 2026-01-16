@@ -98,7 +98,7 @@ pub fn fetch_commit<C: AsRef<OsStr>>(
     commit: C,
 ) -> Result<(), Error> {
     fn now_have_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> bool {
-        cmd!(shell, "git cat-file -e {commit}").run().is_ok()
+        cmd!(shell, "git cat-file -e {commit}").quiet().run().is_ok()
     }
 
     let commit = &commit; // stupid Rust

@@ -106,7 +106,7 @@ impl TaskCollection {
                 let uuid = uuid.to_string();
                 (
                     cmd!(task_shell, "task {uuid} modify"),
-                    true,
+                    false,
                 )
             }
             None => {
@@ -229,7 +229,7 @@ impl TaskCollection {
         
         // Now set up dependencies: each commit depends on its parent if the parent is in this PR
         for commit_id in pr_data.commit_ids() {
-            if let Some(&commit_uuid) = commit_id_to_uuid.get(dbg!(commit_id)) {
+            if let Some(&commit_uuid) = commit_id_to_uuid.get(commit_id) {
                 // Get the parent commit
                 let parents = git::list_parents(task_shell, commit_id)
                     .map_err(TaskCollectionError::Git)?;
@@ -330,10 +330,10 @@ impl TaskCollection {
             }
             
             // Reload the updated task data
-            let task_json = cmd!(task_shell, "task {pr_uuid_str} export")
+            let task_json = cmd!(task_shell, "task rc.json.array=off {pr_uuid_str} export")
                 .read()
                 .map_err(TaskCollectionError::Shell)?;
-            
+
             let pr_task = super::task::PrOrCommitTask::from_json(&task_json)
                 .map_err(TaskCollectionError::ParseTask)?;
             
