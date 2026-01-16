@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod args;
+mod gh;
+mod git;
+mod jj;
 mod repo;
 mod tw;
 

@@ -2,17 +2,19 @@
 
 use core::fmt;
 use std::borrow::Cow;
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
 use std::io;
 use std::io::BufRead as _;
 use uuid::Uuid;
 use xshell::{cmd, Shell};
 
+use crate::git::{self, GitCommit};
 use super::{CommitTask, PrTask};
 use super::task::PrOrCommitTask;
 
 #[derive(Debug)]
 pub struct TaskCollection {
+    #[allow(unused)] // FIXME remove this once we start using it
     commits: HashMap<Uuid, CommitTask>,
     pulls: HashMap<Uuid, PrTask>,
     // Map from projects and PR numbers to their UUIDs.
@@ -20,6 +22,8 @@ pub struct TaskCollection {
 }
 
 impl TaskCollection {
+    /// Construct a [`TaskCollection`] by taking a shell with `TASKRC` set,
+    /// and querying TaskWarrior for all tasks with the project set to `local-ci`.
     pub fn new(task_shell: &Shell) -> Result<Self, TaskCollectionError> {
         let mut pulls = HashMap::new();
         let mut commits = HashMap::new();
@@ -73,18 +77,18 @@ impl TaskCollection {
         Ok(TaskCollection { commits, pulls, pull_numbers })
     }
 
+    /// Query a pull request task given the project name (e.g. `apoelstra.local-nix-ci`) and PR number.
     pub fn pull_by_number(&self, project: &str, num: usize) -> Option<&PrTask> {
         self.pull_numbers.get(&(Cow::Borrowed(project), num)).and_then(|uuid| self.pulls.get(uuid))
     }
 
-    pub fn commits(&self) -> impl Iterator<Item = (&Uuid, &CommitTask)> {
-        self.commits.iter()
-    }
-
+    /// Returns an iterator over all the pull requests in the database.
     pub fn pulls(&self) -> impl Iterator<Item = (&Uuid, &PrTask)> {
         self.pulls.iter()
     }
 
+    /// Refreshes a PR's data by querying the local git repo and Github. If the PR does not
+    /// yet exist, create it and add it to the database.
     pub fn insert_or_refresh_pr(
         &mut self,
         task_shell: &Shell,
@@ -116,32 +120,17 @@ impl TaskCollection {
         };
 
         // Get PR data from GitHub
-        let pr_json = cmd!(task_shell, "gh pr view {num_str} --json commits,title,author,baseRefName,baseRefOid,headRefOid")
+        let pr_json = cmd!(task_shell, "gh pr view {num_str} --json commits,title,author,baseRefOid,headRefOid")
             .read()
             .map_err(TaskCollectionError::Shell)?;
-        
-        let pr_data: serde_json::Value = serde_json::from_str(&pr_json)
+        let pr_data: crate::gh::PrInfo = serde_json::from_str(&pr_json)
             .map_err(TaskCollectionError::ParseJson)?;
-        let title = pr_data["title"].as_str().unwrap_or("").to_string();
-        let author = pr_data["author"]["login"].as_str().unwrap_or("").to_string();
-        let base_ref_oid = pr_data["baseRefOid"].as_str()
-            .ok_or(TaskCollectionError::MissingPrField { field: "baseRefOid" })?;
-        let head_ref_oid = pr_data["headRefOid"].as_str()
-            .ok_or(TaskCollectionError::MissingPrField { field: "headRefOid" })?;
-        
-        // Get commits from the PR
-        let commits: Vec<String> = pr_data["commits"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|c| c["oid"].as_str().map(|s| s.to_string()))
-            .collect();
         
         // Assert that headRefOid is the last commit in the list
-        if let Some(last_commit) = commits.last() {
-            if last_commit != head_ref_oid {
+        if let Some(last_commit) = pr_data.commits.last() {
+            if last_commit.oid != pr_data.head_commit {
                 return Err(TaskCollectionError::InvalidPrData {
-                    message: format!("headRefOid {} does not match last commit {}", head_ref_oid, last_commit)
+                    message: format!("headRefOid {} does not match last commit {}", pr_data.head_commit, last_commit.oid)
                 });
             }
         } else {
@@ -151,7 +140,7 @@ impl TaskCollection {
         }
         
         // Check that none of the commits in the PR are merge commits (have multiple parents)
-        for commit_id in &commits {
+        for commit_id in pr_data.commits.iter().map(|c| &c.oid) {
             let parents_output = cmd!(task_shell, "git rev-list --parents -n 1 {commit_id}")
                 .read()
                 .map_err(TaskCollectionError::Shell)?;
@@ -166,128 +155,50 @@ impl TaskCollection {
             }
         }
         
-        // Fetch all commits from remotes
-        // First try to fetch all commits from origin
-        let mut fetch_successful = true;
-        // Try to fetch all commits individually
-        for commit_id in &commits {
-            let mut fetched = false;
-            for remote in &["origin", "upstream"] {
-                let fetch_result = cmd!(task_shell, "git fetch -q {remote} {commit_id}")
-                    .run();
-                if fetch_result.is_ok() {
-                    fetched = true;
-                    break;
-                }
-            }
-            fetch_successful &= fetched;
+        // Try to fetch all commits
+        for commit_id in pr_data.commit_ids() {
+            git::fetch_commit(task_shell, commit_id)
+                .map_err(TaskCollectionError::Git)?;
         }
-            
-        // Also fetch the base commit
-        {
-            let mut fetched = false;
-            for remote in &["origin", "upstream"] {
-                let base_fetch_result = cmd!(task_shell, "git fetch -q {remote} {base_ref_oid}")
-                    .run();
-                if base_fetch_result.is_ok() {
-                    fetched = true;
-                    break;
-                }
-            }
-            fetch_successful &= fetched;
-        }
-        
-        if !fetch_successful {
-            return Err(TaskCollectionError::FetchFailed {
-                pr_number: num,
-                message: "Failed to fetch commits from both origin and upstream remotes".to_string()
-            });
-        }
-        
+        git::fetch_commit(task_shell, &pr_data.base_commit)
+            .map_err(TaskCollectionError::Git)?;
+
         // Create merge commit directly using jj
-        let mut merge_change_id = String::new();
-        let base_commit = base_ref_oid.to_string();
-        
-        // Create merge commit using jj with the fetched commit OIDs
-        let jj_new_output = cmd!(task_shell, "jj --config signing.behavior=drop --color never new --no-edit -r {base_ref_oid} -r {head_ref_oid}")
-            .read_stderr()
-            .map_err(|e| TaskCollectionError::MergeCommitCreationFailed {
-                pr_number: num,
-                message: format!("jj new command failed: {}", e)
-            })?;
-        
-        // Parse the output to extract the change ID
-        // Look for patterns like "Created new commit" followed by change ID
-        for line in dbg!(jj_new_output).lines() {
-            if line.contains("Created new commit") {
-                // Extract change ID from the line - jj change IDs use letters 'k' through 'z'
-                if let Some(change_id_match) = line.split_whitespace()
-                    .find(|word| word.len() >= 8 && dbg!(word).chars().all(|c| c >= 'k' && c <= 'z')) {
-                    merge_change_id = change_id_match.to_string();
-                    break;
-                }
-            }
-        }
-        
-        // If we couldn't parse from output, fall back to jj log (racy but should work)
-        if merge_change_id.is_empty() {
-            let log_output = cmd!(task_shell, "jj log --no-pager --no-graph -T change_id -r")
-                .arg(&format!("latest({head_ref_oid}+ & {base_ref_oid}+)")) // unsure how to escape this for cmd!
-                .read()
-                .map_err(|e| TaskCollectionError::JjCommandFailed {
-                    pr_number: num,
-                    message: format!("jj log command failed: {}", e)
-                })?;
-            merge_change_id = log_output.trim()[..12.min(log_output.trim().len())].to_string();
-        }
-        
-        if merge_change_id.is_empty() {
-            return Err(TaskCollectionError::JjCommandFailed {
-                pr_number: num,
-                message: "Failed to extract change ID from jj output".to_string()
-            });
-        }
-        
-        // Get the commit ID for this change
-        let commit_output = cmd!(task_shell, "jj log --no-graph -r {merge_change_id} -T commit_id")
-            .read()
-            .map_err(|e| TaskCollectionError::JjCommandFailed {
-                pr_number: num,
-                message: format!("Failed to get commit ID for change {}: {}", merge_change_id, e)
-            })?;
-        let merge_commit_id = commit_output.trim().to_string();
+        let head_commit = &pr_data.head_commit;
+        let base_commit = &pr_data.base_commit;
+        let merge_change_id = crate::jj::jj_new(task_shell, &[&head_commit, &base_commit])
+            .map_err(TaskCollectionError::Jj)?;
+        let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
+            .map_err(TaskCollectionError::Jj)?;
         
         // Check if the merge has conflicts
-        let conflicts_check = cmd!(task_shell, "jj log --quiet -r")
-            .arg(&format!("{merge_change_id} & ~conflicts()"))
-            .run();
-        
-        let has_conflicts = conflicts_check.is_err();
-        
-        let description = format!("PR #{}: {}", num, title);
+        let conflicts_check = crate::jj::jj_log(task_shell, "if(conflict,\"x\",\"\")", &merge_change_id)
+            .map_err(TaskCollectionError::Jj)?;
+        let has_conflicts = !conflicts_check.is_empty();
 
-        // Add PR-specific fields to the task command
+        // Before invoking task, check for merge commits and bail early, to make an
+        // effort not to pollute the task database with crap from bad PRs.
+        for commit_id in pr_data.commit_ids() {
+            let parents = git::list_parents(task_shell, commit_id)
+                .map_err(TaskCollectionError::Git)?;
+            if parents.len() > 1 {
+                return Err(TaskCollectionError::IllegalMergeCommit {
+                    commit_id: commit_id.clone(),
+                    pr_number: num,
+                });
+            }
+        }
+        
+        // Add PR-specific fields to the task command, and run it.
+        let description = format!("PR #{}: {}", num, pr_data.title);
         let task_cmd = task_cmd
             .arg(format!("repo_root:{}", repo.repo_root.display()))
-            .arg(format!("pr_title:{}", title))
-            .arg(format!("pr_author:{}", author))
+            .arg(format!("pr_title:{}", pr_data.title))
+            .arg(format!("pr_author:{}", pr_data.author.login))
             .arg(format!("pr_url:https://github.com/{}/pull/{}", repo.project_name.replace('.', "/"), num))
-            .arg(format!("description:{}", description));
-        
-        // Add merge commit data if available
-        let task_cmd = if !base_commit.is_empty() {
-            task_cmd.arg(format!("base_commit:{}", base_commit))
-        } else {
-            task_cmd
-        };
-        
-        let task_cmd = if !merge_change_id.is_empty() {
-            task_cmd.arg(format!("merge_change_id:{}", merge_change_id))
-        } else {
-            task_cmd
-        };
-        
-        // Run the command
+            .arg(format!("description:{}", description))
+            .arg(format!("base_commit:{}", base_commit))
+            .arg(format!("merge_change_id:{}", merge_change_id));
         let output = task_cmd.read().map_err(TaskCollectionError::Shell)?;
         
         // Create commit tasks for all commits in the PR and collect their UUIDs
@@ -295,15 +206,11 @@ impl TaskCollection {
         let mut commit_id_to_uuid = std::collections::HashMap::new();
         let mut commit_uuids = Vec::new();
         
-        for commit_id in &commits {
-            // Check for merge commits (multiple parents)
-            let parents_output = cmd!(task_shell, "git rev-list --parents -n 1 {commit_id}")
-                .read()
-                .map_err(TaskCollectionError::Shell)?;
-            let parents: Vec<&str> = parents_output.trim().split_whitespace().collect();
-            
-            // First element is the commit itself, rest are parents
-            if parents.len() > 2 {
+        for commit_id in pr_data.commit_ids() {
+            // Do an early check for merge commits.
+            let parents = git::list_parents(task_shell, commit_id)
+                .map_err(TaskCollectionError::Git)?;
+            if parents.len() > 1 {
                 return Err(TaskCollectionError::IllegalMergeCommit {
                     commit_id: commit_id.clone(),
                     pr_number: num,
@@ -329,7 +236,7 @@ impl TaskCollection {
                 commit_id_to_uuid.insert(commit_id.clone(), commit_uuid);
                 
                 // Mark the last commit as TIP_COMMIT
-                if commit_id == commits.last().unwrap() {
+                if *commit_id == pr_data.commits.last().unwrap().oid {
                     let commit_uuid = commit_uuid.to_string();
                     let _ = cmd!(task_shell, "task {commit_uuid} modify +TIP_COMMIT").run();
                 }
@@ -337,22 +244,17 @@ impl TaskCollection {
         }
         
         // Now set up dependencies: each commit depends on its parent if the parent is in this PR
-        for commit_id in &commits {
+        for commit_id in pr_data.commit_ids() {
             if let Some(&commit_uuid) = commit_id_to_uuid.get(dbg!(commit_id)) {
                 // Get the parent commit
-                let parents_output = cmd!(task_shell, "git rev-list --parents -n 1 {commit_id}")
-                    .read()
-                    .map_err(TaskCollectionError::Shell)?;
-                let parents: Vec<&str> = parents_output.trim().split_whitespace().collect();
-                
-                // If there's exactly one parent and it's in our PR, set up the dependency
-                if parents.len() == 2 {
-                    let parent_commit_id = parents[1];
-                    if let Some(&parent_uuid) = commit_id_to_uuid.get(parent_commit_id) {
-                        let commit_uuid_str = commit_uuid.to_string();
-                        let parent_uuid_str = parent_uuid.to_string();
-                        let _ = cmd!(task_shell, "task {commit_uuid_str} modify depends:{parent_uuid_str}").run();
-                    }
+                let parents = git::list_parents(task_shell, commit_id)
+                    .map_err(TaskCollectionError::Git)?;
+
+                let parent_commit_id = &parents[0];
+                if let Some(&parent_uuid) = commit_id_to_uuid.get(parent_commit_id) {
+                    let commit_uuid_str = commit_uuid.to_string();
+                    let parent_uuid_str = parent_uuid.to_string();
+                    let _ = cmd!(task_shell, "task {commit_uuid_str} modify depends:{parent_uuid_str}").run();
                 }
             }
         }
@@ -475,29 +377,16 @@ pub enum TaskCollectionError {
     ParseUuid(uuid::Error),
     Shell(xshell::Error),
     Utf8(io::Error),
-    MissingPrField {
-        field: &'static str,
-    },
     InvalidPrData {
         message: String,
     },
-    FetchFailed {
-        pr_number: usize,
-        message: String,
-    },
-    MergeCommitCreationFailed {
-        pr_number: usize,
-        message: String,
-    },
-    JjCommandFailed {
-        pr_number: usize,
-        message: String,
-    },
+    Git(crate::git::Error),
+    Jj(crate::jj::Error),
     TaskCreationFailed {
         message: String,
     },
     IllegalMergeCommit {
-        commit_id: String,
+        commit_id: GitCommit,
         pr_number: usize,
     },
 }
@@ -513,11 +402,9 @@ impl fmt::Display for TaskCollectionError {
             Self::ParseUuid(_) => write!(f, "failed to parse uuid"),
             Self::Shell(_) => write!(f, "shell command failed"),
             Self::Utf8(_) => write!(f, "UTF-8 encoding error"),
-            Self::MissingPrField { field } => write!(f, "Missing required PR field: {}", field),
             Self::InvalidPrData { message } => write!(f, "Invalid PR data: {}", message),
-            Self::FetchFailed { pr_number, message } => write!(f, "Failed to fetch commits for PR #{}: {}", pr_number, message),
-            Self::MergeCommitCreationFailed { pr_number, message } => write!(f, "Failed to create merge commit for PR #{}: {}", pr_number, message),
-            Self::JjCommandFailed { pr_number, message } => write!(f, "JJ command failed for PR #{}: {}", pr_number, message),
+            Self::Git(_) => f.write_str("failed invoking git"),
+            Self::Jj(_) => f.write_str("failed invoking jj"),
             Self::TaskCreationFailed { message } => write!(f, "Failed to create task: {}", message),
             Self::IllegalMergeCommit { commit_id, pr_number } => write!(f, "Illegal merge commit {} in PR #{}", commit_id, pr_number),
         }
@@ -533,11 +420,9 @@ impl std::error::Error for TaskCollectionError {
             Self::ParseUuid(e) => Some(e),
             Self::Shell(e) => Some(e),
             Self::Utf8(e) => Some(e),
-            Self::MissingPrField { .. } => None,
             Self::InvalidPrData { .. } => None,
-            Self::FetchFailed { .. } => None,
-            Self::MergeCommitCreationFailed { .. } => None,
-            Self::JjCommandFailed { .. } => None,
+            Self::Git(e) => Some(e),
+            Self::Jj(e) => Some(e),
             Self::TaskCreationFailed { .. } => None,
             Self::IllegalMergeCommit { .. } => None,
         }
