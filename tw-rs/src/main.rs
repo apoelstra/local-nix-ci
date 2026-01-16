@@ -58,6 +58,12 @@ fn main() -> Result<(), anyhow::Error> {
                 args::usage();
                 std::process::exit(1);
             },
+            Action::TaskEdit | Action::TaskInfo => {
+                eprintln!("Nothing to query taskwarrior for. (Did you mean to provide a PR number or commit ID?");
+                eprintln!();
+                args::usage();
+                std::process::exit(1);
+            },
             Action::Info => {
                 for (_, pull) in tasks.pulls() {
                     println!("{} PR #{}: {}", pull.project(), pull.number(), pull.title());
@@ -105,7 +111,29 @@ fn main() -> Result<(), anyhow::Error> {
                     .context("adding new PR")?
             };
 
-            println!("{} #{}: {}", pull.project(), pull.number(), pull.title());
+            match args.action {
+                Action::Approve => todo!(),
+                Action::Info => {
+                    println!("{} #{}: {}", pull.project(), pull.number(), pull.title());
+                }
+                Action::Nack => todo!(),
+                Action::Refresh => todo!(),
+                Action::Review => todo!(),
+                Action::Run => unreachable!("checked above"),
+                Action::TaskEdit => {
+                    let uuid = pull.uuid().to_string();
+                    cmd!(&shell, "task edit {uuid}")
+                        .run()
+                        .context("executing task edit")?;
+                }
+                Action::TaskInfo => {
+                    let uuid = pull.uuid().to_string();
+                    cmd!(&shell, "task info {uuid}")
+                        .run()
+                        .context("executing task info")?;
+                }
+            }
+
         },
         Target::Commit(_) => {
             todo!()

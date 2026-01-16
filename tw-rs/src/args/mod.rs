@@ -17,6 +17,8 @@ pub enum Action {
     Refresh,
     Review,
     Run,
+    TaskEdit,
+    TaskInfo,
 }
 
 impl fmt::Display for Action {
@@ -28,6 +30,8 @@ impl fmt::Display for Action {
             Self::Refresh => f.write_str("refresh"),
             Self::Review => f.write_str("review"),
             Self::Run => f.write_str("run"),
+            Self::TaskEdit => f.write_str("task-edit"),
+            Self::TaskInfo => f.write_str("task-info"),
         }
     }
 }
@@ -103,6 +107,8 @@ fn parse_args() -> Result<CliArguments, ParseError> {
             ArgToken::Refresh => set_once(&mut action, Action::Refresh, ParseError::MultipleActions)?,
             ArgToken::Review => set_once(&mut action, Action::Review, ParseError::MultipleActions)?,
             ArgToken::Run => set_once(&mut action, Action::Run, ParseError::MultipleActions)?,
+            ArgToken::TaskEdit => set_once(&mut action, Action::TaskEdit, ParseError::MultipleActions)?,
+            ArgToken::TaskInfo => set_once(&mut action, Action::TaskInfo, ParseError::MultipleActions)?,
             
             ArgToken::Pr => set_once(&mut target_type, "pr", ParseError::MultipleTargetTypes)?,
             ArgToken::Commit => set_once(&mut target_type, "commit", ParseError::MultipleTargetTypes)?,

@@ -19,6 +19,10 @@ pub enum ArgToken {
     Info,
     /// The literal `nack`. (Never interpreted as a number or ref.)
     Nack,
+    /// The literal `task-edit`. (Never interpreted as a number or ref.)
+    TaskEdit,
+    /// The literal `task-info`. (Never interpreted as a number or ref.)
+    TaskInfo,
     /// The literal `refresh`. (Never interpreted as a number or ref.)
     Refresh,
     /// The literal `review`. (Never interpreted as a number or ref.)
@@ -52,6 +56,8 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
             "approve" => ArgToken::Approve,
             "info" => ArgToken::Info,
             "nack" => ArgToken::Nack,
+            "task-edit" => ArgToken::TaskEdit,
+            "task-info" => ArgToken::TaskInfo,
             "refresh" => ArgToken::Refresh,
             "review" => ArgToken::Review,
             "run" => ArgToken::Run,
