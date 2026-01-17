@@ -170,7 +170,6 @@ impl TaskCollection {
         } else {
             panic!("Somehow created non-committask");
         }
-
     }
 
     /// Refreshes a PR's data by querying the local git repo and Github. If the PR does not

@@ -2,8 +2,6 @@
 
 use crate::tw::TaskCollection;
 
-pub fn run(
-    _tasks: &mut TaskCollection,
-) -> Result<(), anyhow::Error> {
+pub fn run(_tasks: &mut TaskCollection) -> Result<(), anyhow::Error> {
     todo!()
 }
