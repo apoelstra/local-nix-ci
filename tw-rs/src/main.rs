@@ -83,8 +83,8 @@ impl Next {
 
     fn do_it(&self, shell: &Shell, tasks: &mut tw::TaskCollection) -> Result<(), anyhow::Error> {
         match self {
-            Self::ReviewPr(_) => {
-                todo!()
+            Self::ReviewPr(num) => {
+                real_main(shell, tasks, Action::Review, Target::Pr(*num))
             }
             Self::ReviewCommit(commit) => {
                 real_main(shell, tasks, Action::Review, Target::Commit(commit.to_string()))
@@ -286,7 +286,7 @@ fn real_main(
                     }
                 }
                 Action::Review => {
-                    todo!()
+                    review_pr_interactive(shell, tasks, &repo, &pull)?;
                 }
                 Action::Run => unreachable!("checked above"),
                 Action::TaskEdit => {
@@ -489,6 +489,268 @@ fn review_commit_interactive(
 
             break;
         }
+    }
+
+    Ok(())
+}
+
+fn review_pr_interactive(
+    shell: &Shell,
+    tasks: &mut tw::TaskCollection,
+    repo: &repo::Repository,
+    pull: &tw::PrTask,
+) -> Result<(), anyhow::Error> {
+    loop {
+        println!();
+        println!("=== Reviewing PR #{}: {} ===", pull.number(), pull.title());
+        println!("Author: {}", pull.author());
+        println!("Current PR Review Status: {}", pull.review_status());
+        println!();
+
+        // Show commit status summary
+        println!("=== Commit Status Summary ===");
+        let mut all_commits_approved = true;
+        let mut all_commits_ci_success = true;
+        let mut tip_commit_id = None;
+
+        let commits: Vec<_> = pull.commits(tasks).collect();
+        for commit in &commits {
+            println!(
+                "  {}: review={}, ci={}{}",
+                commit.commit_id(),
+                commit.review_status(),
+                commit.ci_status(),
+                if commit.is_tip() { " (TIP)" } else { "" }
+            );
+
+            if commit.is_tip() {
+                tip_commit_id = Some(commit.commit_id().clone());
+            }
+
+            if *commit.review_status() != ReviewStatus::Approved {
+                all_commits_approved = false;
+            }
+            if *commit.ci_status() != CiStatus::Success {
+                all_commits_ci_success = false;
+            }
+        }
+
+        println!();
+        println!("All commits approved: {}", all_commits_approved);
+        println!("All commits CI success: {}", all_commits_ci_success);
+        println!();
+
+        // Prompt for action
+        println!("What would you like to do?");
+        println!("1) Approve PR");
+        println!("2) NACK PR");
+        println!("3) Request changes");
+        println!("4) View total diff");
+        println!("5) Cancel");
+        print!("Choice (1-5): ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice = input.trim();
+
+        let new_status = match choice {
+            "1" => Some(ReviewStatus::Approved),
+            "2" => Some(ReviewStatus::Nacked),
+            "3" => Some(ReviewStatus::NeedsChange),
+            "4" => {
+                println!("--- Total diff for PR #{} ---", pull.number());
+                let _push_dir = shell.push_dir(&repo.repo_root);
+                
+                // Get base commit and tip commit for the diff
+                let base_commit = pull.base_commit();
+                if let Some(tip_commit) = tip_commit_id.as_ref() {
+                    let _ = cmd!(shell, "git diff {base_commit}..{tip_commit}").run();
+                } else {
+                    eprintln!("Warning: No tip commit found, cannot show diff");
+                }
+                continue;
+            }
+            "5" => {
+                println!("Review cancelled.");
+                break;
+            }
+            _ => {
+                println!("Invalid choice. Please select 1-5.");
+                continue;
+            }
+        };
+
+        if let Some(status) = new_status {
+            // Get tip commit for the approval message
+            let tip_commit = match tip_commit_id {
+                Some(ref commit_id) => commit_id,
+                None => {
+                    eprintln!("Warning: PR appears to have no tip commit set; please manually fix this. Cannot review.");
+                    break;
+                }
+            };
+
+            // Get review notes from user
+            let review_notes = get_pr_review_notes_from_editor(shell, pull, &status, tip_commit, &commits)?;
+
+            // Update the task
+            let uuid = pull.uuid().to_string();
+            let status_str = match status {
+                ReviewStatus::Approved => "approved",
+                ReviewStatus::Nacked => "nacked",
+                ReviewStatus::NeedsChange => "needschange",
+                ReviewStatus::Unreviewed => "unreviewed",
+            };
+
+            cmd!(shell, "task {uuid} modify review_status:{status_str} review_notes:{review_notes}")
+                .run()
+                .context("updating PR review status")?;
+
+            println!("PR #{} review status updated to: {}", pull.number(), status);
+            if !review_notes.is_empty() {
+                println!("Review notes saved.");
+            }
+
+            // If approved, check if we should post GitHub approval and handle merge commit
+            if status == ReviewStatus::Approved {
+                post_github_approval_if_ready(shell, tasks, repo, pull)?;
+                
+                // Handle merge commit auto-approval if it's clean
+                let merge_commit = pull.merge_commit(tasks);
+                if merge_commit.is_clean_merge() && *merge_commit.review_status() == ReviewStatus::Unreviewed {
+                    println!("Merge commit is clean, automatically approving it...");
+                    let merge_uuid = merge_commit.uuid().to_string();
+                    let auto_review_notes = format!("Auto-approved clean merge commit for PR #{}", pull.number());
+                    cmd!(shell, "task {merge_uuid} modify review_status:approved review_notes:{auto_review_notes}")
+                        .run()
+                        .context("auto-approving clean merge commit")?;
+                    println!("Merge commit automatically approved.");
+                } else if merge_commit.is_merge_commit() && !merge_commit.is_clean_merge() {
+                    eprintln!("Warning: Merge commit is not clean and needs manual review.");
+                    eprintln!("Please review the merge commit separately: tw-rs commit {} review", merge_commit.commit_id());
+                }
+            }
+
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn get_pr_review_notes_from_editor(
+    shell: &Shell,
+    pull: &tw::PrTask,
+    status: &ReviewStatus,
+    tip_commit: &GitCommit,
+    commits: &[&tw::CommitTask],
+) -> Result<String, anyhow::Error> {
+    // Create temporary directory and file
+    let temp_dir = shell.create_temp_dir()?;
+    let temp_file = temp_dir.path().join(format!("local-ci-pr-review-{}.txt", pull.number()));
+
+    // Populate temp file with template
+    let mut template = String::new();
+    template.push_str(&format!("# Enter your PR review here. Updated PR #{} review status: {}\n", pull.number(), status));
+    
+    if *status == ReviewStatus::Approved {
+        template.push_str("# This will be posted as a Github approval as soon as all CI runs have passed\n");
+        template.push_str("# and all commits are approved.\n");
+        template.push_str(&format!("ACK {}; successfully ran local tests\n", tip_commit));
+    }
+
+    template.push_str("# Commit Review Information:\n");
+    // Add commit review information
+    for commit in commits {
+        template.push_str(&format!("# {}", commit.commit_id()));
+        if commit.is_tip() {
+            template.push_str(" (TIP)");
+        }
+        template.push_str(":\n");
+        let review_notes = commit.review_notes();
+        if !review_notes.is_empty() {
+            template.push_str(&format!("#   Review: {}\n", review_notes));
+        } else {
+            template.push_str("#   Review: (none)\n");
+        }
+    }
+    template.push_str("# Edit the approval message above. Lines starting with # will be removed.\n");
+
+    shell.write_file(&temp_file, template)?;
+
+    // Get editor command
+    let editor = shell.var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+
+    println!("Opening {} for review notes...", editor);
+
+    // Run editor
+    let exit_status = cmd!(shell, "{editor} {temp_file}")
+        .run();
+
+    if let Err(e) = exit_status {
+        return Err(anyhow::anyhow!("Editor failed: {}. Review cancelled.", e));
+    }
+
+    // Read review notes from temp file and remove comment lines
+    let content = shell.read_file(&temp_file)?;
+    let review_notes: Vec<&str> = content
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .collect();
+
+    let result = review_notes.join("\n");
+
+    // temp_dir is automatically cleaned up when dropped
+    Ok(result)
+}
+
+fn post_github_approval_if_ready(
+    shell: &Shell,
+    tasks: &tw::TaskCollection,
+    repo: &repo::Repository,
+    pull: &tw::PrTask,
+) -> Result<(), anyhow::Error> {
+    // Only proceed if PR is approved
+    if *pull.review_status() != ReviewStatus::Approved {
+        return Ok(());
+    }
+
+    // Check if all commits are approved and CI successful
+    let mut all_commits_approved_and_ci = true;
+    for commit in pull.commits(tasks) {
+        // Skip merge commits for this check
+        if commit.is_merge_commit() {
+            continue;
+        }
+        if *commit.review_status() != ReviewStatus::Approved || *commit.ci_status() != CiStatus::Success {
+            all_commits_approved_and_ci = false;
+            break;
+        }
+    }
+
+    // If all commits successful and PR is approved, post approval on GitHub
+    if all_commits_approved_and_ci {
+        println!("All commits in PR #{} are successful and PR is approved. Posting GitHub approval...", pull.number());
+
+        // Get PR review notes
+        let pr_review_notes = pull.review_notes();
+        let pr_num = pull.number().to_string();
+        
+        let _push_dir = shell.push_dir(&repo.repo_root);
+        let approval_result = cmd!(shell, "gh pr review {pr_num} -a -b {pr_review_notes}").run();
+        
+        match approval_result {
+            Ok(_) => {
+                println!("Successfully posted approval for PR #{}", pull.number());
+            }
+            Err(_) => {
+                println!("Failed to post approval for PR #{} - posting comment instead", pull.number());
+                let _ = cmd!(shell, "gh pr review {pr_num} -c -b {pr_review_notes}").run();
+            }
+        }
+    } else {
+        println!("PR #{} is approved but not all commits are approved and CI successful yet", pull.number());
     }
 
     Ok(())
