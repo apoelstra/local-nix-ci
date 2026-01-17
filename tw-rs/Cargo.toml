@@ -10,6 +10,7 @@ xshell = "0.2"
 serde = { version = "1.0.156", default-features = false, features = [ "derive" ] }
 serde_json = { version = "1.0.149", default-features = false, features = [ "std" ] }
 uuid = { version = "1.19", default-features = false, features = [ "serde", "std" ] }
+chrono = { version = "0.4", default-features = false, features = [ "clock", "std" ] }
 
 [workspace.lints.clippy]
 # Exclude lints we don't think are valuable.

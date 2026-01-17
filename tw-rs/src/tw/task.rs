@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use core::fmt;
 use serde_json;
-use std::fmt;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::serde_types::{self, CiStatus, MergeStatus, ReviewStatus};
@@ -14,13 +15,14 @@ pub struct PrTask {
     tip_commit_uuid: Uuid,
 
     project: String,
+    repo_root: PathBuf,
     review_status: ReviewStatus,
     review_notes: String,
 
     title: String,
     author: String,
     number: usize,
-    merge_status: MergeStatus,
+    pub(super) merge_status: MergeStatus,
     base_commit: GitCommit,
     merge_uuid: Uuid,
     merge_change_id: String,
@@ -36,6 +38,10 @@ impl PrTask {
     /// string prefixed by `local-ci.`.
     pub fn project(&self) -> &str {
         &self.project
+    }
+
+    pub fn repo_root(&self) -> &Path {
+        &self.repo_root
     }
 
     pub fn title(&self) -> &str {
@@ -102,6 +108,7 @@ pub struct CommitTask {
     parent_commit_uuid: Option<Uuid>,
 
     project: String,
+    repo_root: PathBuf,
     review_status: ReviewStatus,
     review_notes: String,
 
@@ -109,8 +116,9 @@ pub struct CommitTask {
     is_tip: bool,
     is_merge_commit: bool,
     is_clean_merge: bool,
-    ci_status: CiStatus,
-    derivation: Option<String>,
+    pub(super) ci_status: CiStatus,
+    pub(super) local_ci_commit_id: Option<String>,
+    pub(super) derivation: Option<String>,
     claimed_by: Option<String>,
 }
 
@@ -124,6 +132,10 @@ impl CommitTask {
     /// string prefixed by `local-ci.`.
     pub fn project(&self) -> &str {
         &self.project
+    }
+
+    pub fn repo_root(&self) -> &Path {
+        &self.repo_root
     }
 
     /// The description of the task.
@@ -299,6 +311,7 @@ impl PrOrCommitTask {
                 parent_commit_uuid,
                 commit_id,
                 project,
+                repo_root: task_json.repo_root,
                 review_status: task_json.review_status,
                 review_notes: task_json.review_notes,
                 description: task_json.description,
@@ -307,6 +320,7 @@ impl PrOrCommitTask {
                 is_tip,
                 is_merge_commit,
                 is_clean_merge,
+                local_ci_commit_id: task_json.local_ci_commit_id,
                 derivation: task_json.derivation,
                 claimed_by: task_json.claimed_by,
             }))
@@ -340,6 +354,7 @@ impl PrOrCommitTask {
                 uuid,
                 tip_commit_uuid: task_json.depends[0],
                 project,
+                repo_root: task_json.repo_root,
                 review_status: task_json.review_status,
                 review_notes: task_json.review_notes,
                 description: task_json.description,

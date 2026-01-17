@@ -2,7 +2,7 @@
 
 use core::fmt;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::io;
 use std::io::BufRead as _;
 use uuid::Uuid;
@@ -11,7 +11,8 @@ use xshell::{Shell, cmd};
 use super::task::PrOrCommitTask;
 use super::{CommitTask, PrTask};
 use crate::git::{self, GitCommit};
-use crate::tw::shell::{UniqueUuidError, get_or_insert_unique_uuid};
+use crate::tw::serde_types::{CiStatus, MergeStatus};
+use crate::tw::shell::{self, UniqueUuidError, get_or_insert_unique_uuid};
 
 #[derive(Debug)]
 pub struct TaskCollection {
@@ -91,6 +92,11 @@ impl TaskCollection {
     /// Returns an iterator over all the pull requests in the database.
     pub fn pulls(&self) -> impl Iterator<Item = (&Uuid, &PrTask)> {
         self.pulls.iter()
+    }
+
+    /// Returns an iterator over all commits in the database.
+    pub fn commits(&self) -> impl Iterator<Item = (&Uuid, &CommitTask)> {
+        self.commits.iter()
     }
 
     /// Looks up a commit by UUID
@@ -394,6 +400,107 @@ impl TaskCollection {
             panic!("Somehow created non-PR task");
         }
     }
+
+    pub fn update_commit_local_ci_commit_id(
+        &mut self,
+        uuid: &uuid::Uuid,
+        commit_id: String
+    ) -> Result<(), UpdateError> {
+        let sh = crate::tw::task_shell()
+            .map_err(UpdateError::CreateShell)?;
+
+        let mut entry = match self.commits.entry(*uuid) {
+            Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
+            Entry::Occupied(hole) => hole,
+        };
+
+        let uuid_str = uuid.to_string();
+        cmd!(sh, "task {uuid_str} modify local_ci_commit_id:{commit_id}")
+            .run()
+            .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
+
+        entry.get_mut().local_ci_commit_id = Some(commit_id);
+        Ok(())
+    }
+
+    pub fn update_commit_derivation(
+        &mut self,
+        uuid: &uuid::Uuid,
+        derivation: String
+    ) -> Result<(), UpdateError> {
+        let sh = crate::tw::task_shell()
+            .map_err(UpdateError::CreateShell)?;
+
+        let mut entry = match self.commits.entry(*uuid) {
+            Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
+            Entry::Occupied(hole) => hole,
+        };
+
+        let uuid_str = uuid.to_string();
+        cmd!(sh, "task {uuid_str} modify derivation:{derivation}")
+            .run()
+            .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
+
+        entry.get_mut().derivation = Some(derivation);
+        Ok(())
+    }
+
+    pub fn update_commit_ci_status(
+        &mut self,
+        uuid: &uuid::Uuid,
+        status: CiStatus
+    ) -> Result<(), UpdateError> {
+        let sh = crate::tw::task_shell()
+            .map_err(UpdateError::CreateShell)?;
+
+        let mut entry = match self.commits.entry(*uuid) {
+            Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
+            Entry::Occupied(hole) => hole,
+        };
+
+        let uuid_str = uuid.to_string();
+        let status_str = match status {
+            CiStatus::Unstarted => "unstarted",
+            CiStatus::Started => "started", 
+            CiStatus::Success => "success",
+            CiStatus::Failed => "failed",
+        };
+
+        cmd!(sh, "task {uuid_str} modify ci_status:{status_str}")
+            .run()
+            .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
+
+        entry.get_mut().ci_status = status;
+        Ok(())
+    }
+
+    pub fn update_pr_merge_status(
+        &mut self,
+        uuid: &uuid::Uuid,
+        status: MergeStatus
+    ) -> Result<(), UpdateError> {
+        let sh = crate::tw::task_shell()
+            .map_err(UpdateError::CreateShell)?;
+
+        let mut entry = match self.pulls.entry(*uuid) {
+            Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
+            Entry::Occupied(hole) => hole,
+        };
+
+        let uuid_str = uuid.to_string();
+        let status_str = match status {
+            MergeStatus::Unstarted => "unstarted",
+            MergeStatus::NeedSig => "needsig", 
+            MergeStatus::Pushed => "push",
+        };
+
+        cmd!(sh, "task {uuid_str} modify merge_status:{status_str}")
+            .run()
+            .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
+
+        entry.get_mut().merge_status = status;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -460,6 +567,33 @@ impl std::error::Error for TaskCollectionError {
             Self::Git(e) => Some(e),
             Self::Jj(e) => Some(e),
             Self::IllegalMergeCommit { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum UpdateError {
+    CreateShell(shell::Error),
+    UnknownUuid(Uuid),
+    ExecuteModify(Uuid, xshell::Error),
+}
+
+impl std::error::Error for UpdateError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CreateShell(e) => Some(e),
+            Self::UnknownUuid(_) => None,
+            Self::ExecuteModify(_, e) => Some(e),
+        }
+    }
+}
+
+impl fmt::Display for UpdateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CreateShell(_) => f.write_str("failed to create shell"),
+            Self::UnknownUuid(uuid) => write!(f, "unknown UUID {uuid}"),
+            Self::ExecuteModify(uuid, _) => write!(f, "failed to update UUID {uuid}"),
         }
     }
 }
