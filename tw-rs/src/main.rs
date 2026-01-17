@@ -138,6 +138,14 @@ fn main() -> Result<(), anyhow::Error> {
                             print!(", TIP");
                         }
                         
+                        if commit.is_merge_commit() {
+                            if commit.is_clean_merge() {
+                                print!(", CLEAN_MERGE");
+                            } else {
+                                print!(", MERGE");
+                            }
+                        }
+                        
                         println!(")");
                     }
                     
@@ -148,6 +156,15 @@ fn main() -> Result<(), anyhow::Error> {
                     if matches!(merge_commit.review_status(), ReviewStatus::Approved) {
                         print!(", ci: {}", merge_commit.ci_status());
                     }
+                    
+                    if merge_commit.is_merge_commit() {
+                        if merge_commit.is_clean_merge() {
+                            print!(", CLEAN_MERGE");
+                        } else {
+                            print!(", MERGE");
+                        }
+                    }
+                    
                     println!(")");
                     
                     if !pull.merge_change_id().is_empty() {

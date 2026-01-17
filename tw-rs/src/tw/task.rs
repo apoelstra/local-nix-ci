@@ -86,6 +86,8 @@ pub struct CommitTask {
 
     commit_id: GitCommit,
     is_tip: bool,
+    is_merge_commit: bool,
+    is_clean_merge: bool,
     ci_status: CiStatus,
     derivation: Option<String>,
     claimed_by: Option<String>,
@@ -114,13 +116,9 @@ impl CommitTask {
 
     pub fn is_tip(&self) -> bool { self.is_tip }
 
-    pub fn has_tag(&self, tag: &str) -> bool {
-        match tag {
-            "TIP_COMMIT" => self.is_tip,
-            "MERGE_COMMIT" => false, // Regular commits are never merge commits
-            _ => false,
-        }
-    }
+    pub fn is_merge_commit(&self) -> bool { self.is_merge_commit }
+
+    pub fn is_clean_merge(&self) -> bool { self.is_clean_merge }
 
     pub(super) fn dep_uuid(&self) -> Option<&Uuid> { self.parent_commit_uuid.as_ref() }
 }
@@ -221,6 +219,8 @@ impl PrOrCommitTask {
         // Because Rust is annoying we have to call has_tag before
         // moving any fields out of `task_json`.
         let is_tip = task_json.has_tag("TIP_COMMIT");
+        let is_merge_commit = task_json.has_tag("MERGE_COMMIT");
+        let is_clean_merge = task_json.has_tag("CLEAN_MERGE");
 
         let project = task_json
             .project
@@ -248,6 +248,8 @@ impl PrOrCommitTask {
 
                 ci_status: task_json.ci_status,
                 is_tip,
+                is_merge_commit,
+                is_clean_merge,
                 derivation: task_json.derivation,
                 claimed_by: task_json.claimed_by,
             }))

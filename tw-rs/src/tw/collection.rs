@@ -112,6 +112,20 @@ impl TaskCollection {
         git::fetch_commit(task_shell, commit_id)
             .map_err(TaskCollectionError::Git)?;
 
+        // Check if this is a merge commit and if it's a clean merge
+        let parents = git::list_parents(task_shell, commit_id)
+            .map_err(TaskCollectionError::Git)?;
+        let is_merge_commit = parents.len() > 1;
+        let is_clean_merge = if is_merge_commit {
+            // Check if 'git show' output is empty (clean merge)
+            let show_output = cmd!(task_shell, "git show --format= {commit_id}")
+                .read()
+                .map_err(TaskCollectionError::Shell)?;
+            show_output.trim().is_empty()
+        } else {
+            false
+        };
+
         let description = format!("Commit {}", commit_id);
         
         // Check if a task already exists for this commit
@@ -152,6 +166,20 @@ impl TaskCollection {
                 self.commits.insert(commit_uuid, commit_task);
             }
             
+            // Add merge commit tags if applicable
+            if is_merge_commit {
+                let uuid_s = commit_uuid.to_string();
+                cmd!(task_shell, "task {uuid_s} modify +MERGE_COMMIT")
+                    .run()
+                    .map_err(TaskCollectionError::Shell)?;
+                
+                if is_clean_merge {
+                    cmd!(task_shell, "task {uuid_s} modify +CLEAN_MERGE")
+                        .run()
+                        .map_err(TaskCollectionError::Shell)?;
+                }
+            }
+            
             Ok(commit_uuid)
         } else {
             // Task exists, parse it and check if we need to update repo_root or description
@@ -190,6 +218,19 @@ impl TaskCollection {
                     
                     if let super::task::PrOrCommitTask::Commit(updated_task) = updated_task {
                         self.commits.insert(uuid, updated_task);
+                    }
+                }
+                
+                // Add merge commit tags if applicable (for both new and existing tasks)
+                if is_merge_commit {
+                    cmd!(task_shell, "task {uuid_str} modify +MERGE_COMMIT")
+                        .run()
+                        .map_err(TaskCollectionError::Shell)?;
+                    
+                    if is_clean_merge {
+                        cmd!(task_shell, "task {uuid_str} modify +CLEAN_MERGE")
+                            .run()
+                            .map_err(TaskCollectionError::Shell)?;
                     }
                 }
                 
