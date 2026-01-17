@@ -114,7 +114,7 @@ impl TaskCollection {
         project_name: &str,
         repo_root: &std::path::Path,
         commit_id: &GitCommit,
-    ) -> Result<Uuid, TaskCollectionError> {
+    ) -> Result<&CommitTask, TaskCollectionError> {
         // Try to fetch the commit first
         git::fetch_commit(task_shell, commit_id).map_err(TaskCollectionError::Git)?;
 
@@ -165,10 +165,12 @@ impl TaskCollection {
             .map_err(TaskCollectionError::ParseTask)?;
 
         if let super::task::PrOrCommitTask::Commit(commit_task) = commit_task {
-            self.commits.insert(commit_uuid, commit_task);
+            let entry = self.commits.entry(commit_uuid);
+            Ok(entry.insert_entry(commit_task).into_mut())
+        } else {
+            panic!("Somehow created non-committask");
         }
 
-        Ok(commit_uuid)
     }
 
     /// Refreshes a PR's data by querying the local git repo and Github. If the PR does not
@@ -290,19 +292,19 @@ impl TaskCollection {
         let mut commit_uuids = Vec::new();
 
         for commit_id in pr_data.commit_ids() {
-            let commit_uuid = self.insert_or_refresh_commit(
+            let commit = self.insert_or_refresh_commit(
                 task_shell,
                 &repo.project_name,
                 &repo.repo_root,
                 commit_id,
             )?;
 
-            commit_uuids.push(commit_uuid);
-            commit_id_to_uuid.insert(commit_id.clone(), commit_uuid);
+            commit_uuids.push(*commit.uuid());
+            commit_id_to_uuid.insert(commit_id.clone(), *commit.uuid());
 
             // Mark the last commit as TIP_COMMIT
             if *commit_id == pr_data.commits.last().unwrap().oid {
-                let commit_uuid = commit_uuid.to_string();
+                let commit_uuid = commit.uuid().to_string();
                 let _ = cmd!(task_shell, "task {commit_uuid} modify +TIP_COMMIT").run();
             }
         }
@@ -328,13 +330,13 @@ impl TaskCollection {
         }
 
         // Create merge commit task
-        let merge_commit_uuid = self.insert_or_refresh_commit(
+        let merge_commit = self.insert_or_refresh_commit(
             task_shell,
             &repo.project_name,
             &repo.repo_root,
             &merge_commit_id,
         )?;
-        let merge_commit_uuid = merge_commit_uuid.to_string();
+        let merge_commit_uuid = merge_commit.uuid().to_string();
 
         // Add HAS_CONFLICTS tag if the merge has conflicts
         if has_conflicts {
@@ -387,8 +389,8 @@ impl TaskCollection {
             .map_err(TaskCollectionError::ParseTask)?;
 
         if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
-            self.pulls.insert(pr_uuid, pr_task);
-            Ok(self.pulls.get(&pr_uuid).unwrap())
+            let entry = self.pulls.entry(pr_uuid);
+            Ok(entry.insert_entry(pr_task).into_mut())
         } else {
             panic!("Somehow created non-PR task");
         }

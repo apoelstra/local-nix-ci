@@ -58,6 +58,10 @@ impl PrTask {
         &self.review_status
     }
 
+    pub fn review_notes(&self) -> &str {
+        &self.review_notes
+    }
+
     pub fn merge_status(&self) -> &MergeStatus {
         &self.merge_status
     }
@@ -134,6 +138,10 @@ impl CommitTask {
 
     pub fn review_status(&self) -> &ReviewStatus {
         &self.review_status
+    }
+
+    pub fn review_notes(&self) -> &str {
+        &self.review_notes
     }
 
     pub fn ci_status(&self) -> &CiStatus {

@@ -9,6 +9,7 @@ mod tw;
 
 use anyhow::Context;
 use core::fmt;
+use std::io::{self, Write};
 use xshell::{Shell, cmd};
 
 use self::args::{Action, Target};
@@ -261,7 +262,9 @@ fn real_main(
                             .context("refreshing PR")?;
                     }
                 }
-                Action::Review => todo!(),
+                Action::Review => {
+                    todo!()
+                }
                 Action::Run => unreachable!("checked above"),
                 Action::TaskEdit => {
                     let uuid = pull.uuid().to_string();
@@ -283,8 +286,8 @@ fn real_main(
 
             let lookup = tasks.commit_by_id(&repo.project_name, &commit_id);
             let just_created = lookup.is_none();
-            let commit_uuid = match lookup {
-                Some(task) => *task.uuid(),
+            let commit = match lookup {
+                Some(task) => task,
                 None => tasks
                     .insert_or_refresh_commit(
                         shell,
@@ -297,11 +300,12 @@ fn real_main(
 
             match action {
                 Action::Info | Action::Next => {
-                    if let Some(commit_task) = tasks.commit_by_id(&repo.project_name, &commit_id) {
-                        println!("{}: {}", commit_task.project(), commit_task.description());
-                    } else {
-                        println!("Commit {} in project {}", commit_id, repo.project_name);
-                    }
+                    println!("{}: {}", commit.project(), commit.description());
+
+                    let mut next = Next::NothingToDo;
+                    next.update_from_commit(&commit);
+                    println!();
+                    println!("Next action: {next}");
 
                     if action == Action::Next {
                         todo!()
@@ -319,16 +323,18 @@ fn real_main(
                             .context("refreshing commit")?;
                     }
                 }
-                Action::Review => todo!(),
+                Action::Review => {
+                    review_commit_interactive(shell, tasks, &repo, &commit_id)?;
+                }
                 Action::Run => unreachable!("checked above"),
                 Action::TaskEdit => {
-                    let uuid = commit_uuid.to_string();
+                    let uuid = commit.uuid().to_string();
                     cmd!(shell, "task edit {uuid}")
                         .run()
                         .context("executing task edit")?;
                 }
                 Action::TaskInfo => {
-                    let uuid = commit_uuid.to_string();
+                    let uuid = commit.uuid().to_string();
                     cmd!(shell, "task info {uuid}")
                         .run()
                         .context("executing task info")?;
@@ -339,6 +345,174 @@ fn real_main(
     }
 
     Ok(())
+}
+
+fn review_commit_interactive(
+    shell: &Shell,
+    tasks: &mut tw::TaskCollection,
+    repo: &repo::Repository,
+    commit_id: &GitCommit,
+) -> Result<(), anyhow::Error> {
+    let commit_task = tasks
+        .commit_by_id(&repo.project_name, commit_id)
+        .context("commit not found in task collection")?;
+
+    loop {
+        println!();
+        println!("=== Reviewing commit {} ===", commit_id);
+        println!("Current review status: {}", commit_task.review_status());
+        println!();
+
+        // Show git diff
+        println!("--- Git diff ---");
+        let git_show_result = cmd!(shell, "git show {commit_id}").run();
+        if let Err(e) = git_show_result {
+            eprintln!("Warning: Failed to show git diff: {}", e);
+        }
+        println!();
+
+        // Show PRs containing this commit
+        println!("--- PRs containing this commit ---");
+        let mut found_prs = false;
+        for (_, pr_task) in tasks.pulls() {
+            let contains_commit = pr_task
+                .commits(tasks)
+                .any(|c| c.commit_id() == commit_id);
+
+            if contains_commit {
+                found_prs = true;
+                println!(
+                    "  PR #{}: {} (by {})",
+                    pr_task.number(),
+                    pr_task.title(),
+                    pr_task.author()
+                );
+
+                if commit_task.is_tip() {
+                    println!("  ⚠️  This is a tip commit for at least one of the above PR(s)");
+                }
+                if commit_task.is_merge_commit() {
+                    println!("  ⚠️  This is a merge commit for at least one of the above PR(s)");
+                }
+            }
+        }
+
+        if !found_prs {
+            println!("  No PRs found containing this commit.");
+        }
+        println!();
+        println!("  Note: Remember to review the PR(s) separately from individual commits.");
+        println!();
+
+        // Prompt for action
+        println!("What would you like to do?");
+        println!("1) Approve");
+        println!("2) NACK");
+        println!("3) Needs Change");
+        println!("4) Erase review (mark unreviewed)");
+        println!("5) Re-view diff");
+        println!("6) Cancel");
+        print!("Choice (1-6): ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice = input.trim();
+
+        let new_status = match choice {
+            "1" => Some(ReviewStatus::Approved),
+            "2" => Some(ReviewStatus::Nacked),
+            "3" => Some(ReviewStatus::NeedsChange),
+            "4" => Some(ReviewStatus::Unreviewed),
+            "5" => {
+                // Continue loop to re-show diff
+                continue;
+            }
+            "6" => {
+                println!("Review cancelled.");
+                break;
+            }
+            _ => {
+                println!("Invalid choice. Please select 1-6.");
+                continue;
+            }
+        };
+
+        if let Some(status) = new_status {
+            // Get review notes from user
+            let review_notes = if status == ReviewStatus::Unreviewed {
+                String::new()
+            } else {
+                get_review_notes_from_editor(shell, &commit_task, &status)?
+            };
+
+            // Update the task
+            let uuid = commit_task.uuid().to_string();
+            let status_str = match status {
+                ReviewStatus::Approved => "approved",
+                ReviewStatus::Nacked => "nacked",
+                ReviewStatus::NeedsChange => "needschange",
+                ReviewStatus::Unreviewed => "unreviewed",
+            };
+
+            cmd!(shell, "task {uuid} modify review_status:{status_str} review_notes:{review_notes}")
+                .run()
+                .context("updating task review status")?;
+
+            println!("Commit {} review status updated to: {}", commit_id, status);
+            if !review_notes.is_empty() {
+                println!("Review notes saved.");
+            }
+
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn get_review_notes_from_editor(
+    shell: &Shell,
+    commit: &CommitTask,
+    status: &ReviewStatus,
+) -> Result<String, anyhow::Error> {
+    // Create temporary directory and file
+    let temp_dir = shell.create_temp_dir()?;
+    let temp_file = temp_dir.path().join(format!("local-ci-review-{}.txt", commit.commit_id()));
+
+    // Populate temp file with template
+    let mut template = commit.review_notes().to_owned();
+    if template.is_empty() {
+        template.push_str(&format!("# Enter your review here. Updated commit {} review status: {}\n", commit.commit_id(), status));
+        template.push_str("# Edit the review message above. Lines starting with # will be removed.\n");
+    }
+
+    shell.write_file(&temp_file, template)?;
+
+    // Get editor command
+    let editor = shell.var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+
+    println!("Opening {} for review notes...", editor);
+
+    // Run editor
+    let exit_status = cmd!(shell, "{editor} {temp_file}")
+        .run();
+
+    if let Err(e) = exit_status {
+        return Err(anyhow::anyhow!("Editor failed: {}. Review cancelled.", e));
+    }
+
+    // Read review notes from temp file and remove comment lines
+    let content = shell.read_file(&temp_file)?;
+    let review_notes: Vec<&str> = content
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .collect();
+
+    let result = review_notes.join("\n");
+
+    // temp_dir is automatically cleaned up when dropped
+    Ok(result)
 }
 
 fn main() -> Result<(), anyhow::Error> {
