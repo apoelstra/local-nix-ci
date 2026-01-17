@@ -120,9 +120,14 @@ fn main() -> Result<(), anyhow::Error> {
                     println!("{} #{}: {}", pull.project(), pull.number(), pull.title());
                     println!();
                     println!("Commits:");
+                    let mut revset_str = format!("{} | {}", pull.base_commit(), pull.merge_commit(&tasks).commit_id());
                     for commit in pull.commits(&tasks) {
+                        revset_str.push_str(&format!(" | {}", commit.commit_id()));
                         println!("    {}", commit.commit_id());
                     }
+                    println!();
+                    println!("Commit graph:");
+                    let _ = cmd!(shell, "jj log --no-pager --ignore-working-copy -r {revset_str}").quiet().run();
                 }
                 Action::Refresh => {
                     if !just_created {

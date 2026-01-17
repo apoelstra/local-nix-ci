@@ -40,6 +40,15 @@ impl PrTask {
 
     pub fn number(&self) -> usize { self.number }
 
+    pub fn base_commit(&self) -> &GitCommit { &self.base_commit }
+
+    pub fn merge_commit<'tc>(
+        &self,
+        collection: &'tc super::TaskCollection,
+    ) -> &'tc CommitTask {
+        collection.commit(&self.merge_uuid).expect("merge UUID in collection")
+    }
+        
     pub fn commits<'tc>(
         &self,
         collection: &'tc super::TaskCollection,

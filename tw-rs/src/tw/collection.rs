@@ -374,7 +374,7 @@ impl TaskCollection {
             
         // Add dependency to the PR task for the tip commit
         let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:").run(); // Clear dependencies
-        let tip_commit_uuid = commit_uuids.last().expect("checked above");
+        let tip_commit_uuid_str = commit_uuids.last().expect("checked above").to_string();
         let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:{tip_commit_uuid_str}").run();
         // Add UDA to the PR task for the merge commit
         let _ = cmd!(task_shell, "task {pr_uuid_str} modify merge_uuid:{merge_commit_uuid}").run();
