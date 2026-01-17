@@ -381,6 +381,20 @@ impl TaskCollection {
         )
         .run();
 
+        if !new_uuid {
+            let old = &self.pulls[&pr_uuid];
+            if base_commit != old.base_commit()
+                || commit_uuids.last().expect("checked above") != old.dep_uuid()
+            {
+                let _ = cmd!(
+                    task_shell,
+                    "task {pr_uuid_str} modify merge_status:unstarted"
+                )
+                .run();
+
+            }
+        }
+
         // (Re-)insert the PR UUID into our PR number lookup table
         self.pull_numbers
             .insert((Cow::Owned(repo.project_name.clone()), num), pr_uuid);
