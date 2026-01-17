@@ -4,8 +4,7 @@ use core::fmt;
 
 use crate::git::GitCommit;
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Default)]
-#[derive(serde::Deserialize)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CiStatus {
     #[default]
@@ -26,8 +25,7 @@ impl fmt::Display for CiStatus {
     }
 }
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Default)]
-#[derive(serde::Deserialize)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MergeStatus {
     #[default]
@@ -40,15 +38,13 @@ impl fmt::Display for MergeStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unstarted => f.write_str("unstarted"),
-            Self::NeedSig=> f.write_str("NEEDS SIGNATURE"),
+            Self::NeedSig => f.write_str("NEEDS SIGNATURE"),
             Self::Pushed => f.write_str("pushed"),
         }
     }
 }
 
-
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Default)]
-#[derive(serde::Deserialize)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReviewStatus {
     #[default]

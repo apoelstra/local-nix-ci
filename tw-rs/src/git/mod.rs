@@ -2,7 +2,7 @@
 
 use core::{fmt, str::FromStr};
 use std::ffi::OsStr;
-use xshell::{cmd, Shell};
+use xshell::{Shell, cmd};
 
 /// A representation of a git commit.
 ///
@@ -59,7 +59,10 @@ impl fmt::Display for Error {
         match self {
             Self::Shell(_) => f.write_str("failed to invoke git"),
             Self::CommitParse(s, _) => write!(f, "failed to parse {s} as git commit"),
-            Self::CommitNotFound(commit) => write!(f, "commit {commit} not found after fetching from all remotes"),
+            Self::CommitNotFound(commit) => write!(
+                f,
+                "commit {commit} not found after fetching from all remotes"
+            ),
         }
     }
 }
@@ -75,14 +78,11 @@ impl std::error::Error for Error {
 }
 
 /// Returns the list of parent commit IDs for the given commit.
-pub fn list_parents<C: AsRef<OsStr>>(
-    shell: &Shell,
-    commit: C,
-) -> Result<Vec<GitCommit>, Error> {
+pub fn list_parents<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<Vec<GitCommit>, Error> {
     let output = cmd!(shell, "git rev-list --parents -n 1 {commit}")
         .read()
         .map_err(Error::Shell)?;
-    
+
     output
         .split_whitespace()
         .skip(1) // first element is the commit itself
@@ -91,46 +91,41 @@ pub fn list_parents<C: AsRef<OsStr>>(
 }
 
 /// Resolves a git reference (branch, tag, commit ID, etc.) to a full commit ID.
-pub fn resolve_ref<R: AsRef<OsStr>>(
-    shell: &Shell,
-    git_ref: R,
-) -> Result<GitCommit, Error> {
+pub fn resolve_ref<R: AsRef<OsStr>>(shell: &Shell, git_ref: R) -> Result<GitCommit, Error> {
     let output = cmd!(shell, "git rev-parse {git_ref}")
         .read()
         .map_err(Error::Shell)?;
-    
+
     GitCommit::from_str(output.trim())
 }
 
 /// Checks whether a commit is available locally; failing that tries to fetch it from origin;
 /// failing that tries to fetch it from upstream; and failing that returns an error.
-pub fn fetch_commit<C: AsRef<OsStr>>(
-    shell: &Shell,
-    commit: C,
-) -> Result<(), Error> {
+pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Error> {
     fn now_have_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> bool {
-        cmd!(shell, "git cat-file -e {commit}").quiet().run().is_ok()
+        cmd!(shell, "git cat-file -e {commit}")
+            .quiet()
+            .run()
+            .is_ok()
     }
 
     let commit = &commit; // stupid Rust
-    
+
     // First check if commit is available locally
     if now_have_commit(shell, commit) {
         return Ok(());
     }
 
-    // Then try to fetch it from origin then upstream.    
-    if cmd!(shell, "git fetch origin {commit}").run().is_ok()
-        && now_have_commit(shell, commit) {
+    // Then try to fetch it from origin then upstream.
+    if cmd!(shell, "git fetch origin {commit}").run().is_ok() && now_have_commit(shell, commit) {
         return Ok(());
     }
-    if cmd!(shell, "git fetch upstream {commit}").run().is_ok()
-        && now_have_commit(shell, commit) {
+    if cmd!(shell, "git fetch upstream {commit}").run().is_ok() && now_have_commit(shell, commit) {
         return Ok(());
     }
-    
+
     // All attempts failed
     Err(Error::CommitNotFound(
-        commit.as_ref().to_string_lossy().to_string()
+        commit.as_ref().to_string_lossy().to_string(),
     ))
 }

@@ -13,20 +13,28 @@ use xshell::{Shell, cmd};
 
 use self::args::{Action, Target};
 use self::git::GitCommit;
-use self::tw::serde_types::{CiStatus, ReviewStatus};
 use self::tw::CommitTask;
+use self::tw::serde_types::{CiStatus, ReviewStatus};
 
 fn check_required_tools() -> xshell::Result<()> {
     let sh = Shell::new()?;
     let tools = ["gh", "git", "jj", "nix", "task"];
-    
+
     for tool in &tools {
-        if cmd!(sh, "{tool} --version").quiet().ignore_stdout().run().is_err() {
-            eprintln!("Error: Required tool '{}' is not available or not in PATH", tool);
+        if cmd!(sh, "{tool} --version")
+            .quiet()
+            .ignore_stdout()
+            .run()
+            .is_err()
+        {
+            eprintln!(
+                "Error: Required tool '{}' is not available or not in PATH",
+                tool
+            );
             std::process::exit(1);
         }
     }
-    
+
     Ok(())
 }
 
@@ -46,7 +54,6 @@ impl fmt::Display for Next {
             Self::Failed => f.write_str("Nothing to do (failed)."),
             Self::NothingToDo => f.write_str("Nothing to do."),
         }
-        
     }
 }
 
@@ -55,7 +62,7 @@ impl Next {
         match commit.review_status() {
             ReviewStatus::Unreviewed => {
                 self.update(Next::ReviewCommit(commit.commit_id().clone()));
-            },
+            }
             ReviewStatus::NeedsChange | ReviewStatus::Nacked => {
                 self.update(Next::Failed);
             }
@@ -63,10 +70,10 @@ impl Next {
                 if *commit.ci_status() == CiStatus::Failed {
                     self.update(Next::Failed);
                 }
-            },
+            }
         }
     }
-        
+
     fn update(&mut self, new: Self) {
         if *self != Self::Failed {
             *self = new;
@@ -80,7 +87,6 @@ fn real_main(
     action: Action,
     target: Target,
 ) -> Result<(), anyhow::Error> {
-
     if target == Target::None {
         // Handle "global" actions, which don't need to be in an active repo
         // and which can avoid invoking gh (except refresh, which does on
@@ -91,30 +97,32 @@ fn real_main(
                 eprintln!();
                 args::usage();
                 std::process::exit(1);
-            },
+            }
             Action::TaskEdit | Action::TaskInfo => {
-                eprintln!("Nothing to query taskwarrior for. (Did you mean to provide a PR number or commit ID?");
+                eprintln!(
+                    "Nothing to query taskwarrior for. (Did you mean to provide a PR number or commit ID?"
+                );
                 eprintln!();
                 args::usage();
                 std::process::exit(1);
-            },
+            }
             Action::Info => {
                 for (_, pull) in tasks.pulls() {
                     println!("{} PR #{}: {}", pull.project(), pull.number(), pull.title());
                 }
-            },
+            }
             Action::Next => {
                 eprintln!("No 'next' action without a PR number or commit ID.");
                 eprintln!();
                 args::usage();
                 std::process::exit(1);
-            },
+            }
             Action::Refresh => {
                 eprintln!("[invoking gh here]");
-            },
+            }
             Action::Run => {
                 eprintln!("[run loop here]");
-            },
+            }
         }
         return Ok(());
     } else {
@@ -149,8 +157,9 @@ fn real_main(
             let just_created = lookup.is_none();
             let pull = match lookup {
                 Some(task) => task,
-                None => tasks.insert_or_refresh_pr(shell, &repo, num)
-                    .context("adding new PR")?
+                None => tasks
+                    .insert_or_refresh_pr(shell, &repo, num)
+                    .context("adding new PR")?,
             };
             // Clone the pull to end the mutable borrow of `tasks`.
             let pull = pull.clone();
@@ -158,7 +167,7 @@ fn real_main(
             match action {
                 Action::Info | Action::Next => {
                     let mut next = Next::NothingToDo;
-                    
+
                     println!("=== PR #{}: {} ===", pull.number(), pull.title());
                     println!("Author: {}", pull.author());
                     println!("PR review status: {}", pull.review_status());
@@ -166,7 +175,11 @@ fn real_main(
                     println!();
                     let merge_commit = pull.merge_commit(tasks);
                     next.update_from_commit(merge_commit);
-                    print!("PR merge commit: {} (review: {}", merge_commit.commit_id(), merge_commit.review_status());
+                    print!(
+                        "PR merge commit: {} (review: {}",
+                        merge_commit.commit_id(),
+                        merge_commit.review_status()
+                    );
                     if matches!(merge_commit.review_status(), ReviewStatus::Approved) {
                         print!(", ci: {}", merge_commit.ci_status());
                     }
@@ -178,7 +191,7 @@ fn real_main(
                         }
                     }
                     println!(")");
-                    
+
                     if !pull.merge_change_id().is_empty() {
                         println!("  JJ change ID: {}", pull.merge_change_id());
                     }
@@ -188,28 +201,32 @@ fn real_main(
                     match pull.review_status() {
                         ReviewStatus::Unreviewed => {
                             next.update(Next::ReviewPr(num));
-                        },
+                        }
                         ReviewStatus::NeedsChange | ReviewStatus::Nacked => {
                             next.update(Next::Failed);
                         }
-                        ReviewStatus::Approved => { /* done */ },
+                        ReviewStatus::Approved => { /* done */ }
                     }
-                    
+
                     println!("=== Commits ===");
                     let commits: Vec<_> = pull.commits(tasks).collect();
-                    
+
                     for commit in &commits {
                         next.update_from_commit(commit);
-                        
-                        print!("  {} (review: {}", commit.commit_id(), commit.review_status());
+
+                        print!(
+                            "  {} (review: {}",
+                            commit.commit_id(),
+                            commit.review_status()
+                        );
                         if matches!(commit.review_status(), ReviewStatus::Approved) {
                             print!(", ci: {}", commit.ci_status());
                         }
-                        
+
                         if commit.is_tip() {
                             print!(", TIP");
                         }
-                        
+
                         if commit.is_merge_commit() {
                             if commit.is_clean_merge() {
                                 print!(", CLEAN_MERGE");
@@ -217,26 +234,33 @@ fn real_main(
                                 print!(", MERGE");
                             }
                         }
-                        
+
                         println!(")");
                     }
-                    
+
                     println!();
                     println!("Commit graph:");
-                    let mut revset_str = format!("{} | {}", pull.base_commit(), merge_commit.commit_id());
+                    let mut revset_str =
+                        format!("{} | {}", pull.base_commit(), merge_commit.commit_id());
                     for commit in &commits {
                         revset_str.push_str(&format!(" | {}", commit.commit_id()));
                     }
-                    let _ = cmd!(shell, "jj log --no-pager --ignore-working-copy -r {revset_str}").quiet().run();
+                    let _ = cmd!(
+                        shell,
+                        "jj log --no-pager --ignore-working-copy -r {revset_str}"
+                    )
+                    .quiet()
+                    .run();
                     println!();
                     println!("Next action: {next}");
                 }
                 Action::Refresh => {
                     if !just_created {
-                        tasks.insert_or_refresh_pr(shell, &repo, num)
+                        tasks
+                            .insert_or_refresh_pr(shell, &repo, num)
                             .context("refreshing PR")?;
                     }
-                },
+                }
                 Action::Review => todo!(),
                 Action::Run => unreachable!("checked above"),
                 Action::TaskEdit => {
@@ -252,19 +276,23 @@ fn real_main(
                         .context("executing task info")?;
                 }
             }
-
-        },
+        }
         Target::Commit(commit_str) => {
             // Resolve the git ref to a commit ID
-            let commit_id = git::resolve_ref(shell, &commit_str)
-                .context("resolving git commit")?;
+            let commit_id = git::resolve_ref(shell, &commit_str).context("resolving git commit")?;
 
             let lookup = tasks.commit_by_id(&repo.project_name, &commit_id);
             let just_created = lookup.is_none();
             let commit_uuid = match lookup {
                 Some(task) => *task.uuid(),
-                None => tasks.insert_or_refresh_commit(shell, &repo.project_name, &repo.repo_root, &commit_id)
-                    .context("adding new commit")?
+                None => tasks
+                    .insert_or_refresh_commit(
+                        shell,
+                        &repo.project_name,
+                        &repo.repo_root,
+                        &commit_id,
+                    )
+                    .context("adding new commit")?,
             };
 
             match action {
@@ -281,10 +309,16 @@ fn real_main(
                 }
                 Action::Refresh => {
                     if !just_created {
-                        tasks.insert_or_refresh_commit(shell, &repo.project_name, &repo.repo_root, &commit_id)
+                        tasks
+                            .insert_or_refresh_commit(
+                                shell,
+                                &repo.project_name,
+                                &repo.repo_root,
+                                &commit_id,
+                            )
                             .context("refreshing commit")?;
                     }
-                },
+                }
                 Action::Review => todo!(),
                 Action::Run => unreachable!("checked above"),
                 Action::TaskEdit => {
@@ -300,7 +334,7 @@ fn real_main(
                         .context("executing task info")?;
                 }
             }
-        },
+        }
         Target::None => unreachable!("this case handled above, before current_repo()"),
     }
 
@@ -323,10 +357,8 @@ fn main() -> Result<(), anyhow::Error> {
     // then do RPC calls against that (and add some sort of "reload" command
     // hooked to TW adds and modifies). But for now we just query taskwarrior
     // every time.
-    let shell = tw::task_shell()
-        .context("creating task shell")?;
-    let mut tasks = tw::TaskCollection::new(&shell)
-        .context("loading tasks from taskwarrior")?;
+    let shell = tw::task_shell().context("creating task shell")?;
+    let mut tasks = tw::TaskCollection::new(&shell).context("loading tasks from taskwarrior")?;
 
     real_main(&shell, &mut tasks, args.action, args.target)
 }

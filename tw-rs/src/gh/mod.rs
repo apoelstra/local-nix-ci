@@ -3,4 +3,3 @@
 mod serde_types;
 
 pub use serde_types::PrInfo;
-

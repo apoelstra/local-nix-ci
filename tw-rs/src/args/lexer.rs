@@ -48,7 +48,10 @@ fn parse_as_pr_number(s: &str) -> Option<usize> {
 pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
     let mut is_first = true;
     env::args().map(move |s_arg| {
-        if is_first { is_first = false; return ArgToken::ProgramName(s_arg); }
+        if is_first {
+            is_first = false;
+            return ArgToken::ProgramName(s_arg);
+        }
 
         match s_arg.as_str() {
             "info" => ArgToken::Info,
@@ -73,5 +76,4 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
             }
         }
     })
-
 }

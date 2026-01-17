@@ -45,25 +45,26 @@ fn parse_github_url(url: &str) -> Option<String> {
             return Some(repo_part.replace('/', "."));
         }
     }
-    
+
     None
 }
 
 pub fn current_repo() -> Result<Repository, RepoError> {
     let sh = Shell::new().map_err(RepoError::ConstructingShell)?;
-    
+
     // Get repository root using git
     let repo_root_str = cmd!(sh, "git rev-parse --show-toplevel")
         .read()
         .map_err(RepoError::GitCommandFailed)?;
-    
+
     let repo_root = PathBuf::from(repo_root_str.trim());
-    
+
     let mut project_name = None;
     // Try to get project name from git remotes first
     for remote in ["origin", "upstream"] {
         if let Ok(origin_url) = cmd!(sh, "git remote get-url {remote}").read()
-            && let Some(project) = parse_github_url(origin_url.trim()) {
+            && let Some(project) = parse_github_url(origin_url.trim())
+        {
             project_name = Some(project);
             break;
         }
@@ -71,13 +72,16 @@ pub fn current_repo() -> Result<Repository, RepoError> {
     // Failing that, invoke gh (though will gh succeed without remotes either?)
     let project_name = match project_name {
         Some(x) => x,
-        None => cmd!(sh, "gh repo view --json owner,name --jq '.owner.login + \".\" + .name'")
-            .read()
-            .map_err(RepoError::GhCommandFailed)?
-            .trim()
-            .to_string(),
+        None => cmd!(
+            sh,
+            "gh repo view --json owner,name --jq '.owner.login + \".\" + .name'"
+        )
+        .read()
+        .map_err(RepoError::GhCommandFailed)?
+        .trim()
+        .to_string(),
     };
-    
+
     Ok(Repository {
         project_name,
         repo_root,

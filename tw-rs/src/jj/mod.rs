@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 use std::fmt;
-use xshell::{cmd, Shell, Cmd};
+use xshell::{Cmd, Shell, cmd};
 
 #[derive(Debug)]
 pub enum Error {
@@ -30,14 +30,14 @@ impl std::error::Error for Error {
 
 /// A generic jj invocation.
 pub fn jj(shell: &Shell) -> Cmd<'_> {
-    cmd!(shell, "jj --config signing.behavior=drop --color never --no-pager --ignore-working-copy")
+    cmd!(
+        shell,
+        "jj --config signing.behavior=drop --color never --no-pager --ignore-working-copy"
+    )
 }
 
 /// Invokes `jj new` on the given shell and returns the created change ID.
-pub fn jj_new<P: AsRef<OsStr>>(
-    shell: &Shell,
-    parents: &[P],
-) -> Result<String, Error> {
+pub fn jj_new<P: AsRef<OsStr>>(shell: &Shell, parents: &[P]) -> Result<String, Error> {
     let mut jj = jj(shell).arg("new").arg("--no-edit");
     for p in parents {
         jj = jj.arg("-r").arg(p);
@@ -47,8 +47,10 @@ pub fn jj_new<P: AsRef<OsStr>>(
     for line in jj_new_output.lines() {
         if line.contains("Created new commit") {
             // Extract change ID from the line - jj change IDs use letters 'k' through 'z'
-            if let Some(change_id_match) = line.split_whitespace()
-                .find(|word| word.len() >= 8 && word.chars().all(|c| ('k'..='z').contains(&c))) {
+            if let Some(change_id_match) = line
+                .split_whitespace()
+                .find(|word| word.len() >= 8 && word.chars().all(|c| ('k'..='z').contains(&c)))
+            {
                 return Ok(change_id_match.to_string());
             }
         }
@@ -61,11 +63,7 @@ pub fn jj_new<P: AsRef<OsStr>>(
 }
 
 /// Invokes `jj log` with the given template and revset. Returns stdout with whitespace trimmed.
-pub fn jj_log<R: AsRef<OsStr>>(
-    shell: &Shell,
-    template: &str,
-    revset: R,
-) -> Result<String, Error> {
+pub fn jj_log<R: AsRef<OsStr>>(shell: &Shell, template: &str, revset: R) -> Result<String, Error> {
     jj(shell)
         .arg("log")
         .arg("--no-graph")
@@ -77,4 +75,3 @@ pub fn jj_log<R: AsRef<OsStr>>(
         .map_err(Error::Shell)
         .map(|s| s.trim().to_string())
 }
-

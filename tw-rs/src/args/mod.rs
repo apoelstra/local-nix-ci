@@ -3,9 +3,9 @@
 mod lexer;
 
 use core::fmt;
+use lexer::{ArgToken, lexed_args};
 use std::process;
 use std::sync::OnceLock;
-use lexer::{ArgToken, lexed_args};
 
 static PROGRAM_NAME: OnceLock<String> = OnceLock::new();
 
@@ -60,19 +60,35 @@ impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MultipleActions(first, second) => {
-                write!(f, "Multiple actions provided: '{}' and '{}'. If '{}' is meant to be a git reference, try 'refs/heads/{}'.", first, second, second, second)
+                write!(
+                    f,
+                    "Multiple actions provided: '{}' and '{}'. If '{}' is meant to be a git reference, try 'refs/heads/{}'.",
+                    first, second, second, second
+                )
             }
             Self::MultipleTargetTypes(first, second) => {
-                write!(f, "Multiple target types provided: '{}' and '{}'. If '{}' is meant to be a git reference, try 'refs/heads/{}'.", first, second, second, second)
+                write!(
+                    f,
+                    "Multiple target types provided: '{}' and '{}'. If '{}' is meant to be a git reference, try 'refs/heads/{}'.",
+                    first, second, second, second
+                )
             }
             Self::MultipleTargets(first, second) => {
-                write!(f, "Multiple targets provided ('{}' and '{}'). Please specify only one target.", first, second)
+                write!(
+                    f,
+                    "Multiple targets provided ('{}' and '{}'). Please specify only one target.",
+                    first, second
+                )
             }
             Self::InvalidPrNumber(s) => {
                 write!(f, "Invalid PR number: '{}'. PR numbers must be numeric.", s)
             }
             Self::MissingTarget(target_type) => {
-                write!(f, "Target type '{}' specified but no target provided.", target_type)
+                write!(
+                    f,
+                    "Target type '{}' specified but no target provided.",
+                    target_type
+                )
             }
         }
     }
@@ -81,7 +97,11 @@ impl std::fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 fn parse_args() -> Result<CliArguments, ParseError> {
-    fn set_once<T>(existing: &mut Option<T>, new: T, error: fn(T, T) -> ParseError) -> Result<(), ParseError> {
+    fn set_once<T>(
+        existing: &mut Option<T>,
+        new: T,
+        error: fn(T, T) -> ParseError,
+    ) -> Result<(), ParseError> {
         if let Some(existing) = existing.take() {
             return Err(error(existing, new));
         }
@@ -92,24 +112,32 @@ fn parse_args() -> Result<CliArguments, ParseError> {
     let mut action = None;
     let mut target_type = None;
     let mut target = None;
-    
+
     for token in lexed_args() {
         match token {
-            ArgToken::ProgramName(s) => { 
+            ArgToken::ProgramName(s) => {
                 PROGRAM_NAME.set(s).ok(); // Ignore error if already set
                 continue;
             }
             ArgToken::Info => set_once(&mut action, Action::Info, ParseError::MultipleActions)?,
             ArgToken::Next => set_once(&mut action, Action::Next, ParseError::MultipleActions)?,
-            ArgToken::Refresh => set_once(&mut action, Action::Refresh, ParseError::MultipleActions)?,
+            ArgToken::Refresh => {
+                set_once(&mut action, Action::Refresh, ParseError::MultipleActions)?
+            }
             ArgToken::Review => set_once(&mut action, Action::Review, ParseError::MultipleActions)?,
             ArgToken::Run => set_once(&mut action, Action::Run, ParseError::MultipleActions)?,
-            ArgToken::TaskEdit => set_once(&mut action, Action::TaskEdit, ParseError::MultipleActions)?,
-            ArgToken::TaskInfo => set_once(&mut action, Action::TaskInfo, ParseError::MultipleActions)?,
-            
+            ArgToken::TaskEdit => {
+                set_once(&mut action, Action::TaskEdit, ParseError::MultipleActions)?
+            }
+            ArgToken::TaskInfo => {
+                set_once(&mut action, Action::TaskInfo, ParseError::MultipleActions)?
+            }
+
             ArgToken::Pr => set_once(&mut target_type, "pr", ParseError::MultipleTargetTypes)?,
-            ArgToken::Commit => set_once(&mut target_type, "commit", ParseError::MultipleTargetTypes)?,
-            
+            ArgToken::Commit => {
+                set_once(&mut target_type, "commit", ParseError::MultipleTargetTypes)?
+            }
+
             ArgToken::PrNumber(num) => {
                 if target_type.is_none() {
                     target_type = Some("pr");
@@ -120,7 +148,11 @@ fn parse_args() -> Result<CliArguments, ParseError> {
                 if target_type.is_none() {
                     target_type = Some("commit");
                 }
-                set_once(&mut target, format!("merge-{num}"), ParseError::MultipleTargets)?;
+                set_once(
+                    &mut target,
+                    format!("merge-{num}"),
+                    ParseError::MultipleTargets,
+                )?;
             }
             ArgToken::MaybeRef(s) => {
                 if target_type.is_none() {
@@ -130,24 +162,22 @@ fn parse_args() -> Result<CliArguments, ParseError> {
             }
         }
     }
-    
+
     let action = action.unwrap_or(Action::Info);
-    
+
     let final_target = match (target_type, target) {
         (None, None) => Target::None,
         (Some(x), None) => return Err(ParseError::MissingTarget(x)),
 
-        (Some("pr"), Some(s)) => {
-            match s.parse() {
-                Ok(num) => Target::Pr(num),
-                Err(_) => return Err(ParseError::InvalidPrNumber(s)),
-            }
-        }
+        (Some("pr"), Some(s)) => match s.parse() {
+            Ok(num) => Target::Pr(num),
+            Err(_) => return Err(ParseError::InvalidPrNumber(s)),
+        },
         (Some("commit"), Some(s)) => Target::Commit(s),
         (None, Some(_)) => unreachable!("target without inferred target type"),
         (Some(_), _) => unreachable!("invalid target type"),
     };
-    
+
     Ok(CliArguments {
         action,
         target: final_target,
