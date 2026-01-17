@@ -42,6 +42,14 @@ impl PrTask {
 
     pub fn base_commit(&self) -> &GitCommit { &self.base_commit }
 
+    pub fn author(&self) -> &str { &self.author }
+
+    pub fn review_status(&self) -> &ReviewStatus { &self.review_status }
+
+    pub fn merge_status(&self) -> &MergeStatus { &self.merge_status }
+
+    pub fn merge_change_id(&self) -> &str { &self.merge_change_id }
+
     pub fn merge_commit<'tc>(
         &self,
         collection: &'tc super::TaskCollection,
@@ -99,6 +107,20 @@ impl CommitTask {
 
     /// The commit ID.
     pub fn commit_id(&self) -> &GitCommit { &self.commit_id }
+
+    pub fn review_status(&self) -> &ReviewStatus { &self.review_status }
+
+    pub fn ci_status(&self) -> &CiStatus { &self.ci_status }
+
+    pub fn is_tip(&self) -> bool { self.is_tip }
+
+    pub fn has_tag(&self, tag: &str) -> bool {
+        match tag {
+            "TIP_COMMIT" => self.is_tip,
+            "MERGE_COMMIT" => false, // Regular commits are never merge commits
+            _ => false,
+        }
+    }
 
     pub(super) fn dep_uuid(&self) -> Option<&Uuid> { self.parent_commit_uuid.as_ref() }
 }

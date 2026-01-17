@@ -11,6 +11,7 @@ use anyhow::Context;
 use xshell::{Shell, cmd};
 
 use self::args::{Action, Target};
+use self::tw::serde_types::ReviewStatus;
 
 fn check_required_tools() -> xshell::Result<()> {
     let sh = Shell::new()?;
@@ -117,16 +118,49 @@ fn main() -> Result<(), anyhow::Error> {
 
             match args.action {
                 Action::Info => {
-                    println!("{} #{}: {}", pull.project(), pull.number(), pull.title());
+                    println!("=== PR #{}: {} ===", pull.number(), pull.title());
+                    println!("Author: {}", pull.author());
+                    println!("PR Review Status: {}", pull.review_status());
+                    println!("PR Merge Status: {}", pull.merge_status());
                     println!();
-                    println!("Commits:");
-                    let mut revset_str = format!("{} | {}", pull.base_commit(), pull.merge_commit(&tasks).commit_id());
-                    for commit in pull.commits(&tasks) {
-                        revset_str.push_str(&format!(" | {}", commit.commit_id()));
-                        println!("    {}", commit.commit_id());
+                    
+                    println!("=== Commits ===");
+                    let commits: Vec<_> = pull.commits(&tasks).collect();
+                    
+                    for commit in &commits {
+                        print!("  {} (review: {}", commit.commit_id(), commit.review_status());
+                        
+                        if matches!(commit.review_status(), ReviewStatus::Approved) {
+                            print!(", ci: {}", commit.ci_status());
+                        }
+                        
+                        if commit.is_tip() {
+                            print!(", TIP");
+                        }
+                        
+                        println!(")");
                     }
+                    
+                    println!();
+                    println!("=== Merge Commit ===");
+                    let merge_commit = pull.merge_commit(&tasks);
+                    print!("  Merge commit: {} (review: {}", merge_commit.commit_id(), merge_commit.review_status());
+                    if matches!(merge_commit.review_status(), ReviewStatus::Approved) {
+                        print!(", ci: {}", merge_commit.ci_status());
+                    }
+                    println!(")");
+                    
+                    if !pull.merge_change_id().is_empty() {
+                        println!("  JJ change ID: {}", pull.merge_change_id());
+                    }
+                    println!("  (Review the merge commit like any other commit to trigger CI)");
+                    
                     println!();
                     println!("Commit graph:");
+                    let mut revset_str = format!("{} | {}", pull.base_commit(), merge_commit.commit_id());
+                    for commit in &commits {
+                        revset_str.push_str(&format!(" | {}", commit.commit_id()));
+                    }
                     let _ = cmd!(shell, "jj log --no-pager --ignore-working-copy -r {revset_str}").quiet().run();
                 }
                 Action::Refresh => {

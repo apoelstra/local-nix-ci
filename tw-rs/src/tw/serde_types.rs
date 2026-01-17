@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use core::fmt;
 use std::path::PathBuf;
 
 use crate::git::GitCommit;
@@ -15,6 +16,17 @@ pub enum CiStatus {
     Failed,
 }
 
+impl fmt::Display for CiStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unstarted => f.write_str("unstarted"),
+            Self::Started => f.write_str("started"),
+            Self::Success => f.write_str("success"),
+            Self::Failed => f.write_str("FAILED"),
+        }
+    }
+}
+
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Default)]
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -25,6 +37,17 @@ pub enum MergeStatus {
     Pushed,
 }
 
+impl fmt::Display for MergeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unstarted => f.write_str("unstarted"),
+            Self::NeedSig=> f.write_str("NEEDS SIGNATURE"),
+            Self::Pushed => f.write_str("pushed"),
+        }
+    }
+}
+
+
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Default)]
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,6 +57,17 @@ pub enum ReviewStatus {
     NeedsChange,
     Nacked,
     Approved,
+}
+
+impl fmt::Display for ReviewStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreviewed => f.write_str("unreviewed"),
+            Self::NeedsChange => f.write_str("needs change"),
+            Self::Nacked => f.write_str("NACKed"),
+            Self::Approved => f.write_str("ACKed"),
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
