@@ -140,8 +140,48 @@ fn main() -> Result<(), anyhow::Error> {
             }
 
         },
-        Target::Commit(_) => {
-            todo!()
+        Target::Commit(commit_str) => {
+            // Resolve the git ref to a commit ID
+            let commit_id = git::resolve_ref(&shell, &commit_str)
+                .context("resolving git commit")?;
+
+            let lookup = tasks.commit_by_id(&repo.project_name, &commit_id);
+            let just_created = lookup.is_none();
+            let commit_uuid = match lookup {
+                Some(task) => *task.uuid(),
+                None => tasks.insert_or_refresh_commit(&shell, &repo.project_name, &repo.repo_root, &commit_id)
+                    .context("adding new commit")?
+            };
+
+            match args.action {
+                Action::Info => {
+                    if let Some(commit_task) = tasks.commit_by_id(&repo.project_name, &commit_id) {
+                        println!("{}: {}", commit_task.project(), commit_task.description());
+                    } else {
+                        println!("Commit {} in project {}", commit_id, repo.project_name);
+                    }
+                }
+                Action::Refresh => {
+                    if !just_created {
+                        tasks.insert_or_refresh_commit(&shell, &repo.project_name, &repo.repo_root, &commit_id)
+                            .context("refreshing commit")?;
+                    }
+                },
+                Action::Review => todo!(),
+                Action::Run => unreachable!("checked above"),
+                Action::TaskEdit => {
+                    let uuid = commit_uuid.to_string();
+                    cmd!(&shell, "task edit {uuid}")
+                        .run()
+                        .context("executing task edit")?;
+                }
+                Action::TaskInfo => {
+                    let uuid = commit_uuid.to_string();
+                    cmd!(&shell, "task info {uuid}")
+                        .run()
+                        .context("executing task info")?;
+                }
+            }
         },
         Target::None => unreachable!("this case handled above, before current_repo()"),
     }

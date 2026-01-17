@@ -14,7 +14,6 @@ use super::task::PrOrCommitTask;
 
 #[derive(Debug)]
 pub struct TaskCollection {
-    #[allow(unused)] // FIXME remove this once we start using it
     commits: HashMap<Uuid, CommitTask>,
     pulls: HashMap<Uuid, PrTask>,
     // Map from projects and PR numbers to their UUIDs.
@@ -85,6 +84,117 @@ impl TaskCollection {
     /// Returns an iterator over all the pull requests in the database.
     pub fn pulls(&self) -> impl Iterator<Item = (&Uuid, &PrTask)> {
         self.pulls.iter()
+    }
+
+    /// Query a commit task given the project name and commit ID.
+    pub fn commit_by_id(&self, project: &str, commit_id: &GitCommit) -> Option<&CommitTask> {
+        // We need to search through commits to find one with matching project and commit_id
+        self.commits.values().find(|task| {
+            task.project() == project && task.commit_id() == commit_id
+        })
+    }
+
+    /// Creates or updates a commit task. Returns the UUID of the task (new or existing).
+    /// If the task already exists, updates repo_root and description if they differ.
+    pub fn insert_or_refresh_commit(
+        &mut self,
+        task_shell: &Shell,
+        project_name: &str,
+        repo_root: &std::path::Path,
+        commit_id: &GitCommit,
+    ) -> Result<Uuid, TaskCollectionError> {
+        // Try to fetch the commit first
+        git::fetch_commit(task_shell, commit_id)
+            .map_err(TaskCollectionError::Git)?;
+
+        let description = format!("Commit {}", commit_id);
+        
+        // Check if a task already exists for this commit
+        // We'll search for existing tasks with this commit_id
+        let search_output = cmd!(task_shell, "task rc.json.array=off project:local-ci.{project_name} commit_id:{commit_id} export")
+            .read()
+            .map_err(TaskCollectionError::Shell)?;
+
+        if search_output.trim().is_empty() {
+            // No existing task, create a new one
+            let commit_task_cmd = cmd!(
+                task_shell,
+                "task add rc.confirmation=off rc.verbose=new-uuid project:local-ci.{project_name} commit_id:{commit_id} repo_root:{repo_root} description:{description}"
+            );
+            let commit_output = commit_task_cmd.read().map_err(TaskCollectionError::Shell)?;
+            
+            // Extract UUID from commit task creation
+            let idx = match commit_output.find("Created task ") {
+                Some(idx) => idx + 13,
+                None => return Err(TaskCollectionError::TaskCreationFailed {
+                    message: "Failed to extract UUID from commit task creation".to_string()
+                }),
+            };
+            
+            let commit_uuid = Uuid::try_parse(&commit_output[idx..idx + 36])
+                .map_err(TaskCollectionError::ParseUuid)?;
+            
+            // Parse and store the new commit task
+            let uuid_s = commit_uuid.to_string();
+            let task_json = cmd!(task_shell, "task rc.json.array=off {uuid_s} export")
+                .read()
+                .map_err(TaskCollectionError::Shell)?;
+            
+            let commit_task = super::task::PrOrCommitTask::from_json(&task_json)
+                .map_err(TaskCollectionError::ParseTask)?;
+            
+            if let super::task::PrOrCommitTask::Commit(commit_task) = commit_task {
+                self.commits.insert(commit_uuid, commit_task);
+            }
+            
+            Ok(commit_uuid)
+        } else {
+            // Task exists, parse it and check if we need to update repo_root or description
+            let existing_task = super::task::PrOrCommitTask::from_json(&search_output)
+                .map_err(TaskCollectionError::ParseTask)?;
+            
+            if let super::task::PrOrCommitTask::Commit(existing_task) = existing_task {
+                let uuid = *existing_task.uuid();
+                let uuid_str = uuid.to_string();
+                let mut needs_update = false;
+                
+                // Check if repo_root differs
+                if existing_task.repo_dir() != repo_root {
+                    cmd!(task_shell, "task {uuid_str} modify repo_root:{repo_root}")
+                        .run()
+                        .map_err(TaskCollectionError::Shell)?;
+                    needs_update = true;
+                }
+                
+                // Check if description differs
+                if existing_task.description() != &description {
+                    cmd!(task_shell, "task {uuid_str} modify description:{description}")
+                        .run()
+                        .map_err(TaskCollectionError::Shell)?;
+                    needs_update = true;
+                }
+                
+                // If we updated anything, reload the task
+                if needs_update {
+                    let task_json = cmd!(task_shell, "task rc.json.array=off {uuid_str} export")
+                        .read()
+                        .map_err(TaskCollectionError::Shell)?;
+                    
+                    let updated_task = super::task::PrOrCommitTask::from_json(&task_json)
+                        .map_err(TaskCollectionError::ParseTask)?;
+                    
+                    if let super::task::PrOrCommitTask::Commit(updated_task) = updated_task {
+                        self.commits.insert(uuid, updated_task);
+                    }
+                }
+                
+                Ok(uuid)
+            } else {
+                Err(TaskCollectionError::TaskCreationFailed {
+                    message: "Found task is not a commit task".to_string()
+                })
+            }
+        }
     }
 
     /// Refreshes a PR's data by querying the local git repo and Github. If the PR does not
@@ -191,39 +301,20 @@ impl TaskCollection {
         let mut commit_uuids = Vec::new();
         
         for commit_id in pr_data.commit_ids() {
-            // Do an early check for merge commits.
-            let parents = git::list_parents(task_shell, commit_id)
-                .map_err(TaskCollectionError::Git)?;
-            if parents.len() > 1 {
-                return Err(TaskCollectionError::IllegalMergeCommit {
-                    commit_id: commit_id.clone(),
-                    pr_number: num,
-                });
-            }
-            
-            let project_name = &repo.project_name;
-            let repo_root = &repo.repo_root;
-            let commit_task_cmd = cmd!(
+            let commit_uuid = self.insert_or_refresh_commit(
                 task_shell,
-                "task add rc.confirmation=off rc.verbose=new-uuid project:local-ci.{project_name} commit_id:{commit_id} repo_root:{repo_root} description:Commit {commit_id}"
-            );
-            let commit_output = commit_task_cmd.read().map_err(TaskCollectionError::Shell)?;
+                &repo.project_name,
+                &repo.repo_root,
+                commit_id,
+            )?;
             
-            // Extract UUID from commit task creation
-            let idx = match commit_output.find("Created task ") {
-                Some(idx) => idx + 13,
-                None => continue, // Skip if we can't find the UUID
-            };
+            commit_uuids.push(commit_uuid);
+            commit_id_to_uuid.insert(commit_id.clone(), commit_uuid);
             
-            if let Ok(commit_uuid) = Uuid::try_parse(&commit_output[idx..idx + 36]) {
-                commit_uuids.push(commit_uuid);
-                commit_id_to_uuid.insert(commit_id.clone(), commit_uuid);
-                
-                // Mark the last commit as TIP_COMMIT
-                if *commit_id == pr_data.commits.last().unwrap().oid {
-                    let commit_uuid = commit_uuid.to_string();
-                    let _ = cmd!(task_shell, "task {commit_uuid} modify +TIP_COMMIT").run();
-                }
+            // Mark the last commit as TIP_COMMIT
+            if *commit_id == pr_data.commits.last().unwrap().oid {
+                let commit_uuid = commit_uuid.to_string();
+                let _ = cmd!(task_shell, "task {commit_uuid} modify +TIP_COMMIT").run();
             }
         }
         

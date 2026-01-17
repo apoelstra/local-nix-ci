@@ -91,6 +91,18 @@ pub fn list_parents<C: AsRef<OsStr>>(
         .collect()
 }
 
+/// Resolves a git reference (branch, tag, commit ID, etc.) to a full commit ID.
+pub fn resolve_ref<R: AsRef<OsStr>>(
+    shell: &Shell,
+    git_ref: R,
+) -> Result<GitCommit, Error> {
+    let output = cmd!(shell, "git rev-parse {git_ref}")
+        .read()
+        .map_err(Error::Shell)?;
+    
+    GitCommit::from_str(output.trim())
+}
+
 /// Checks whether a commit is available locally; failing that tries to fetch it from origin;
 /// failing that tries to fetch it from upstream; and failing that returns an error.
 pub fn fetch_commit<C: AsRef<OsStr>>(

@@ -56,7 +56,7 @@ pub struct CommitTask {
     review_status: ReviewStatus,
     review_notes: String,
 
-    commit_id: String,
+    commit_id: GitCommit,
     is_tip: bool,
     ci_status: CiStatus,
     derivation: Option<String>,
@@ -73,6 +73,12 @@ impl CommitTask {
 
     /// The path to the git toplevel directory of the project.
     pub fn repo_dir(&self) -> &Path { &self.repo_dir }
+
+    /// The description of the task.
+    pub fn description(&self) -> &str { &self.description }
+
+    /// The commit ID.
+    pub fn commit_id(&self) -> &GitCommit { &self.commit_id }
 
     pub(super) fn dep_uuid(&self) -> Option<&Uuid> { self.parent_commit_uuid.as_ref() }
 }
@@ -191,7 +197,7 @@ impl PrOrCommitTask {
             Ok(PrOrCommitTask::Commit(CommitTask {
                 uuid,
                 parent_commit_uuid,
-                commit_id: commit_id.to_string(),
+                commit_id,
                 project,
                 repo_dir: task_json.repo_root,
                 review_status: task_json.review_status,
