@@ -731,22 +731,59 @@ fn post_github_approval_if_ready(
 
     // If all commits successful and PR is approved, post approval on GitHub
     if all_commits_approved_and_ci {
-        println!("All commits in PR #{} are successful and PR is approved. Posting GitHub approval...", pull.number());
+        println!("All commits in PR #{} are successful and PR is approved. Checking if approval already posted...", pull.number());
 
         // Get PR review notes
         let pr_review_notes = pull.review_notes();
         let pr_num = pull.number().to_string();
         
         let _push_dir = shell.push_dir(&repo.repo_root);
-        let approval_result = cmd!(shell, "gh pr review {pr_num} -a -b {pr_review_notes}").run();
         
-        match approval_result {
-            Ok(_) => {
-                println!("Successfully posted approval for PR #{}", pull.number());
+        // Get current user's GitHub username
+        let current_user_result = cmd!(shell, "gh api user --jq '.login'").read();
+        let current_user = match current_user_result {
+            Ok(username) => username.trim().to_string(),
+            Err(e) => {
+                println!("Warning: Could not get current GitHub username ({}), proceeding with approval", e);
+                return Ok(());
             }
-            Err(_) => {
-                println!("Failed to post approval for PR #{} - posting comment instead", pull.number());
-                let _ = cmd!(shell, "gh pr review {pr_num} -c -b {pr_review_notes}").run();
+        };
+        
+        // Check if we've already posted this exact approval message
+        let existing_reviews_result = cmd!(shell, "gh pr view {pr_num} --json reviews --jq '.reviews[] | select(.state == \"APPROVED\" and .author.login == \"{current_user}\") | .body'")
+            .read();
+            
+        let should_post_approval = match existing_reviews_result {
+            Ok(existing_reviews) => {
+                let already_posted = existing_reviews
+                    .lines()
+                    .any(|review_body| review_body.trim() == pr_review_notes.trim());
+                
+                if already_posted {
+                    println!("Approval with same message already posted for PR #{}", pull.number());
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(e) => {
+                println!("Warning: Could not check existing reviews ({}), proceeding with approval", e);
+                true
+            }
+        };
+        
+        if should_post_approval {
+            println!("Posting GitHub approval for PR #{}...", pull.number());
+            let approval_result = cmd!(shell, "gh pr review {pr_num} -a -b {pr_review_notes}").run();
+            
+            match approval_result {
+                Ok(_) => {
+                    println!("Successfully posted approval for PR #{}", pull.number());
+                }
+                Err(_) => {
+                    println!("Failed to post approval for PR #{} - posting comment instead", pull.number());
+                    let _ = cmd!(shell, "gh pr review {pr_num} -c -b {pr_review_notes}").run();
+                }
             }
         }
     } else {
