@@ -64,13 +64,12 @@ impl TaskCollection {
             );
         }
         for task in commits.values() {
-            if let Some(uuid) = task.dep_uuid() {
-                if !commits.contains_key(uuid) {
-                    return Err(TaskCollectionError::MissingUuid {
-                        missing: *uuid,
-                        needed_by: *task.uuid(),
-                    });
-                }
+            if let Some(uuid) = task.dep_uuid()
+                && !commits.contains_key(uuid) {
+                return Err(TaskCollectionError::MissingUuid {
+                    missing: *uuid,
+                    needed_by: *task.uuid(),
+                });
             }
         }
                 
@@ -359,7 +358,7 @@ impl TaskCollection {
             
         if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
             self.pulls.insert(pr_uuid, pr_task);
-            return Ok(self.pulls.get(&pr_uuid).unwrap());
+            Ok(self.pulls.get(&pr_uuid).unwrap())
         } else {
             panic!("Somehow created non-PR task");
         }
@@ -383,9 +382,6 @@ pub enum TaskCollectionError {
     },
     Git(crate::git::Error),
     Jj(crate::jj::Error),
-    TaskCreationFailed {
-        message: String,
-    },
     IllegalMergeCommit {
         commit_id: GitCommit,
         pr_number: usize,
@@ -407,7 +403,6 @@ impl fmt::Display for TaskCollectionError {
             Self::InvalidPrData { message } => write!(f, "Invalid PR data: {}", message),
             Self::Git(_) => f.write_str("failed invoking git"),
             Self::Jj(_) => f.write_str("failed invoking jj"),
-            Self::TaskCreationFailed { message } => write!(f, "Failed to create task: {}", message),
             Self::IllegalMergeCommit { commit_id, pr_number } => write!(f, "Illegal merge commit {} in PR #{}", commit_id, pr_number),
         }
     }
@@ -426,7 +421,6 @@ impl std::error::Error for TaskCollectionError {
             Self::InvalidPrData { .. } => None,
             Self::Git(e) => Some(e),
             Self::Jj(e) => Some(e),
-            Self::TaskCreationFailed { .. } => None,
             Self::IllegalMergeCommit { .. } => None,
         }
     }

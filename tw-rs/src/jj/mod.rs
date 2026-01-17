@@ -34,8 +34,8 @@ pub fn jj(shell: &Shell) -> Cmd<'_> {
 }
 
 /// Invokes `jj new` on the given shell and returns the created change ID.
-pub fn jj_new<'x, P: AsRef<OsStr>>(
-    shell: &'x Shell,
+pub fn jj_new<P: AsRef<OsStr>>(
+    shell: &Shell,
     parents: &[P],
 ) -> Result<String, Error> {
     let mut jj = jj(shell).arg("new").arg("--no-edit");
@@ -48,7 +48,7 @@ pub fn jj_new<'x, P: AsRef<OsStr>>(
         if line.contains("Created new commit") {
             // Extract change ID from the line - jj change IDs use letters 'k' through 'z'
             if let Some(change_id_match) = line.split_whitespace()
-                .find(|word| word.len() >= 8 && word.chars().all(|c| c >= 'k' && c <= 'z')) {
+                .find(|word| word.len() >= 8 && word.chars().all(|c| ('k'..='z').contains(&c))) {
                 return Ok(change_id_match.to_string());
             }
         }
@@ -61,8 +61,8 @@ pub fn jj_new<'x, P: AsRef<OsStr>>(
 }
 
 /// Invokes `jj log` with the given template and revset. Returns stdout with whitespace trimmed.
-pub fn jj_log<'x, R: AsRef<OsStr>>(
-    shell: &'x Shell,
+pub fn jj_log<R: AsRef<OsStr>>(
+    shell: &Shell,
     template: &str,
     revset: R,
 ) -> Result<String, Error> {

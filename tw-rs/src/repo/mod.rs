@@ -62,11 +62,10 @@ pub fn current_repo() -> Result<Repository, RepoError> {
     let mut project_name = None;
     // Try to get project name from git remotes first
     for remote in ["origin", "upstream"] {
-        if let Ok(origin_url) = cmd!(sh, "git remote get-url {remote}").read() {
-            if let Some(project) = parse_github_url(origin_url.trim()) {
-                project_name = Some(project);
-                break;
-            }
+        if let Ok(origin_url) = cmd!(sh, "git remote get-url {remote}").read()
+            && let Some(project) = parse_github_url(origin_url.trim()) {
+            project_name = Some(project);
+            break;
         }
     }
     // Failing that, invoke gh (though will gh succeed without remotes either?)

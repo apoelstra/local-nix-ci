@@ -149,7 +149,7 @@ fn real_main(
             let just_created = lookup.is_none();
             let pull = match lookup {
                 Some(task) => task,
-                None => tasks.insert_or_refresh_pr(&shell, &repo, num)
+                None => tasks.insert_or_refresh_pr(shell, &repo, num)
                     .context("adding new PR")?
             };
             // Clone the pull to end the mutable borrow of `tasks`.
@@ -164,7 +164,7 @@ fn real_main(
                     println!("PR review status: {}", pull.review_status());
                     println!("PR merge status: {}", pull.merge_status());
                     println!();
-                    let merge_commit = pull.merge_commit(&tasks);
+                    let merge_commit = pull.merge_commit(tasks);
                     next.update_from_commit(merge_commit);
                     print!("PR merge commit: {} (review: {}", merge_commit.commit_id(), merge_commit.review_status());
                     if matches!(merge_commit.review_status(), ReviewStatus::Approved) {
@@ -196,7 +196,7 @@ fn real_main(
                     }
                     
                     println!("=== Commits ===");
-                    let commits: Vec<_> = pull.commits(&tasks).collect();
+                    let commits: Vec<_> = pull.commits(tasks).collect();
                     
                     for commit in &commits {
                         next.update_from_commit(commit);
@@ -233,7 +233,7 @@ fn real_main(
                 }
                 Action::Refresh => {
                     if !just_created {
-                        tasks.insert_or_refresh_pr(&shell, &repo, num)
+                        tasks.insert_or_refresh_pr(shell, &repo, num)
                             .context("refreshing PR")?;
                     }
                 },
@@ -241,13 +241,13 @@ fn real_main(
                 Action::Run => unreachable!("checked above"),
                 Action::TaskEdit => {
                     let uuid = pull.uuid().to_string();
-                    cmd!(&shell, "task edit {uuid}")
+                    cmd!(shell, "task edit {uuid}")
                         .run()
                         .context("executing task edit")?;
                 }
                 Action::TaskInfo => {
                     let uuid = pull.uuid().to_string();
-                    cmd!(&shell, "task info {uuid}")
+                    cmd!(shell, "task info {uuid}")
                         .run()
                         .context("executing task info")?;
                 }
@@ -256,14 +256,14 @@ fn real_main(
         },
         Target::Commit(commit_str) => {
             // Resolve the git ref to a commit ID
-            let commit_id = git::resolve_ref(&shell, &commit_str)
+            let commit_id = git::resolve_ref(shell, &commit_str)
                 .context("resolving git commit")?;
 
             let lookup = tasks.commit_by_id(&repo.project_name, &commit_id);
             let just_created = lookup.is_none();
             let commit_uuid = match lookup {
                 Some(task) => *task.uuid(),
-                None => tasks.insert_or_refresh_commit(&shell, &repo.project_name, &repo.repo_root, &commit_id)
+                None => tasks.insert_or_refresh_commit(shell, &repo.project_name, &repo.repo_root, &commit_id)
                     .context("adding new commit")?
             };
 
@@ -281,7 +281,7 @@ fn real_main(
                 }
                 Action::Refresh => {
                     if !just_created {
-                        tasks.insert_or_refresh_commit(&shell, &repo.project_name, &repo.repo_root, &commit_id)
+                        tasks.insert_or_refresh_commit(shell, &repo.project_name, &repo.repo_root, &commit_id)
                             .context("refreshing commit")?;
                     }
                 },
@@ -289,13 +289,13 @@ fn real_main(
                 Action::Run => unreachable!("checked above"),
                 Action::TaskEdit => {
                     let uuid = commit_uuid.to_string();
-                    cmd!(&shell, "task edit {uuid}")
+                    cmd!(shell, "task edit {uuid}")
                         .run()
                         .context("executing task edit")?;
                 }
                 Action::TaskInfo => {
                     let uuid = commit_uuid.to_string();
-                    cmd!(&shell, "task info {uuid}")
+                    cmd!(shell, "task info {uuid}")
                         .run()
                         .context("executing task info")?;
                 }

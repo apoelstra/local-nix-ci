@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::fmt;
-use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use serde_json;
 
@@ -15,7 +14,6 @@ pub struct PrTask {
     tip_commit_uuid: Uuid,
 
     project: String,
-    repo_dir: PathBuf,
     review_status: ReviewStatus,
     review_notes: String,
 
@@ -80,7 +78,6 @@ pub struct CommitTask {
     parent_commit_uuid: Option<Uuid>,
 
     project: String,
-    repo_dir: PathBuf,
     review_status: ReviewStatus,
     review_notes: String,
 
@@ -100,9 +97,6 @@ impl CommitTask {
     /// The project in the form `org.repo`. The taskwarrior project is this
     /// string prefixed by `local-ci.`.
     pub fn project(&self) -> &str { &self.project }
-
-    /// The path to the git toplevel directory of the project.
-    pub fn repo_dir(&self) -> &Path { &self.repo_dir }
 
     /// The description of the task.
     pub fn description(&self) -> &str { &self.description }
@@ -138,7 +132,6 @@ impl fmt::Display for TaskParseError {
         }
         match &self.error {
             I::TaskWarriorParse(_) => f.write_str("failed to parse taskwarrior json"),
-            I::InvalidRepoRoot => f.write_str("Invalid repo_root path"),
             I::PrMissingTipCommit => f.write_str("PR task must have exactly one dependency (tip commit)"),
             I::PrMultipleDependencies => f.write_str("PR task has multiple dependencies, expected exactly one"),
             I::CommitMultipleDependencies => f.write_str("Commit task has multiple dependencies, expected at most one"),
@@ -164,7 +157,6 @@ impl std::error::Error for TaskParseError {
 #[derive(Debug)]
 pub enum TaskParseErrorInner {
     TaskWarriorParse(serde_json::Error),
-    InvalidRepoRoot,
     PrMissingTipCommit,
     PrMultipleDependencies,
     CommitMultipleDependencies,
@@ -220,10 +212,6 @@ impl PrOrCommitTask {
             .map_err(TaskParseErrorInner::TaskWarriorParse)
             .map_err(err_with_uuid)?;
 
-        if !task_json.repo_root.is_absolute() {
-            return Err(TaskParseErrorInner::InvalidRepoRoot.with_uuid(uuid, task_str.to_owned()));
-        }
-
         // Because Rust is annoying we have to call has_tag before
         // moving any fields out of `task_json`.
         let is_tip = task_json.has_tag("TIP_COMMIT");
@@ -249,7 +237,6 @@ impl PrOrCommitTask {
                 parent_commit_uuid,
                 commit_id,
                 project,
-                repo_dir: task_json.repo_root,
                 review_status: task_json.review_status,
                 review_notes: task_json.review_notes,
                 description: task_json.description,
@@ -280,7 +267,6 @@ impl PrOrCommitTask {
                 uuid,
                 tip_commit_uuid: task_json.depends[0],
                 project,
-                repo_dir: task_json.repo_root,
                 review_status: task_json.review_status,
                 review_notes: task_json.review_notes,
                 description: task_json.description,

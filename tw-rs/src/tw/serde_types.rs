@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use core::fmt;
-use std::path::PathBuf;
 
 use crate::git::GitCommit;
 
@@ -78,7 +77,6 @@ pub struct Task {
     pub tags: Vec<String>,
 
     pub project: String,
-    pub repo_root: PathBuf,
     #[serde(default)]
     pub description: String,
 

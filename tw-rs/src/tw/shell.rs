@@ -13,7 +13,7 @@ use xshell::{cmd, Shell};
 pub enum Error {
     HomeNotSet,
     ShellCreationFailed(xshell::Error),
-    IoError(io::Error),
+    Io(io::Error),
 }
 
 #[derive(Debug)]
@@ -50,7 +50,7 @@ impl fmt::Display for Error {
         match self {
             Self::HomeNotSet => write!(f, "HOME environment variable not set"),
             Self::ShellCreationFailed(msg) => write!(f, "Failed to create shell: {}", msg),
-            Self::IoError(e) => write!(f, "IO error: {}", e),
+            Self::Io(e) => write!(f, "IO error: {}", e),
         }
     }
 }
@@ -59,7 +59,7 @@ impl std::error::Error for Error {}
 
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
-        Self::IoError(e)
+        Self::Io(e)
     }
 }
 

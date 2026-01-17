@@ -84,7 +84,6 @@ pub fn list_parents<C: AsRef<OsStr>>(
         .map_err(Error::Shell)?;
     
     output
-        .trim()
         .split_whitespace()
         .skip(1) // first element is the commit itself
         .map(GitCommit::from_str)
@@ -121,15 +120,13 @@ pub fn fetch_commit<C: AsRef<OsStr>>(
     }
 
     // Then try to fetch it from origin then upstream.    
-    if cmd!(shell, "git fetch origin {commit}").run().is_ok() {
-        if now_have_commit(shell, commit) {
-            return Ok(());
-        }
+    if cmd!(shell, "git fetch origin {commit}").run().is_ok()
+        && now_have_commit(shell, commit) {
+        return Ok(());
     }
-    if cmd!(shell, "git fetch upstream {commit}").run().is_ok() {
-        if now_have_commit(shell, commit) {
-            return Ok(());
-        }
+    if cmd!(shell, "git fetch upstream {commit}").run().is_ok()
+        && now_have_commit(shell, commit) {
+        return Ok(());
     }
     
     // All attempts failed
