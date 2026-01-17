@@ -80,6 +80,25 @@ impl Next {
             *self = new;
         }
     }
+
+    fn do_it(&self, shell: &Shell, tasks: &mut tw::TaskCollection) -> Result<(), anyhow::Error> {
+        match self {
+            Self::ReviewPr(_) => {
+                todo!()
+            }
+            Self::ReviewCommit(commit) => {
+                real_main(shell, tasks, Action::Review, Target::Commit(commit.to_string()))
+            }
+            Self::NothingToDo => {
+                eprintln!("Nothing to do.");
+                Ok(())
+            }
+            Self::Failed => {
+                eprintln!("Nothing to do (PR or commit is marked failed).");
+                Ok(())
+            }
+        }
+    }
 }
 
 fn real_main(
@@ -254,6 +273,10 @@ fn real_main(
                     .run();
                     println!();
                     println!("Next action: {next}");
+
+                    if action == Action::Next {
+                        next.do_it(shell, tasks)?;
+                    }
                 }
                 Action::Refresh => {
                     if !just_created {
@@ -308,7 +331,7 @@ fn real_main(
                     println!("Next action: {next}");
 
                     if action == Action::Next {
-                        todo!()
+                        next.do_it(shell, tasks)?;
                     }
                 }
                 Action::Refresh => {
