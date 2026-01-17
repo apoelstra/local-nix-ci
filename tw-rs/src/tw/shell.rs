@@ -80,6 +80,8 @@ uda.review_notes.label=Review Notes
 # Merge commit data -- for commits these should be blank
 uda.base_commit.type=string
 uda.base_commit.label=Base commit ID of merge (first parent of merge)
+uda.merge_uuid.type=string
+uda.merge_uuid.label=UUID of the task corresponding to the current merge commit
 uda.merge_change_id.type=string
 uda.merge_change_id.label=JJ change ID of merge commit
 

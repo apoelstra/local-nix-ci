@@ -112,10 +112,17 @@ fn main() -> Result<(), anyhow::Error> {
                 None => tasks.insert_or_refresh_pr(&shell, &repo, num)
                     .context("adding new PR")?
             };
+            // Clone the pull to end the mutable borrow of `tasks`.
+            let pull = pull.clone();
 
             match args.action {
                 Action::Info => {
                     println!("{} #{}: {}", pull.project(), pull.number(), pull.title());
+                    println!();
+                    println!("Commits:");
+                    for commit in pull.commits(&tasks) {
+                        println!("    {}", commit.commit_id());
+                    }
                 }
                 Action::Refresh => {
                     if !just_created {

@@ -86,6 +86,11 @@ impl TaskCollection {
         self.pulls.iter()
     }
 
+    /// Looks up a commit by UUID
+    pub fn commit(&self, uuid: &Uuid) -> Option<&CommitTask> {
+        self.commits.get(uuid)
+    }
+
     /// Query a commit task given the project name and commit ID.
     pub fn commit_by_id(&self, project: &str, commit_id: &GitCommit) -> Option<&CommitTask> {
         // We need to search through commits to find one with matching project and commit_id
@@ -277,6 +282,8 @@ impl TaskCollection {
             .map_err(TaskCollectionError::Jj)?;
         let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
             .map_err(TaskCollectionError::Jj)?;
+        let merge_commit_id = merge_commit_id.parse::<GitCommit>()
+            .expect("if jj new succeeded, then we should have a valid commit id");
         
         // Check if the merge has conflicts
         let conflicts_check = crate::jj::jj_log(task_shell, "if(conflict,\"x\",\"\")", &merge_change_id)
@@ -334,34 +341,18 @@ impl TaskCollection {
             }
         }
         
-        // Create merge commit task if we have merge commit data
-        if !merge_commit_id.is_empty() {
-            let project_name = &repo.project_name;
-            let repo_root = &repo.repo_root;
-            let num = num.to_string();
-            let mut merge_task_cmd = cmd!(
-                task_shell,
-                "task add rc.confirmation=off rc.verbose=new-uuid project:local-ci.{project_name} commit_id:{merge_commit_id} repo_root:{repo_root} description:Merge commit {merge_commit_id} for PR #{num} +MERGE_COMMIT"
-            );
-            
-            // Add HAS_CONFLICTS tag if the merge has conflicts
-            if has_conflicts {
-                merge_task_cmd = merge_task_cmd.arg("+HAS_CONFLICTS");
-            }
-            
-            let merge_output = merge_task_cmd.read().map_err(TaskCollectionError::Shell)?;
-            
-            // Extract UUID from merge task creation
-            let idx = match merge_output.find("Created task ") {
-                Some(idx) => idx + 13,
-                None => return Err(TaskCollectionError::TaskCreationFailed {
-                    message: "Failed to extract UUID from merge task creation".to_string()
-                }),
-            };
-            
-            if let Ok(merge_uuid) = Uuid::try_parse(&merge_output[idx..idx + 36]) {
-                commit_uuids.push(merge_uuid);
-            }
+        // Create merge commit task
+        let merge_commit_uuid = self.insert_or_refresh_commit(
+            task_shell,
+            &repo.project_name,
+            &repo.repo_root,
+            &merge_commit_id,
+        )?;
+        let merge_commit_uuid = merge_commit_uuid.to_string();
+        
+        // Add HAS_CONFLICTS tag if the merge has conflicts
+        if has_conflicts {
+            let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS").run();
         }
 
         // If we created a new task add it to our database.
@@ -381,6 +372,7 @@ impl TaskCollection {
                 let tip_commit_uuid_str = tip_commit_uuid.to_string();
                 let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:{tip_commit_uuid_str}").run();
             }
+            let _ = cmd!(task_shell, "task {pr_uuid_str} modify merge_uuid:{merge_commit_uuid}").run();
             
             // Insert the PR UUID into our lookup table
             self.pull_numbers.insert(
@@ -390,7 +382,7 @@ impl TaskCollection {
             
             // Create a new PrTask and insert it into our database
             // We need to reload the task data to get the complete task information
-            let task_json = cmd!(task_shell, "task {pr_uuid_str} export")
+            let task_json = cmd!(task_shell, "task rc.json.array=off {pr_uuid_str} export")
                 .read()
                 .map_err(TaskCollectionError::Shell)?;
             
@@ -412,6 +404,7 @@ impl TaskCollection {
                     message: "PR UUID not found in lookup table".to_string()
                 })?;
             let pr_uuid_str = pr_uuid.to_string();
+            let _ = cmd!(task_shell, "task {pr_uuid_str} modify merge_uuid:{merge_commit_uuid}").run();
             
             // Update dependencies - clear old ones and set only the tip commit
             let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:").run(); // Clear dependencies

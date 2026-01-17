@@ -77,6 +77,8 @@ pub struct Task {
     pub base_commit: Option<GitCommit>,
     #[serde(default)]
     pub merge_change_id: Option<String>,
+    #[serde(default)]
+    pub merge_uuid: Option<uuid::Uuid>,
 }
 
 impl Task {

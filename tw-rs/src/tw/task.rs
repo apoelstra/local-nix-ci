@@ -24,6 +24,7 @@ pub struct PrTask {
     number: usize,
     merge_status: MergeStatus,
     base_commit: GitCommit,
+    merge_uuid: Uuid,
     merge_change_id: String,
 }
 
@@ -38,6 +39,16 @@ impl PrTask {
     pub fn title(&self) -> &str { &self.title }
 
     pub fn number(&self) -> usize { self.number }
+
+    pub fn commits<'tc>(
+        &self,
+        collection: &'tc super::TaskCollection,
+    ) -> impl Iterator<Item = &'tc CommitTask> {
+        core::iter::successors(
+            collection.commit(&self.tip_commit_uuid),
+            |comm| comm.parent_commit_uuid.as_ref().and_then(|uuid| collection.commit(uuid)),
+        )
+    }
 
     pub(super) fn dep_uuid(&self) -> &Uuid { &self.tip_commit_uuid }
 }
@@ -222,6 +233,7 @@ impl PrOrCommitTask {
             let number = unwrap_field(uuid, "pr", "pr_number", task_json.pr_number)?;
             let base_commit = unwrap_field(uuid, "pr", "base_commit", task_json.base_commit)?;
             let merge_change_id = unwrap_field(uuid, "pr", "merge_change_id", task_json.merge_change_id)?;
+            let merge_uuid = unwrap_field(uuid, "pr", "merge_uuid", task_json.merge_uuid)?;
             
             Ok(PrOrCommitTask::Pr(PrTask {
                 uuid,
@@ -238,6 +250,7 @@ impl PrOrCommitTask {
                 merge_status: task_json.merge_status,
                 base_commit,
                 merge_change_id,
+                merge_uuid,
             }))
         }
     }
