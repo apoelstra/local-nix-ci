@@ -74,32 +74,18 @@ impl Next {
     }
 }
 
-fn main() -> Result<(), anyhow::Error> {
-    // Parse CLI arguments -- if this fails it will just terminate the program
-    // with a usage message.
-    let args = args::parse_cli();
+fn real_main(
+    shell: &Shell,
+    tasks: &mut tw::TaskCollection,
+    action: Action,
+    target: Target,
+) -> Result<(), anyhow::Error> {
 
-    // Check that all required tools are available
-    if let Err(e) = check_required_tools() {
-        eprintln!("Error checking required tools: {}", e);
-        std::process::exit(1);
-    }
-
-    // Load task database. When this gets too slow to invoke on every command we
-    // we will move it into the daemon that runs when we do 'local-ci run' and
-    // then do RPC calls against that (and add some sort of "reload" command
-    // hooked to TW adds and modifies). But for now we just query taskwarrior
-    // every time.
-    let shell = tw::task_shell()
-        .context("creating task shell")?;
-    let mut tasks = tw::TaskCollection::new(&shell)
-        .context("loading tasks from taskwarrior")?;
-
-    if args.target == Target::None {
+    if target == Target::None {
         // Handle "global" actions, which don't need to be in an active repo
         // and which can avoid invoking gh (except refresh, which does on
         // purpose).
-        match args.action {
+        match action {
             Action::Review => {
                 eprintln!("Nothing to review. (Did you mean to provide a PR number or commit ID?");
                 eprintln!();
@@ -133,7 +119,7 @@ fn main() -> Result<(), anyhow::Error> {
         return Ok(());
     } else {
         // Error out tfor actions which don't have any target.
-        if args.action == Action::Run {
+        if action == Action::Run {
             eprintln!("'run' cannot be invoked with any target.");
             eprintln!();
             args::usage();
@@ -157,7 +143,7 @@ fn main() -> Result<(), anyhow::Error> {
     println!();
 
     // Look up PR.
-    match args.target {
+    match target {
         Target::Pr(num) => {
             let lookup = tasks.pull_by_number(&repo.project_name, num);
             let just_created = lookup.is_none();
@@ -169,7 +155,7 @@ fn main() -> Result<(), anyhow::Error> {
             // Clone the pull to end the mutable borrow of `tasks`.
             let pull = pull.clone();
 
-            match args.action {
+            match action {
                 Action::Info | Action::Next => {
                     let mut next = Next::NothingToDo;
                     
@@ -281,7 +267,7 @@ fn main() -> Result<(), anyhow::Error> {
                     .context("adding new commit")?
             };
 
-            match args.action {
+            match action {
                 Action::Info | Action::Next => {
                     if let Some(commit_task) = tasks.commit_by_id(&repo.project_name, &commit_id) {
                         println!("{}: {}", commit_task.project(), commit_task.description());
@@ -289,7 +275,7 @@ fn main() -> Result<(), anyhow::Error> {
                         println!("Commit {} in project {}", commit_id, repo.project_name);
                     }
 
-                    if args.action == Action::Next {
+                    if action == Action::Next {
                         todo!()
                     }
                 }
@@ -319,4 +305,28 @@ fn main() -> Result<(), anyhow::Error> {
     }
 
     Ok(())
+}
+
+fn main() -> Result<(), anyhow::Error> {
+    // Parse CLI arguments -- if this fails it will just terminate the program
+    // with a usage message.
+    let args = args::parse_cli();
+
+    // Check that all required tools are available
+    if let Err(e) = check_required_tools() {
+        eprintln!("Error checking required tools: {}", e);
+        std::process::exit(1);
+    }
+
+    // Load task database. When this gets too slow to invoke on every command we
+    // we will move it into the daemon that runs when we do 'local-ci run' and
+    // then do RPC calls against that (and add some sort of "reload" command
+    // hooked to TW adds and modifies). But for now we just query taskwarrior
+    // every time.
+    let shell = tw::task_shell()
+        .context("creating task shell")?;
+    let mut tasks = tw::TaskCollection::new(&shell)
+        .context("loading tasks from taskwarrior")?;
+
+    real_main(&shell, &mut tasks, args.action, args.target)
 }
