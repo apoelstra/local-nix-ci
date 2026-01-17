@@ -28,6 +28,27 @@ impl std::fmt::Display for RepoError {
 
 impl std::error::Error for RepoError {}
 
+fn parse_github_url(url: &str) -> Option<String> {
+    let url = url.to_ascii_lowercase();
+
+    for prefix in [
+        "git@github.com:",
+        "https://github.com/",
+        "https://www.github.com/",
+    ] {
+        if let Some(https_part) = url.strip_prefix(prefix) {
+            let mut repo_part = https_part;
+            for _ in 0..2 {
+                repo_part = repo_part.strip_suffix(".git").unwrap_or(repo_part);
+                repo_part = repo_part.strip_suffix("/").unwrap_or(repo_part);
+            }
+            return Some(repo_part.replace('/', "."));
+        }
+    }
+    
+    None
+}
+
 pub fn current_repo() -> Result<Repository, RepoError> {
     let sh = Shell::new().map_err(RepoError::ConstructingShell)?;
     
@@ -38,12 +59,25 @@ pub fn current_repo() -> Result<Repository, RepoError> {
     
     let repo_root = PathBuf::from(repo_root_str.trim());
     
-    // Get project name using gh
-    let project_name = cmd!(sh, "gh repo view --json owner,name --jq '.owner.login + \".\" + .name'")
-        .read()
-        .map_err(RepoError::GhCommandFailed)?
-        .trim()
-        .to_string();
+    let mut project_name = None;
+    // Try to get project name from git remotes first
+    for remote in ["origin", "upstream"] {
+        if let Ok(origin_url) = cmd!(sh, "git remote get-url {remote}").read() {
+            if let Some(project) = parse_github_url(origin_url.trim()) {
+                project_name = Some(project);
+                break;
+            }
+        }
+    }
+    // Failing that, invoke gh (though will gh succeed without remotes either?)
+    let project_name = match project_name {
+        Some(x) => x,
+        None => cmd!(sh, "gh repo view --json owner,name --jq '.owner.login + \".\" + .name'")
+            .read()
+            .map_err(RepoError::GhCommandFailed)?
+            .trim()
+            .to_string(),
+    };
     
     Ok(Repository {
         project_name,
