@@ -9,6 +9,7 @@ use uuid::Uuid;
 use xshell::{cmd, Shell};
 
 use crate::git::{self, GitCommit};
+use crate::tw::shell::{get_or_insert_unique_uuid, UniqueUuidError};
 use super::{CommitTask, PrTask};
 use super::task::PrOrCommitTask;
 
@@ -126,121 +127,43 @@ impl TaskCollection {
             false
         };
 
-        let description = format!("Commit {}", commit_id);
+        let mut update_fields = vec![
+            format!("repo_root:{}", repo_root.display()),
+            format!("description:Commit {commit_id}"),
+        ];
+        // Add merge commit tags if applicable
+        if is_merge_commit {
+            update_fields.push("+MERGE_COMMIT".to_owned());
+            if is_clean_merge {
+                update_fields.push("+CLEAN_MERGE".to_owned());
+            }
+        }
         
         // Check if a task already exists for this commit
         // We'll search for existing tasks with this commit_id
-        let search_output = cmd!(task_shell, "task rc.json.array=off project:local-ci.{project_name} commit_id:{commit_id} export")
+        let commit_uuid = get_or_insert_unique_uuid(
+            task_shell,
+            &[
+                &format!("project:local-ci.{project_name}"),
+                &format!("commit_id:{commit_id}"),
+            ],
+            &update_fields,
+        ).map_err(TaskCollectionError::UniqueUuid)?;
+
+        // Parse and (re-)store the new commit task
+        let uuid_s = commit_uuid.to_string();
+        let task_json = cmd!(task_shell, "task rc.json.array=off {uuid_s} export")
             .read()
             .map_err(TaskCollectionError::Shell)?;
-
-        if search_output.trim().is_empty() {
-            // No existing task, create a new one
-            let commit_task_cmd = cmd!(
-                task_shell,
-                "task add rc.confirmation=off rc.verbose=new-uuid project:local-ci.{project_name} commit_id:{commit_id} repo_root:{repo_root} description:{description}"
-            );
-            let commit_output = commit_task_cmd.read().map_err(TaskCollectionError::Shell)?;
             
-            // Extract UUID from commit task creation
-            let idx = match commit_output.find("Created task ") {
-                Some(idx) => idx + 13,
-                None => return Err(TaskCollectionError::TaskCreationFailed {
-                    message: "Failed to extract UUID from commit task creation".to_string()
-                }),
-            };
+        let commit_task = super::task::PrOrCommitTask::from_json(&task_json)
+            .map_err(TaskCollectionError::ParseTask)?;
             
-            let commit_uuid = Uuid::try_parse(&commit_output[idx..idx + 36])
-                .map_err(TaskCollectionError::ParseUuid)?;
-            
-            // Parse and store the new commit task
-            let uuid_s = commit_uuid.to_string();
-            let task_json = cmd!(task_shell, "task rc.json.array=off {uuid_s} export")
-                .read()
-                .map_err(TaskCollectionError::Shell)?;
-            
-            let commit_task = super::task::PrOrCommitTask::from_json(&task_json)
-                .map_err(TaskCollectionError::ParseTask)?;
-            
-            if let super::task::PrOrCommitTask::Commit(commit_task) = commit_task {
-                self.commits.insert(commit_uuid, commit_task);
-            }
-            
-            // Add merge commit tags if applicable
-            if is_merge_commit {
-                let uuid_s = commit_uuid.to_string();
-                cmd!(task_shell, "task {uuid_s} modify +MERGE_COMMIT")
-                    .run()
-                    .map_err(TaskCollectionError::Shell)?;
-                
-                if is_clean_merge {
-                    cmd!(task_shell, "task {uuid_s} modify +CLEAN_MERGE")
-                        .run()
-                        .map_err(TaskCollectionError::Shell)?;
-                }
-            }
-            
-            Ok(commit_uuid)
-        } else {
-            // Task exists, parse it and check if we need to update repo_root or description
-            let existing_task = super::task::PrOrCommitTask::from_json(&search_output)
-                .map_err(TaskCollectionError::ParseTask)?;
-            
-            if let super::task::PrOrCommitTask::Commit(existing_task) = existing_task {
-                let uuid = *existing_task.uuid();
-                let uuid_str = uuid.to_string();
-                let mut needs_update = false;
-                
-                // Check if repo_root differs
-                if existing_task.repo_dir() != repo_root {
-                    cmd!(task_shell, "task {uuid_str} modify repo_root:{repo_root}")
-                        .run()
-                        .map_err(TaskCollectionError::Shell)?;
-                    needs_update = true;
-                }
-                
-                // Check if description differs
-                if existing_task.description() != &description {
-                    cmd!(task_shell, "task {uuid_str} modify description:{description}")
-                        .run()
-                        .map_err(TaskCollectionError::Shell)?;
-                    needs_update = true;
-                }
-                
-                // If we updated anything, reload the task
-                if needs_update {
-                    let task_json = cmd!(task_shell, "task rc.json.array=off {uuid_str} export")
-                        .read()
-                        .map_err(TaskCollectionError::Shell)?;
-                    
-                    let updated_task = super::task::PrOrCommitTask::from_json(&task_json)
-                        .map_err(TaskCollectionError::ParseTask)?;
-                    
-                    if let super::task::PrOrCommitTask::Commit(updated_task) = updated_task {
-                        self.commits.insert(uuid, updated_task);
-                    }
-                }
-                
-                // Add merge commit tags if applicable (for both new and existing tasks)
-                if is_merge_commit {
-                    cmd!(task_shell, "task {uuid_str} modify +MERGE_COMMIT")
-                        .run()
-                        .map_err(TaskCollectionError::Shell)?;
-                    
-                    if is_clean_merge {
-                        cmd!(task_shell, "task {uuid_str} modify +CLEAN_MERGE")
-                            .run()
-                            .map_err(TaskCollectionError::Shell)?;
-                    }
-                }
-                
-                Ok(uuid)
-            } else {
-                Err(TaskCollectionError::TaskCreationFailed {
-                    message: "Found task is not a commit task".to_string()
-                })
-            }
+        if let super::task::PrOrCommitTask::Commit(commit_task) = commit_task {
+            self.commits.insert(commit_uuid, commit_task);
         }
+
+        Ok(commit_uuid)
     }
 
     /// Refreshes a PR's data by querying the local git repo and Github. If the PR does not
@@ -452,6 +375,7 @@ pub enum TaskCollectionError {
     ParseJson(serde_json::Error),
     ParseTask(super::TaskParseError),
     ParseUuid(uuid::Error),
+    UniqueUuid(UniqueUuidError),
     Shell(xshell::Error),
     Utf8(io::Error),
     InvalidPrData {
@@ -477,6 +401,7 @@ impl fmt::Display for TaskCollectionError {
             Self::ParseJson(_) => write!(f, "failed to parse json"),
             Self::ParseTask(_) => write!(f, "failed to parse task"),
             Self::ParseUuid(_) => write!(f, "failed to parse uuid"),
+            Self::UniqueUuid(_) => write!(f, "no unique UUID for filter"),
             Self::Shell(_) => write!(f, "shell command failed"),
             Self::Utf8(_) => write!(f, "UTF-8 encoding error"),
             Self::InvalidPrData { message } => write!(f, "Invalid PR data: {}", message),
@@ -495,6 +420,7 @@ impl std::error::Error for TaskCollectionError {
             Self::ParseJson(e) => Some(e),
             Self::ParseTask(e) => Some(e),
             Self::ParseUuid(e) => Some(e),
+            Self::UniqueUuid(e) => Some(e),
             Self::Shell(e) => Some(e),
             Self::Utf8(e) => Some(e),
             Self::InvalidPrData { .. } => None,

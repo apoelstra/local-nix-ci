@@ -1,17 +1,48 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use bitcoin_hashes::Sha256;
-use std::env;
-use std::fmt;
-use std::fs;
-use std::io;
+use core::fmt;
+use std::ffi::OsStr;
+use std::{env, fs, io};
 use std::path::Path;
+
+use uuid::Uuid;
+use xshell::{cmd, Shell};
 
 #[derive(Debug)]
 pub enum Error {
     HomeNotSet,
     ShellCreationFailed(xshell::Error),
     IoError(io::Error),
+}
+
+#[derive(Debug)]
+pub enum UniqueUuidError {
+    TaskCommandFailed(xshell::Error),
+    ParseUuid(uuid::Error),
+    MultipleUuidsFound(Vec<String>, Uuid, Uuid),
+}
+
+impl fmt::Display for UniqueUuidError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TaskCommandFailed(e) => write!(f, "Task command failed: {}", e),
+            Self::ParseUuid(e) => write!(f, "JSON parse error: {}", e),
+            Self::MultipleUuidsFound(filter, first, second) => {
+                write!(f, "Multiple UUIDs found: {}, {} (task {} uuids)", first, second, filter.join(" "))
+            }
+        }
+    }
+}
+
+impl std::error::Error for UniqueUuidError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+           Self::TaskCommandFailed(e) => Some(e),
+           Self::ParseUuid(e) => Some(e),
+           Self::MultipleUuidsFound(..) => None,
+       }
+   }
 }
 
 impl fmt::Display for Error {
@@ -127,8 +158,8 @@ local-ci/taskwarrior,");
     Ok(())
 }
 
-pub fn task_shell() -> Result<xshell::Shell, Error> {
-    let sh = xshell::Shell::new()
+pub fn task_shell() -> Result<Shell, Error> {
+    let sh = Shell::new()
         .map_err(Error::ShellCreationFailed)?;
 
     // Get HOME directory
@@ -146,4 +177,69 @@ pub fn task_shell() -> Result<xshell::Shell, Error> {
     sh.set_var("TASKDATA", &taskdata_path);
 
     Ok(sh)
+}
+
+/// Query task to obtain a unique UUID matching the given filter.
+/// Returns an error if zero or multiple UUIDs are found.
+///
+/// This is equivalent to the `tw_unique_uuid` bash function in local-ci.sh.
+pub fn get_unique_uuid<A: AsRef<OsStr>>(
+    sh: &Shell,
+    filter: &[A],
+) -> Result<Option<Uuid>, UniqueUuidError> {
+    // Run task export with the filter to get JSON output
+    let mut task_cmd = cmd!(sh, "task");
+    for arg in filter {
+        task_cmd = task_cmd.arg(arg);
+    }
+    task_cmd = task_cmd.arg("uuids");
+
+    let output = task_cmd.read().map_err(UniqueUuidError::TaskCommandFailed)?;
+
+    // Parse JSON output
+    let mut ret = None;
+    for uuid_str in output.split_whitespace() {
+        let uuid = Uuid::try_parse(uuid_str)
+            .map_err(UniqueUuidError::ParseUuid)?;
+        if let Some(existing) = ret.replace(uuid) {
+            let filter = filter.iter().map(|a| a.as_ref().to_string_lossy().into_owned()).collect();
+            return Err(UniqueUuidError::MultipleUuidsFound(filter, existing, uuid));
+        }
+    }
+    Ok(ret)
+}
+
+pub fn get_or_insert_unique_uuid<A: AsRef<OsStr>, B: AsRef<OsStr>>(
+    sh: &Shell,
+    filter: &[A],
+    extra_mods: &[B],
+) -> Result<Uuid, UniqueUuidError> {
+    match get_unique_uuid(sh, filter) {
+        Err(e) => Err(e),
+        Ok(Some(uuid)) => Ok(uuid),
+        Ok(None) => {
+            let mut task_cmd = cmd!(sh, "task add rc.confirmation=off rc.verbose=new-uuid");
+            for arg in filter {
+                task_cmd = task_cmd.arg(arg);
+            }
+            for arg in extra_mods {
+                task_cmd = task_cmd.arg(arg);
+            }
+
+            let commit_output = task_cmd.read().map_err(UniqueUuidError::TaskCommandFailed)?;
+        
+            // Extract UUID from commit task creation
+            let idx = match commit_output.find("Created task ") {
+                Some(idx) => idx + 13,
+                None => panic!("
+Invoked {task_cmd}
+Expected the output \"Created task \" but instead got:
+{commit_output}
+                ")
+            };
+        
+            Uuid::try_parse(&commit_output[idx..idx + 36])
+                .map_err(UniqueUuidError::ParseUuid)
+        },
+    }
 }

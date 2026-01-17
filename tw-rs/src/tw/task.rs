@@ -126,6 +126,7 @@ impl CommitTask {
 #[derive(Debug)]
 pub struct TaskParseError {
     uuid: Option<Uuid>,
+    json: Option<String>,
     error: TaskParseErrorInner,
 }
 
@@ -142,7 +143,11 @@ impl fmt::Display for TaskParseError {
             I::PrMultipleDependencies => f.write_str("PR task has multiple dependencies, expected exactly one"),
             I::CommitMultipleDependencies => f.write_str("Commit task has multiple dependencies, expected at most one"),
             I::MissingField { task_ty, field } => write!(f, "missing field {field} for {task_ty}"),
+        }?;
+        if let Some(ref json) = self.json {
+            write!(f, "\nJSON: {}", json)?;
         }
+        Ok(())
     }
 }
 
@@ -167,9 +172,10 @@ pub enum TaskParseErrorInner {
 }
 
 impl TaskParseErrorInner {
-    fn with_uuid(self, uuid: Uuid) -> TaskParseError {
+    fn with_uuid(self, uuid: Uuid, json: String) -> TaskParseError {
         TaskParseError {
             uuid: Some(uuid),
+            json: Some(json),
             error: self,
         }
     }
@@ -184,12 +190,14 @@ impl PrOrCommitTask {
     pub fn from_json(task_str: &str) -> Result<Self, TaskParseError> {
         fn unwrap_field<T>(
             uuid: Uuid,
+            json_str: &str,
             task_ty: &'static str,
             field: &'static str,
             object: Option<T>,
         ) -> Result<T, TaskParseError> {
-            object.ok_or(TaskParseError {
+            object.ok_or_else(|| TaskParseError {
                 uuid: Some(uuid),
+                json: Some(json_str.to_owned()),
                 error: TaskParseErrorInner::MissingField { task_ty, field },
             })
         }
@@ -203,9 +211,9 @@ impl PrOrCommitTask {
         // succeed, and lets us tag every other error with the UUID.
         let uuid = serde_json::from_str::<JustUuid>(task_str)
             .map_err(TaskParseErrorInner::TaskWarriorParse)
-            .map_err(|error| TaskParseError { uuid: None, error })?
+            .map_err(|error| TaskParseError { uuid: None, json: None, error })?
             .uuid;
-        let err_with_uuid = |e: TaskParseErrorInner| e.with_uuid(uuid);
+        let err_with_uuid = |e: TaskParseErrorInner| e.with_uuid(uuid, task_str.to_owned());
         
         // Parse the full structure.
         let task_json: serde_types::Task = serde_json::from_str(task_str)
@@ -213,7 +221,7 @@ impl PrOrCommitTask {
             .map_err(err_with_uuid)?;
 
         if !task_json.repo_root.is_absolute() {
-            return Err(TaskParseErrorInner::InvalidRepoRoot.with_uuid(uuid));
+            return Err(TaskParseErrorInner::InvalidRepoRoot.with_uuid(uuid, task_str.to_owned()));
         }
 
         // Because Rust is annoying we have to call has_tag before
@@ -231,7 +239,7 @@ impl PrOrCommitTask {
         if let Some(commit_id) = task_json.commit_id {
             // This is a commit task - can have 0 or 1 dependencies (parent commit)
             if task_json.depends.len() > 1 {
-                return Err(TaskParseErrorInner::CommitMultipleDependencies.with_uuid(uuid));
+                return Err(TaskParseErrorInner::CommitMultipleDependencies.with_uuid(uuid, task_str.to_owned()));
             }
 
             let parent_commit_uuid = task_json.depends.first().copied();
@@ -256,17 +264,17 @@ impl PrOrCommitTask {
         } else {
             // This is a PR task - must have exactly one dependency (tip commit)
             if task_json.depends.is_empty() {
-                return Err(TaskParseErrorInner::PrMissingTipCommit.with_uuid(uuid));
+                return Err(TaskParseErrorInner::PrMissingTipCommit.with_uuid(uuid, task_str.to_owned()));
             }
             if task_json.depends.len() > 1 {
-                return Err(TaskParseErrorInner::PrMultipleDependencies.with_uuid(uuid));
+                return Err(TaskParseErrorInner::PrMultipleDependencies.with_uuid(uuid, task_str.to_owned()));
             }
-            let title = unwrap_field(uuid, "pr", "pr_title", task_json.pr_title)?;
-            let author = unwrap_field(uuid, "pr", "pr_author", task_json.pr_author)?;
-            let number = unwrap_field(uuid, "pr", "pr_number", task_json.pr_number)?;
-            let base_commit = unwrap_field(uuid, "pr", "base_commit", task_json.base_commit)?;
-            let merge_change_id = unwrap_field(uuid, "pr", "merge_change_id", task_json.merge_change_id)?;
-            let merge_uuid = unwrap_field(uuid, "pr", "merge_uuid", task_json.merge_uuid)?;
+            let title = unwrap_field(uuid, task_str, "pr", "pr_title", task_json.pr_title)?;
+            let author = unwrap_field(uuid, task_str, "pr", "pr_author", task_json.pr_author)?;
+            let number = unwrap_field(uuid, task_str, "pr", "pr_number", task_json.pr_number)?;
+            let base_commit = unwrap_field(uuid, task_str, "pr", "base_commit", task_json.base_commit)?;
+            let merge_change_id = unwrap_field(uuid, task_str, "pr", "merge_change_id", task_json.merge_change_id)?;
+            let merge_uuid = unwrap_field(uuid, task_str, "pr", "merge_uuid", task_json.merge_uuid)?;
             
             Ok(PrOrCommitTask::Pr(PrTask {
                 uuid,
