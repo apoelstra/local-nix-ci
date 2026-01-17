@@ -12,6 +12,7 @@ static PROGRAM_NAME: OnceLock<String> = OnceLock::new();
 #[derive(Copy, Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Info,
+    Next,
     Refresh,
     Review,
     Run,
@@ -23,6 +24,7 @@ impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Info => f.write_str("info"),
+            Self::Next => f.write_str("next"),
             Self::Refresh => f.write_str("refresh"),
             Self::Review => f.write_str("review"),
             Self::Run => f.write_str("run"),
@@ -98,6 +100,7 @@ fn parse_args() -> Result<CliArguments, ParseError> {
                 continue;
             }
             ArgToken::Info => set_once(&mut action, Action::Info, ParseError::MultipleActions)?,
+            ArgToken::Next => set_once(&mut action, Action::Next, ParseError::MultipleActions)?,
             ArgToken::Refresh => set_once(&mut action, Action::Refresh, ParseError::MultipleActions)?,
             ArgToken::Review => set_once(&mut action, Action::Review, ParseError::MultipleActions)?,
             ArgToken::Run => set_once(&mut action, Action::Run, ParseError::MultipleActions)?,

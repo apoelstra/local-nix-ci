@@ -15,6 +15,8 @@ pub enum ArgToken {
     MergeRef(usize),
     /// The literal `info`. (Never interpreted as a number or ref.)
     Info,
+    /// The literal `next`. (Never interpreted as a number or ref.)
+    Next,
     /// The literal `task-edit`. (Never interpreted as a number or ref.)
     TaskEdit,
     /// The literal `task-info`. (Never interpreted as a number or ref.)
@@ -50,6 +52,7 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
 
         match s_arg.as_str() {
             "info" => ArgToken::Info,
+            "next" => ArgToken::Next,
             "task-edit" => ArgToken::TaskEdit,
             "task-info" => ArgToken::TaskInfo,
             "refresh" => ArgToken::Refresh,

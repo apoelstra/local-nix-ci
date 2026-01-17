@@ -8,10 +8,13 @@ mod repo;
 mod tw;
 
 use anyhow::Context;
+use core::fmt;
 use xshell::{Shell, cmd};
 
 use self::args::{Action, Target};
-use self::tw::serde_types::ReviewStatus;
+use self::git::GitCommit;
+use self::tw::serde_types::{CiStatus, ReviewStatus};
+use self::tw::CommitTask;
 
 fn check_required_tools() -> xshell::Result<()> {
     let sh = Shell::new()?;
@@ -25,6 +28,50 @@ fn check_required_tools() -> xshell::Result<()> {
     }
     
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Next {
+    ReviewPr(usize),
+    ReviewCommit(GitCommit),
+    Failed,
+    NothingToDo,
+}
+
+impl fmt::Display for Next {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ReviewPr(num) => write!(f, "local-ci pr {num} review"),
+            Self::ReviewCommit(commit) => write!(f, "local-ci commit {commit} review"),
+            Self::Failed => f.write_str("Nothing to do (failed)."),
+            Self::NothingToDo => f.write_str("Nothing to do."),
+        }
+        
+    }
+}
+
+impl Next {
+    fn update_from_commit(&mut self, commit: &CommitTask) {
+        match commit.review_status() {
+            ReviewStatus::Unreviewed => {
+                self.update(Next::ReviewCommit(commit.commit_id().clone()));
+            },
+            ReviewStatus::NeedsChange | ReviewStatus::Nacked => {
+                self.update(Next::Failed);
+            }
+            ReviewStatus::Approved => {
+                if *commit.ci_status() == CiStatus::Failed {
+                    self.update(Next::Failed);
+                }
+            },
+        }
+    }
+        
+    fn update(&mut self, new: Self) {
+        if *self != Self::Failed {
+            *self = new;
+        }
+    }
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -69,6 +116,12 @@ fn main() -> Result<(), anyhow::Error> {
                 for (_, pull) in tasks.pulls() {
                     println!("{} PR #{}: {}", pull.project(), pull.number(), pull.title());
                 }
+            },
+            Action::Next => {
+                eprintln!("No 'next' action without a PR number or commit ID.");
+                eprintln!();
+                args::usage();
+                std::process::exit(1);
             },
             Action::Refresh => {
                 eprintln!("[invoking gh here]");
@@ -117,19 +170,52 @@ fn main() -> Result<(), anyhow::Error> {
             let pull = pull.clone();
 
             match args.action {
-                Action::Info => {
+                Action::Info | Action::Next => {
+                    let mut next = Next::NothingToDo;
+                    
                     println!("=== PR #{}: {} ===", pull.number(), pull.title());
                     println!("Author: {}", pull.author());
-                    println!("PR Review Status: {}", pull.review_status());
-                    println!("PR Merge Status: {}", pull.merge_status());
+                    println!("PR review status: {}", pull.review_status());
+                    println!("PR merge status: {}", pull.merge_status());
                     println!();
+                    let merge_commit = pull.merge_commit(&tasks);
+                    next.update_from_commit(merge_commit);
+                    print!("PR merge commit: {} (review: {}", merge_commit.commit_id(), merge_commit.review_status());
+                    if matches!(merge_commit.review_status(), ReviewStatus::Approved) {
+                        print!(", ci: {}", merge_commit.ci_status());
+                    }
+                    if merge_commit.is_merge_commit() {
+                        if merge_commit.is_clean_merge() {
+                            print!(", CLEAN_MERGE");
+                        } else {
+                            print!(", MERGE");
+                        }
+                    }
+                    println!(")");
+                    
+                    if !pull.merge_change_id().is_empty() {
+                        println!("  JJ change ID: {}", pull.merge_change_id());
+                    }
+                    println!("  (Review the merge commit like any other commit to trigger CI)");
+                    println!();
+
+                    match pull.review_status() {
+                        ReviewStatus::Unreviewed => {
+                            next.update(Next::ReviewPr(num));
+                        },
+                        ReviewStatus::NeedsChange | ReviewStatus::Nacked => {
+                            next.update(Next::Failed);
+                        }
+                        ReviewStatus::Approved => { /* done */ },
+                    }
                     
                     println!("=== Commits ===");
                     let commits: Vec<_> = pull.commits(&tasks).collect();
                     
                     for commit in &commits {
-                        print!("  {} (review: {}", commit.commit_id(), commit.review_status());
+                        next.update_from_commit(commit);
                         
+                        print!("  {} (review: {}", commit.commit_id(), commit.review_status());
                         if matches!(commit.review_status(), ReviewStatus::Approved) {
                             print!(", ci: {}", commit.ci_status());
                         }
@@ -150,35 +236,14 @@ fn main() -> Result<(), anyhow::Error> {
                     }
                     
                     println!();
-                    println!("=== Merge Commit ===");
-                    let merge_commit = pull.merge_commit(&tasks);
-                    print!("  Merge commit: {} (review: {}", merge_commit.commit_id(), merge_commit.review_status());
-                    if matches!(merge_commit.review_status(), ReviewStatus::Approved) {
-                        print!(", ci: {}", merge_commit.ci_status());
-                    }
-                    
-                    if merge_commit.is_merge_commit() {
-                        if merge_commit.is_clean_merge() {
-                            print!(", CLEAN_MERGE");
-                        } else {
-                            print!(", MERGE");
-                        }
-                    }
-                    
-                    println!(")");
-                    
-                    if !pull.merge_change_id().is_empty() {
-                        println!("  JJ change ID: {}", pull.merge_change_id());
-                    }
-                    println!("  (Review the merge commit like any other commit to trigger CI)");
-                    
-                    println!();
                     println!("Commit graph:");
                     let mut revset_str = format!("{} | {}", pull.base_commit(), merge_commit.commit_id());
                     for commit in &commits {
                         revset_str.push_str(&format!(" | {}", commit.commit_id()));
                     }
                     let _ = cmd!(shell, "jj log --no-pager --ignore-working-copy -r {revset_str}").quiet().run();
+                    println!();
+                    println!("Next action: {next}");
                 }
                 Action::Refresh => {
                     if !just_created {
@@ -217,11 +282,15 @@ fn main() -> Result<(), anyhow::Error> {
             };
 
             match args.action {
-                Action::Info => {
+                Action::Info | Action::Next => {
                     if let Some(commit_task) = tasks.commit_by_id(&repo.project_name, &commit_id) {
                         println!("{}: {}", commit_task.project(), commit_task.description());
                     } else {
                         println!("Commit {} in project {}", commit_id, repo.project_name);
+                    }
+
+                    if args.action == Action::Next {
+                        todo!()
                     }
                 }
                 Action::Refresh => {
