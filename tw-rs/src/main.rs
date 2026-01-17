@@ -5,6 +5,7 @@ mod gh;
 mod git;
 mod jj;
 mod repo;
+mod run;
 mod tw;
 
 use anyhow::Context;
@@ -140,9 +141,7 @@ fn real_main(
             Action::Refresh => {
                 eprintln!("[invoking gh here]");
             }
-            Action::Run => {
-                eprintln!("[run loop here]");
-            }
+            Action::Run => run::run(tasks)?,
         }
         return Ok(());
     } else {
@@ -750,7 +749,7 @@ fn post_github_approval_if_ready(
         };
         
         // Check if we've already posted this exact approval message
-        let existing_reviews_result = cmd!(shell, "gh pr view {pr_num} --json reviews --jq '.reviews[] | select(.state == \"APPROVED\" and .author.login == \"{current_user}\") | .body'")
+        let existing_reviews_result = cmd!(shell, "gh pr view {pr_num} --json reviews --jq '.reviews[] | select(.state == \"APPROVED\" and .author.login == \"'{current_user}'\") | .body'")
             .read();
             
         let should_post_approval = match existing_reviews_result {
