@@ -355,82 +355,53 @@ impl TaskCollection {
             let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS").run();
         }
 
-        // If we created a new task add it to our database.
-        if new_uuid {
+        // Obtain the PR's UUID, either from the output of `task add` or from our database,
+        // and do the final modifications to hook up the merge commit and PR commits.
+        let pr_uuid = if new_uuid {
             // Extract UUID from the output
             let idx = match output.find("Created task ") {
                 Some(idx) => idx + 13,
                 None => panic!("Did not find 'Created task' in output of task add: {output}"),
             };
             let pr_uuid_str = &output[idx..idx + 36];
-            let pr_uuid = Uuid::try_parse(pr_uuid_str)
-                .map_err(TaskCollectionError::ParseUuid)?;
-            
-            // Add dependency to the PR task for only the tip commit
-            if let Some(tip_commit_uuid) = commit_uuids.last() {
-                let pr_uuid_str = pr_uuid.to_string();
-                let tip_commit_uuid_str = tip_commit_uuid.to_string();
-                let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:{tip_commit_uuid_str}").run();
-            }
-            let _ = cmd!(task_shell, "task {pr_uuid_str} modify merge_uuid:{merge_commit_uuid}").run();
-            
-            // Insert the PR UUID into our lookup table
-            self.pull_numbers.insert(
-                (Cow::Owned(repo.project_name.clone()), num),
-                pr_uuid,
-            );
-            
-            // Create a new PrTask and insert it into our database
-            // We need to reload the task data to get the complete task information
-            let task_json = cmd!(task_shell, "task rc.json.array=off {pr_uuid_str} export")
-                .read()
-                .map_err(TaskCollectionError::Shell)?;
-            
-            let pr_task = super::task::PrOrCommitTask::from_json(&task_json)
-                .map_err(TaskCollectionError::ParseTask)?;
-            
-            if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
-                self.pulls.insert(pr_uuid, pr_task);
-                return Ok(self.pulls.get(&pr_uuid).unwrap());
-            } else {
-                return Err(TaskCollectionError::TaskCreationFailed {
-                    message: "Created task is not a PR task".to_string()
-                });
-            }
+            Uuid::try_parse(pr_uuid_str)
+                .map_err(TaskCollectionError::ParseUuid)?
         } else {
-            // Update existing task - we need to get the UUID from the lookup table
-            let pr_uuid = *self.pull_numbers.get(&(Cow::Borrowed(&repo.project_name), num))
-                .ok_or(TaskCollectionError::InvalidPrData {
-                    message: "PR UUID not found in lookup table".to_string()
-                })?;
+            *self.pull_numbers.get(&(Cow::Borrowed(&repo.project_name), num))
+                .expect("PR was in main lookup table but not num/project name lookup tabel")
+        };
+        let pr_uuid_str = pr_uuid.to_string();
+            
+        // Add dependency to the PR task for the tip commit
+        let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:").run(); // Clear dependencies
+        if let Some(tip_commit_uuid) = commit_uuids.last() {
             let pr_uuid_str = pr_uuid.to_string();
-            let _ = cmd!(task_shell, "task {pr_uuid_str} modify merge_uuid:{merge_commit_uuid}").run();
-            
-            // Update dependencies - clear old ones and set only the tip commit
-            let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:").run(); // Clear dependencies
-            if let Some(tip_commit_uuid) = commit_uuids.last() {
-                let tip_commit_uuid_str = tip_commit_uuid.to_string();
-                let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:{tip_commit_uuid_str}").run();
-            }
-            
-            // Reload the updated task data
-            let task_json = cmd!(task_shell, "task rc.json.array=off {pr_uuid_str} export")
-                .read()
-                .map_err(TaskCollectionError::Shell)?;
-
-            let pr_task = super::task::PrOrCommitTask::from_json(&task_json)
-                .map_err(TaskCollectionError::ParseTask)?;
-            
-            if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
-                self.pulls.insert(pr_uuid, pr_task);
-                return Ok(self.pulls.get(&pr_uuid).unwrap());
-            } else {
-                return Err(TaskCollectionError::TaskCreationFailed {
-                    message: "Updated task is not a PR task".to_string()
-                });
-            }
+            let tip_commit_uuid_str = tip_commit_uuid.to_string();
+            let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:{tip_commit_uuid_str}").run();
         }
-
+        // Add UDA to the PR task for the merge commit
+        let _ = cmd!(task_shell, "task {pr_uuid_str} modify merge_uuid:{merge_commit_uuid}").run();
+            
+        // (Re-)insert the PR UUID into our PR number lookup table
+        self.pull_numbers.insert(
+            (Cow::Owned(repo.project_name.clone()), num),
+            pr_uuid,
+        );
+            
+        // (Re-)load the task from the Taskwarrior and put it in our map.
+        let task_json = cmd!(task_shell, "task rc.json.array=off {pr_uuid_str} export")
+            .read()
+            .map_err(TaskCollectionError::Shell)?;
+            
+        let pr_task = super::task::PrOrCommitTask::from_json(&task_json)
+            .map_err(TaskCollectionError::ParseTask)?;
+            
+        if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
+            self.pulls.insert(pr_uuid, pr_task);
+            return Ok(self.pulls.get(&pr_uuid).unwrap());
+        } else {
+            panic!("Somehow created non-PR task");
+        }
     }
 }
 
