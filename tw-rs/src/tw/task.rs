@@ -24,6 +24,7 @@ pub struct PrTask {
     number: usize,
     pub(super) merge_status: MergeStatus,
     base_commit: GitCommit,
+    base_ref: String,
     merge_uuid: Uuid,
     merge_change_id: String,
 }
@@ -54,6 +55,10 @@ impl PrTask {
 
     pub fn base_commit(&self) -> &GitCommit {
         &self.base_commit
+    }
+
+    pub fn base_ref(&self) -> &str {
+        &self.base_ref
     }
 
     pub fn author(&self) -> &str {
@@ -349,6 +354,8 @@ impl PrOrCommitTask {
             )?;
             let merge_uuid =
                 unwrap_field(uuid, task_str, "pr", "merge_uuid", task_json.merge_uuid)?;
+            let base_ref =
+                unwrap_field(uuid, task_str, "pr", "base_ref", task_json.base_ref)?;
 
             Ok(PrOrCommitTask::Pr(PrTask {
                 uuid,
@@ -364,6 +371,7 @@ impl PrOrCommitTask {
                 number,
                 merge_status: task_json.merge_status,
                 base_commit,
+                base_ref,
                 merge_change_id,
                 merge_uuid,
             }))

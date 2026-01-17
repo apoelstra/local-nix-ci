@@ -216,7 +216,7 @@ impl TaskCollection {
         // Get PR data from GitHub
         let pr_json = cmd!(
             task_shell,
-            "gh pr view {num_str} --json commits,title,author,baseRefOid,headRefOid"
+            "gh pr view {num_str} --json commits,title,author,baseRefOid,headRefOid,baseRefName"
         )
         .read()
         .map_err(TaskCollectionError::Shell)?;
@@ -288,6 +288,7 @@ impl TaskCollection {
             ))
             .arg(format!("description:{}", description))
             .arg(format!("base_commit:{}", base_commit))
+            .arg(format!("base_ref:{}", pr_data.base_ref))
             .arg(format!("merge_change_id:{}", merge_change_id));
         let output = task_cmd.read().map_err(TaskCollectionError::Shell)?;
 

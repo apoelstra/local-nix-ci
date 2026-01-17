@@ -494,10 +494,120 @@ fn check_for_pushable_merges(tasks: &mut TaskCollection, _commit_uuid: &uuid::Uu
 }
 
 fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> Result<()> {
-    // This function handles PRs that are in needsig status and checks if they can be pushed
-    // Implementation would be similar to the shell script's check_and_push_ready_prs function
-    // For now, just a placeholder since the full implementation would be quite complex
+    let sh = Shell::new()?;
+    
+    // Find PRs with merge_status:needsig. Collect into a Vec to avoid keepin
+    // a borrow of `tasks`.
+    let needsig_prs: Vec<_> = tasks.pulls()
+        .filter(|(_, pr)| *pr.merge_status() == MergeStatus::NeedSig)
+        .map(|(uuid, pr)| (*uuid, pr.number(), pr.project().to_string()))
+        .collect();
+
+    for (pr_uuid, pr_number, project) in needsig_prs {
+        eprintln!("[{}] Checking PR #{} for push readiness", 
+                 Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                 pr_number);
+
+        // Get repository info
+        let pr_task = tasks.pulls().find(|(uuid, _)| **uuid == pr_uuid).unwrap().1;
+        let repo = crate::repo::Repository {
+            project_name: project.clone(),
+            repo_root: pr_task.repo_root().to_owned(),
+        };
+
+        // Refresh the PR to check if merge commit is still up to date
+        let refreshed_pr = match tasks.insert_or_refresh_pr(&sh, &repo, pr_number) {
+            Ok(pr) => pr,
+            Err(e) => {
+                eprintln!("[{}] Failed to refresh PR #{}: {}", 
+                         Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                         pr_number, e);
+                continue;
+            }
+        };
+
+        // If merge status is no longer NeedSig after refresh, skip
+        if *refreshed_pr.merge_status() != MergeStatus::NeedSig {
+            eprintln!("[{}] PR #{} merge status changed during refresh, skipping", 
+                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                     pr_number);
+            continue;
+        }
+
+        let _push_dir = sh.push_dir(refreshed_pr.repo_root());
+        let merge_change_id = refreshed_pr.merge_change_id();
+
+        // Check if JJ change has GPG signature
+        let has_signature = match crate::jj::jj_log(&sh, "if(signature, \"true\", \"false\")", merge_change_id) {
+            Ok(result) => result.trim() == "true",
+            Err(e) => {
+                eprintln!("[{}] Failed to check signature for PR #{}: {}", 
+                         Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                         pr_number, e);
+                continue;
+            }
+        };
+
+        // Update merge commit description with latest ACKs
+        let description = compute_merge_description(pr_number, merge_change_id)?;
+        if let Err(e) = cmd!(sh, "jj describe --quiet -r {merge_change_id} -m {description}").run() {
+            eprintln!("[{}] Failed to update description for PR #{}: {}", 
+                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                     pr_number, e);
+            continue;
+        }
+
+        if has_signature {
+            // Get the merge commit ID from JJ change
+            let merge_commit_id = match crate::jj::jj_log(&sh, "commit_id", merge_change_id) {
+                Ok(id) => id.trim().to_string(),
+                Err(e) => {
+                    eprintln!("[{}] Failed to get commit ID for PR #{}: {}", 
+                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                             pr_number, e);
+                    continue;
+                }
+            };
+
+            // Get base branch name from stored data
+            let base_ref = refreshed_pr.base_ref();
+
+            eprintln!("[{}] {} PR #{} has GPG signature, pushing to {}", 
+                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                     project, pr_number, base_ref);
+
+            // Push to base branch
+            match cmd!(sh, "git push origin {merge_commit_id}:{base_ref}").run() {
+                Ok(_) => {
+                    eprintln!("[{}] Successfully pushed PR #{} to {}", 
+                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                             pr_number, base_ref);
+                    
+                    // Update merge status to pushed
+                    if let Err(e) = tasks.update_pr_merge_status(&pr_uuid, MergeStatus::Pushed) {
+                        eprintln!("[{}] Failed to update merge status for PR #{}: {}", 
+                                 Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                                 pr_number, e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[{}] Failed to push PR #{} to {}: {}", 
+                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                             pr_number, base_ref, e);
+                }
+            }
+        } else {
+            eprintln!("[{}] {} PR #{} JJ change {} does not have GPG signature yet", 
+                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
+                     project, pr_number, merge_change_id);
+        }
+    }
+
     Ok(())
+}
+
+fn compute_merge_description(pr_number: usize, merge_change_id: &str) -> Result<String> {
+    todo!("compute_merge_description not yet implemented")
 }
 
 fn check_needsig_prs(tasks: &TaskCollection, pr_alert_timers: &mut HashMap<usize, Instant>) -> Result<()> {

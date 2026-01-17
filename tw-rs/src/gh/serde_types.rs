@@ -27,6 +27,8 @@ pub struct PrInfo {
     pub base_commit: GitCommit,
     #[serde(rename = "headRefOid")]
     pub head_commit: GitCommit,
+    #[serde(rename = "baseRefName")]
+    pub base_ref: String,
 }
 
 impl PrInfo {

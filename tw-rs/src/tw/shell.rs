@@ -123,6 +123,8 @@ uda.merge_uuid.type=string
 uda.merge_uuid.label=UUID of the task corresponding to the current merge commit
 uda.merge_change_id.type=string
 uda.merge_change_id.label=JJ change ID of merge commit
+uda.base_ref.type=string
+uda.base_ref.label=Base branch name (e.g. master, main)
 
 # Reports
 report.list.description=Default Task List

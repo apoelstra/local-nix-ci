@@ -111,6 +111,8 @@ pub struct Task {
     pub merge_change_id: Option<String>,
     #[serde(default)]
     pub merge_uuid: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub base_ref: Option<String>,
 }
 
 impl Task {
