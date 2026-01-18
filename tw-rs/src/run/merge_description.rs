@@ -54,7 +54,7 @@ pub fn compute_merge_description(
     };
 
     // Add commit list
-    let commit_list = cmd!(sh, "git --no-pager log --no-merges --topo-order --pretty=format:%H %s (%an) {base_commit}..{head_commit}")
+    let commit_list = cmd!(sh, "git --no-pager log --no-merges --topo-order --pretty='format:%H %s (%an)' {base_commit}..{head_commit}")
         .read()
         .context("Failed to get commit list")?;
     message.push_str(&commit_list);
@@ -67,7 +67,7 @@ pub fn compute_merge_description(
     }
 
     // Get comments and reviews from GitHub using gh tool
-    let acks = get_acks_from_github(sh, project, pr_number, head_commit)
+    let acks = get_acks_from_github(sh, pr_number, head_commit)
         .context("Failed to get ACKs from GitHub")?;
 
     // Add ACKs section
@@ -90,7 +90,6 @@ pub fn compute_merge_description(
 
 fn get_acks_from_github(
     sh: &Shell,
-    project: &str,
     pr_number: usize,
     head_commit: &GitCommit,
 ) -> anyhow::Result<Vec<(String, String)>> {
@@ -99,7 +98,7 @@ fn get_acks_from_github(
     let pr_number = pr_number.to_string();
 
     // Get PR comments using gh tool
-    let comments_json = cmd!(sh, "gh pr view {pr_number} --repo {project} --json comments")
+    let comments_json = cmd!(sh, "gh pr view {pr_number} --json comments")
         .read()
         .context("Failed to get PR comments")?;
     
@@ -128,7 +127,7 @@ fn get_acks_from_github(
     }
 
     // Get PR reviews using gh tool
-    let reviews_json = cmd!(sh, "gh pr view {pr_number} --repo {project} --json reviews")
+    let reviews_json = cmd!(sh, "gh pr view {pr_number} --json reviews")
         .read()
         .context("Failed to get PR reviews")?;
     

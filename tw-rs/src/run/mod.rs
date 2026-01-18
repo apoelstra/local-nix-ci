@@ -31,9 +31,13 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
             logger.error(format_args!("Failed to check CI repo status: {e}"));
         }
 
-        // Find next approved commit that needs CI
+        // Find next approved commit that needs CI. Call `check_and_push_ready_prs`
+        // except during idle times.
         let commit_uuid = match find_next_commit_for_ci(&tasks) {
-            Some(uuid) => uuid,
+            Some(uuid) => {
+                check_and_push_ready_prs(&logger, &mut tasks)?;
+                uuid
+            }
             None => {
                 if busy {
                     check_and_push_ready_prs(&logger, &mut tasks)?;
@@ -464,7 +468,7 @@ fn check_and_push_ready_prs(
         // Update merge commit description with latest ACKs
         let refreshed_pr = refreshed_pr.clone();
         let description = merge_description::compute_merge_description(&sh, tasks, &refreshed_pr, &merge_change_id)?;
-        if let Err(e) = cmd!(sh, "jj describe --quiet -r {merge_change_id} -m {description}").run() {
+        if let Err(e) = cmd!(sh, "jj describe --quiet -r {merge_change_id} -m {description}").quiet().run() {
             logger.error(format_args!(
                 "Failed to update description for PR #{}: {}", 
                 pr_number, e,
