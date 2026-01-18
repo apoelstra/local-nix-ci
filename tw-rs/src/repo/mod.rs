@@ -29,8 +29,6 @@ impl std::fmt::Display for RepoError {
 impl std::error::Error for RepoError {}
 
 fn parse_github_url(url: &str) -> Option<String> {
-    let url = url.to_ascii_lowercase();
-
     for prefix in [
         "git@github.com:",
         "https://github.com/",
