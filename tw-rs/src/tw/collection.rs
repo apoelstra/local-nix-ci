@@ -628,10 +628,6 @@ impl TaskCollection {
             }
         }
 
-        if !all_commits_ready {
-            return Ok(false);
-        }
-
         // Get the merge commit
         let pr_task = pr_task.clone(); // un-borrow self.pulls
         let merge_commit = self.commit(pr_task.merge_uuid())
@@ -651,7 +647,8 @@ impl TaskCollection {
         }
 
         // Check if merge commit is approved and CI successful
-        if *merge_commit.review_status() != ReviewStatus::Approved
+        if !all_commits_ready
+            || *merge_commit.review_status() != ReviewStatus::Approved
             || *merge_commit.ci_status() != CiStatus::Success
         {
             return Ok(false);

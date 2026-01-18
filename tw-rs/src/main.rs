@@ -272,7 +272,12 @@ fn real_main(
                     .quiet()
                     .run();
                     println!();
-                    println!("Next action: {next}");
+                    if matches!(next, Next::NothingToDo | Next::Failed) {
+                        println!("Next action: {next}");
+                    } else {
+                        println!("**** Next action: {next}");
+                        println!();
+                    }
 
                     if action == Action::Next {
                         next.do_it(shell, tasks)?;
@@ -338,7 +343,12 @@ fn real_main(
                     let mut next = Next::NothingToDo;
                     next.update_from_commit(&commit);
                     println!();
-                    println!("Next action: {next}");
+                    if matches!(next, Next::NothingToDo | Next::Failed) {
+                        println!("Next action: {next}");
+                    } else {
+                        println!("**** Next action: {next}");
+                        println!();
+                    }
 
                     if action == Action::Next {
                         next.do_it(shell, tasks)?;
