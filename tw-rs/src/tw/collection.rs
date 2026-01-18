@@ -68,6 +68,16 @@ impl TaskCollection {
                 (Cow::Owned(task.project().to_owned()), task.number()),
                 *task.uuid(),
             );
+
+            // Also check merge commit.
+            if let Some(commit) = commits.get_mut(task.merge_uuid()) {
+                commit.prs.push(task.number());
+            } else {
+                return Err(TaskCollectionError::MissingUuid {
+                    missing: *task.merge_uuid(),
+                    needed_by: *task.uuid(),
+                });
+            }
         }
         // In case there are commits with no PRs, also iterate over the whole
         // commit list looking for missing UUIDs.
