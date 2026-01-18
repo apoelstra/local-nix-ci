@@ -11,7 +11,7 @@ use xshell::{Shell, cmd};
 use super::task::PrOrCommitTask;
 use super::{CommitTask, PrTask};
 use crate::git::{self, GitCommit};
-use crate::tw::serde_types::{CiStatus, MergeStatus};
+use crate::tw::serde_types::{CiStatus, MergeStatus, ReviewStatus};
 use crate::tw::shell::{self, UniqueUuidError, get_or_insert_unique_uuid};
 
 #[derive(Debug)]
@@ -392,7 +392,6 @@ impl TaskCollection {
                     "task {pr_uuid_str} modify merge_status:unstarted"
                 )
                 .run();
-
             }
         }
 
@@ -409,8 +408,12 @@ impl TaskCollection {
             .map_err(TaskCollectionError::ParseTask)?;
 
         if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
-            let entry = self.pulls.entry(pr_uuid);
-            Ok(entry.insert_entry(pr_task).into_mut())
+            self.pulls.insert(pr_uuid, pr_task);
+            
+            // Check if PR is ready for merge after inserting/updating
+            let _ = self.check_and_update_pr_merge_readiness(&pr_uuid);
+            
+            Ok(&self.pulls[&pr_uuid])
         } else {
             panic!("Somehow created non-PR task");
         }
@@ -520,7 +523,7 @@ impl TaskCollection {
     pub fn update_commit_review_status(
         &mut self,
         uuid: &uuid::Uuid,
-        status: crate::tw::serde_types::ReviewStatus,
+        status: ReviewStatus,
         review_notes: String,
     ) -> Result<(), UpdateError> {
         let sh = crate::tw::task_shell()
@@ -533,10 +536,10 @@ impl TaskCollection {
 
         let uuid_str = uuid.to_string();
         let status_str = match status {
-            crate::tw::serde_types::ReviewStatus::Approved => "approved",
-            crate::tw::serde_types::ReviewStatus::Nacked => "nacked",
-            crate::tw::serde_types::ReviewStatus::NeedsChange => "needschange",
-            crate::tw::serde_types::ReviewStatus::Unreviewed => "unreviewed",
+            ReviewStatus::Approved => "approved",
+            ReviewStatus::Nacked => "nacked",
+            ReviewStatus::NeedsChange => "needschange",
+            ReviewStatus::Unreviewed => "unreviewed",
         };
 
         cmd!(sh, "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}")
@@ -552,7 +555,7 @@ impl TaskCollection {
     pub fn update_pr_review_status(
         &mut self,
         uuid: &uuid::Uuid,
-        status: crate::tw::serde_types::ReviewStatus,
+        status: ReviewStatus,
         review_notes: String,
     ) -> Result<(), UpdateError> {
         let sh = crate::tw::task_shell()
@@ -565,10 +568,10 @@ impl TaskCollection {
 
         let uuid_str = uuid.to_string();
         let status_str = match status {
-            crate::tw::serde_types::ReviewStatus::Approved => "approved",
-            crate::tw::serde_types::ReviewStatus::Nacked => "nacked",
-            crate::tw::serde_types::ReviewStatus::NeedsChange => "needschange",
-            crate::tw::serde_types::ReviewStatus::Unreviewed => "unreviewed",
+            ReviewStatus::Approved => "approved",
+            ReviewStatus::Nacked => "nacked",
+            ReviewStatus::NeedsChange => "needschange",
+            ReviewStatus::Unreviewed => "unreviewed",
         };
 
         cmd!(sh, "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}")
@@ -579,6 +582,81 @@ impl TaskCollection {
         pr.review_status = status;
         pr.review_notes = review_notes;
         Ok(())
+    }
+
+    /// Checks if a PR is ready for merge and updates its status accordingly.
+    /// Also auto-approves clean merge commits if all PR commits are approved.
+    /// Returns true if the PR status was changed to needsig.
+    pub fn check_and_update_pr_merge_readiness(
+        &mut self,
+        pr_uuid: &uuid::Uuid,
+    ) -> Result<bool, UpdateError> {
+        let pr_task = match self.pulls.get(pr_uuid) {
+            Some(pr) => pr,
+            None => return Err(UpdateError::UnknownUuid(*pr_uuid)),
+        };
+
+        // Check if PR is pushed -- then don't do anything.
+        if *pr_task.merge_status() == MergeStatus::Pushed {
+            return Ok(false);
+        }
+
+        // Check if PR itself is approved
+        if *pr_task.review_status() != ReviewStatus::Approved {
+            return Ok(false);
+        }
+
+        // Check if all commits are approved and CI successful
+        let mut all_commits_ready = true;
+        for commit in pr_task.commits(self) {
+            // Skip merge commits for this check
+            if commit.is_merge_commit() {
+                continue;
+            }
+            if *commit.review_status() != ReviewStatus::Approved
+                || *commit.ci_status() != CiStatus::Success
+            {
+                all_commits_ready = false;
+                break;
+            }
+        }
+
+        if !all_commits_ready {
+            return Ok(false);
+        }
+
+        // Get the merge commit
+        let pr_task = pr_task.clone(); // un-borrow self.pulls
+        let merge_commit = self.commit(&pr_task.merge_uuid())
+            .expect("merge commit should exist")
+            .clone();
+
+        // Auto-approve clean merge commit if all commits are approved
+        if merge_commit.is_clean_merge()
+            && *merge_commit.review_status() == ReviewStatus::Unreviewed
+        {
+            let auto_review_notes = format!("Auto-approved clean merge commit for PR #{}", pr_task.number());
+            self.update_commit_review_status(
+                merge_commit.uuid(),
+                ReviewStatus::Approved,
+                auto_review_notes,
+            )?;
+        }
+
+        // Check if merge commit is approved and CI successful
+        if *merge_commit.review_status() != ReviewStatus::Approved
+            || *merge_commit.ci_status() != CiStatus::Success
+        {
+            return Ok(false);
+        }
+
+        // All conditions met - update to needsig if not already
+        if *pr_task.merge_status() != MergeStatus::NeedSig {
+            self.update_pr_merge_status(pr_uuid, MergeStatus::NeedSig)?;
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 }
 

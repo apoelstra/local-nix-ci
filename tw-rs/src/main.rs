@@ -477,6 +477,23 @@ fn review_commit_interactive(
                 println!("Review notes saved.");
             }
 
+            // If we approved a commit, check all PRs containing this commit for merge readiness
+            if status == ReviewStatus::Approved {
+                let mut to_update = vec![];
+                for (pr_uuid, pr_task) in tasks.pulls() {
+                    let contains_commit = pr_task.commits(tasks).any(|c| c.commit_id() == commit_id);
+                    if contains_commit {
+                        to_update.push((*pr_uuid, pr_task.number()));
+                    }
+                }
+                for (pr_uuid, pr_number) in to_update {
+                    match tasks.check_and_update_pr_merge_readiness(&pr_uuid) {
+                        Ok(true) => println!("PR #{} is now ready for merge (status updated to needsig)", pr_number),
+                        Ok(false) => {}, // No change needed
+                        Err(e) => eprintln!("Warning: Failed to check PR #{} merge readiness: {}", pr_number, e),
+                    }
+                }
+            }
 
             break;
         }
@@ -597,29 +614,25 @@ fn review_pr_interactive(
                 println!("Review notes saved.");
             }
 
-            // If approved, check if we should post GitHub approval and handle merge commit
+            // If approved, check if we should post GitHub approval and check merge readiness
             if status == ReviewStatus::Approved {
                 post_github_approval_if_ready(shell, tasks, repo, pull)?;
 
-                // Handle merge commit auto-approval if it's clean
-                let merge_commit = pull.merge_commit(tasks);
-                if merge_commit.is_clean_merge()
-                    && *merge_commit.review_status() == ReviewStatus::Unreviewed
-                {
-                    println!("Merge commit is clean, automatically approving it...");
-                    let merge_uuid = merge_commit.uuid().to_string();
-                    let auto_review_notes =
-                        format!("Auto-approved clean merge commit for PR #{}", pull.number());
-                    cmd!(shell, "task {merge_uuid} modify review_status:approved review_notes:{auto_review_notes}")
-                        .run()
-                        .context("auto-approving clean merge commit")?;
-                    println!("Merge commit automatically approved.");
-                } else if merge_commit.is_merge_commit() && !merge_commit.is_clean_merge() {
-                    eprintln!("Warning: Merge commit is not clean and needs manual review.");
-                    eprintln!(
-                        "Please review the merge commit separately: tw-rs commit {} review",
-                        merge_commit.commit_id()
-                    );
+                // Check if PR is ready for merge (this also handles auto-approval of clean merge commits)
+                let pr_uuid = *pull.uuid();
+                match tasks.check_and_update_pr_merge_readiness(&pr_uuid) {
+                    Ok(true) => println!("PR #{} is now ready for merge (status updated to needsig)", pull.number()),
+                    Ok(false) => {
+                        let merge_commit = pull.merge_commit(tasks);
+                        if merge_commit.is_merge_commit() && !merge_commit.is_clean_merge() {
+                            eprintln!("Warning: Merge commit is not clean and needs manual review.");
+                            eprintln!(
+                                "Please review the merge commit separately: tw-rs commit {} review",
+                                merge_commit.commit_id()
+                            );
+                        }
+                    },
+                    Err(e) => eprintln!("Warning: Failed to check PR merge readiness: {}", e),
                 }
             }
 

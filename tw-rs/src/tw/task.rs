@@ -73,6 +73,10 @@ impl PrTask {
         &self.review_notes
     }
 
+    pub fn merge_uuid(&self) -> &Uuid {
+        &self.merge_uuid
+    }
+
     pub fn merge_status(&self) -> &MergeStatus {
         &self.merge_status
     }
