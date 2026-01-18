@@ -127,6 +127,7 @@ pub struct CommitTask {
     pub(super) review_status: ReviewStatus,
     pub(super) review_notes: String,
 
+    pub(super) prs: Vec<usize>,
     commit_id: GitCommit,
     is_tip: bool,
     is_merge_commit: bool,
@@ -156,6 +157,11 @@ impl CommitTask {
     /// The description of the task.
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    /// A list of numbers of the PR(s) that this commit appears in.
+    pub fn prs(&self) -> &[usize] {
+        &self.prs
     }
 
     /// The commit ID.
@@ -332,6 +338,7 @@ impl PrOrCommitTask {
                 description: task_json.description,
 
                 ci_status: task_json.ci_status,
+                prs: vec![],
                 is_tip,
                 is_merge_commit,
                 is_clean_merge,

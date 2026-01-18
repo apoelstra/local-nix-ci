@@ -323,10 +323,20 @@ fn real_main(
 
             match action {
                 Action::Info | Action::Next => {
+                    let commit = commit.clone(); // unborrow tasks
                     println!("{}: {}", commit.project(), commit.description());
+                    println!();
+                    println!("Appears in PRs:");
+                    for pr in commit.prs() {
+                        if let Some(pr) = tasks.pull_by_number(commit.project(), *pr) {
+                            println!("    {:4}: {}", pr.number(), pr.title());
+                        } else {
+                            println!("    [unknown pr number {}]", pr);
+                        }
+                    }
 
                     let mut next = Next::NothingToDo;
-                    next.update_from_commit(commit);
+                    next.update_from_commit(&commit);
                     println!();
                     println!("Next action: {next}");
 

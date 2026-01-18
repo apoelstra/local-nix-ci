@@ -52,18 +52,25 @@ impl TaskCollection {
         // these checks for us.)
         let mut pull_numbers = HashMap::new();
         for task in pulls.values() {
-            let uuid = task.dep_uuid();
-            if !commits.contains_key(uuid) {
-                return Err(TaskCollectionError::MissingUuid {
-                    missing: *uuid,
-                    needed_by: *task.uuid(),
-                });
+            let mut next_uuid = Some(*task.dep_uuid());
+            while let Some(uuid) = next_uuid {
+                if let Some(commit) = commits.get_mut(&uuid) {
+                    commit.prs.push(task.number());
+                    next_uuid = commit.dep_uuid().copied();
+                } else {
+                    return Err(TaskCollectionError::MissingUuid {
+                        missing: uuid,
+                        needed_by: *task.uuid(),
+                    });
+                }
             }
             pull_numbers.insert(
                 (Cow::Owned(task.project().to_owned()), task.number()),
                 *task.uuid(),
             );
         }
+        // In case there are commits with no PRs, also iterate over the whole
+        // commit list looking for missing UUIDs.
         for task in commits.values() {
             if let Some(uuid) = task.dep_uuid()
                 && !commits.contains_key(uuid)
@@ -433,7 +440,7 @@ impl TaskCollection {
         };
 
         let uuid_str = uuid.to_string();
-        cmd!(sh, "task {uuid_str} modify local_ci_commit_id:{commit_id}")
+        cmd!(sh, "task {uuid_str} modify ci_git_commit:{commit_id}")
             .run()
             .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 
