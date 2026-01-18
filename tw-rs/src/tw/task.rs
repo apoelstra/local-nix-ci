@@ -91,6 +91,12 @@ impl PrTask {
             .expect("merge UUID in collection")
     }
 
+    pub fn tip_commit<'tc>(&self, collection: &'tc super::TaskCollection) -> &'tc CommitTask {
+        collection
+            .commit(&self.tip_commit_uuid)
+            .expect("tip commit UUID in collection")
+    }
+
     pub fn commits<'tc>(
         &self,
         collection: &'tc super::TaskCollection,
