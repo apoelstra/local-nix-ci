@@ -85,6 +85,7 @@ uda.ci_status.values=unstarted,started,success,failed
 uda.ci_status.default=unstarted
 uda.ci_git_commit.type=string
 uda.ci_git_commit.label=Commit ID of local CI during last test
+uda.merge_status.type=string
 uda.merge_status.label=Local CI merge Status
 uda.merge_status.values=unstarted,needsig,pushed
 uda.merge_status.default=unstarted
