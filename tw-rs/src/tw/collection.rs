@@ -328,7 +328,7 @@ impl TaskCollection {
             // Mark the last commit as TIP_COMMIT
             if *commit_id == pr_data.commits.last().unwrap().oid {
                 let commit_uuid = commit.uuid().to_string();
-                let _ = cmd!(task_shell, "task {commit_uuid} modify +TIP_COMMIT").run();
+                let _ = cmd!(task_shell, "task {commit_uuid} modify +TIP_COMMIT").quiet().run();
             }
         }
 
@@ -347,6 +347,7 @@ impl TaskCollection {
                         task_shell,
                         "task {commit_uuid_str} modify depends:{parent_uuid_str}"
                     )
+                    .quiet()
                     .run();
                 }
             }
@@ -363,7 +364,7 @@ impl TaskCollection {
 
         // Add HAS_CONFLICTS tag if the merge has conflicts
         if has_conflicts {
-            let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS").run();
+            let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS").quiet().run();
         }
 
         // Obtain the PR's UUID, either from the output of `task add` or from our database,
@@ -385,18 +386,20 @@ impl TaskCollection {
         let pr_uuid_str = pr_uuid.to_string();
 
         // Add dependency to the PR task for the tip commit
-        let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:").run(); // Clear dependencies
+        let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:").quiet().run(); // Clear dependencies
         let tip_commit_uuid_str = commit_uuids.last().expect("checked above").to_string();
         let _ = cmd!(
             task_shell,
             "task {pr_uuid_str} modify depends:{tip_commit_uuid_str}"
         )
+        .quiet()
         .run();
         // Add UDA to the PR task for the merge commit
         let _ = cmd!(
             task_shell,
             "task {pr_uuid_str} modify merge_uuid:{merge_commit_uuid}"
         )
+        .quiet()
         .run();
 
         if !new_uuid {
@@ -408,6 +411,7 @@ impl TaskCollection {
                     task_shell,
                     "task {pr_uuid_str} modify merge_status:unstarted"
                 )
+                .quiet()
                 .run();
             }
         }
@@ -451,6 +455,7 @@ impl TaskCollection {
 
         let uuid_str = uuid.to_string();
         cmd!(sh, "task {uuid_str} modify ci_git_commit:{commit_id}")
+            .quiet()
             .run()
             .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 
@@ -473,6 +478,7 @@ impl TaskCollection {
 
         let uuid_str = uuid.to_string();
         cmd!(sh, "task {uuid_str} modify derivation:{derivation}")
+            .quiet()
             .run()
             .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 
@@ -502,6 +508,7 @@ impl TaskCollection {
         };
 
         cmd!(sh, "task {uuid_str} modify ci_status:{status_str}")
+            .quiet()
             .run()
             .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 
@@ -530,6 +537,7 @@ impl TaskCollection {
         };
 
         cmd!(sh, "task {uuid_str} modify merge_status:{status_str}")
+            .quiet()
             .run()
             .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 
@@ -560,6 +568,7 @@ impl TaskCollection {
         };
 
         cmd!(sh, "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}")
+            .quiet()
             .run()
             .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 
@@ -592,6 +601,7 @@ impl TaskCollection {
         };
 
         cmd!(sh, "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}")
+            .quiet()
             .run()
             .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 

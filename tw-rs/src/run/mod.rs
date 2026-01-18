@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+mod log;
 mod merge_description;
 mod state;
 
@@ -7,124 +8,112 @@ use crate::tw::TaskCollection;
 use crate::tw::serde_types::{CiStatus, ReviewStatus, MergeStatus};
 use crate::git::GitCommit;
 use anyhow::Context as _;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use xshell::{Shell, cmd};
-use chrono::Utc;
 
 pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
+    let mut logger = log::Logger::new();
     let mut state = state::CiState::new()?;
-    let mut pr_alert_timers = HashMap::new();
     let mut backoff_sec = 30;
     let mut sleep_sec = backoff_sec; // trigger status update on first iteration
     let mut busy = false;
     let mut tasks = TaskCollection::new(task_shell)
         .context("reloading task database")?;
 
-    eprintln!("[{}] Starting CI loop", Utc::now().format("%Y-%m-%d %H:%M:%S"));
-
+    logger.info(format_args!("Starting CI loop."));
     loop {
         // Check CI repo status periodically
         if let Err(e) = state.check_ci_repo_status() {
-            eprintln!("[{}] Error checking CI repo status: {}", 
-                     Utc::now().format("%Y-%m-%d %H:%M:%S"), e);
+            logger.error(format_args!("Failed to check CI repo status: {e}"));
         }
 
         // Find next approved commit that needs CI
-        let next_commit_uuid = find_next_commit_for_ci(&tasks);
-
-        // Handle idle/busy status
-        if next_commit_uuid.is_none() {
-            if busy {
-                check_and_push_ready_prs(&mut tasks)?;
-                backoff_sec = 30;
-                sleep_sec = 1;
-                busy = false;
-            } else {
-                std::thread::sleep(Duration::from_secs(1));
-                sleep_sec += 1;
-
-                if sleep_sec >= backoff_sec {
-                    if backoff_sec < 2400 {
-                        backoff_sec *= 2;
-                    }
-
-                    check_and_push_ready_prs(&mut tasks)?;
-                    check_needsig_prs(&mut tasks, &mut pr_alert_timers)?;
-
-                    eprintln!("[{}] Nothing to do. Reloading task database. (Next message in {} minutes.)", 
-                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                             backoff_sec / 60);
-                    tasks = TaskCollection::new(task_shell)
-                        .context("reloading task database")?;
+        let commit_uuid = match find_next_commit_for_ci(&tasks) {
+            Some(uuid) => uuid,
+            None => {
+                if busy {
+                    check_and_push_ready_prs(&logger, &mut tasks)?;
+                    backoff_sec = 30;
                     sleep_sec = 1;
+                    busy = false;
+                } else {
+                    std::thread::sleep(Duration::from_secs(1));
+                    sleep_sec += 1;
+
+                    if sleep_sec >= backoff_sec {
+                        if backoff_sec < 2400 {
+                            backoff_sec *= 2;
+                        }
+
+                        check_and_push_ready_prs(&logger, &mut tasks)?;
+
+                        logger.info(format_args!(
+                            "Nothing to do. Reloading task database. (Next message in {} minutes.)",
+                            backoff_sec / 60,
+                        )); 
+                        tasks = TaskCollection::new(task_shell)
+                            .context("reloading task database")?;
+                        sleep_sec = 1;
+                    }
                 }
+                continue;
             }
-            continue;
-        }
+        };
 
         busy = true;
-        let commit_uuid = next_commit_uuid.unwrap();
         let commit_task = tasks.commit(&commit_uuid).unwrap();
-        
-        eprintln!("[{}] Processing commit {} from project {}", 
-                 Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                 commit_task.commit_id(), 
-                 commit_task.project());
 
+        logger.newline();
+        logger.set_task(Some(commit_task.clone()));
+        logger.info("Starting.");
         // Update commit status to started
         tasks.update_commit_ci_status(&commit_uuid, CiStatus::Started)?;
 
         // Process the commit
         let commit_task = tasks.commit(&commit_uuid).unwrap(); // Re-get after update
         let commit_task = commit_task.clone(); // un-borrow `tasks`
-        match process_commit(&mut tasks, &commit_task, &mut state) {
+        match process_commit(&logger, &mut tasks, &commit_task, &mut state) {
             Ok(success) => {
                 if success {
-                    eprintln!("[{}] Build succeeded for commit {}", 
-                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                             commit_task.commit_id());
+                    logger.info("SUCCESS.");
                     tasks.update_commit_ci_status(&commit_uuid, CiStatus::Success)?;
                     
                     // Check all PRs containing this commit for merge readiness
-                    let affected_prs: Vec<_> = tasks.pulls()
-                        .filter(|(_, pr_task)| pr_task.commits(&tasks).any(|c| c.commit_id() == commit_task.commit_id()))
-                        .map(|(pr_uuid, pr_task)| (*pr_uuid, pr_task.number()))
-                        .collect();
-
-                    for (pr_uuid, pr_number) in affected_prs {
-                        match tasks.check_and_update_pr_merge_readiness(&pr_uuid) {
-                            Ok(true) => eprintln!("[{}] PR #{} is now ready for merge (status updated to needsig)", 
-                                                 Utc::now().format("%Y-%m-%d %H:%M:%S"), pr_number),
+                    for pr_number in commit_task.prs() {
+                        let pr_task = tasks.pull_by_number(commit_task.project(), *pr_number)
+                            .expect("PR in task collection")
+                            .clone(); // clone to unborrow `tasks`
+                        match tasks.check_and_update_pr_merge_readiness(pr_task.uuid()) {
+                            Ok(true) => {
+                                logger.info(format_args!(
+                                    "PR #{} change ID {} now needs signature.",
+                                    pr_number,
+                                    pr_task.merge_change_id(),
+                                ));
+                            },
                             Ok(false) => {}, // No change needed
-                            Err(e) => eprintln!("[{}] Warning: Failed to check PR #{} merge readiness: {}", 
-                                               Utc::now().format("%Y-%m-%d %H:%M:%S"), pr_number, e),
+                            Err(e) => logger.warn(format_args!(
+                                "Failed to check PR #{} merge readiness: {}", 
+                                pr_number, e
+                            )),
                         }
                     }
                     
-                    check_for_pushable_merges(&mut tasks, &commit_uuid)?;
+                    post_approvals(&logger, &mut tasks, &commit_uuid)?;
                 } else {
-                    eprintln!("[{}] Build failed for commit {}", 
-                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                             commit_task.commit_id());
+                    logger.error("FAILED");
                     tasks.update_commit_ci_status(&commit_uuid, CiStatus::Failed)?;
                 }
             }
             Err(e) => {
-                eprintln!("[{}] Error processing commit {}: {}", 
-                         Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                         commit_task.commit_id(), 
-                         e);
+                logger.error(format_args!("Unable to process commit: {e}"));
                 tasks.update_commit_ci_status(&commit_uuid, CiStatus::Failed)?;
             }
         }
-
-        eprintln!("[{}] Finished processing commit {}", 
-                 Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                 commit_task.commit_id());
+        logger.set_task(None);
     }
 }
 
@@ -139,6 +128,7 @@ fn find_next_commit_for_ci(tasks: &TaskCollection) -> Option<uuid::Uuid> {
 }
 
 fn process_commit(
+    logger: &log::Logger,
     tasks: &mut TaskCollection, 
     commit_task: &crate::tw::CommitTask, 
     state: &mut state::CiState
@@ -198,10 +188,7 @@ fn process_commit(
 
     // Instantiate derivation. Because we want to capture our streams even if they fail,
     // we must use std::process::Command directly rather than xshell.
-    eprintln!("[{}] Instantiating derivation for commit {}", 
-             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-             commit_task.commit_id());
-
+    logger.info("Instantiating derivation.");
     let instantiate_result = Command::new("nix-instantiate")
         .arg("--arg").arg("inlineJsonConfig")
         .arg(format!("{{ gitDir = \"{}\"; projectName = \"{}\"; }}", repo_root.display(), project))
@@ -216,9 +203,7 @@ fn process_commit(
         Ok(output) => {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                eprintln!("[{}] Instantiated derivation: {}", 
-                         Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                         path);
+                logger.info(format_args!("Instantiated derivation: {path}"));
                 
                 tasks.update_commit_derivation(commit_task.uuid(), path.clone())?;
                 path
@@ -229,22 +214,20 @@ fn process_commit(
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 );
-                save_error_to_file(repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
+                save_error_to_file(logger, repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
                 return Ok(false);
             }
         }
         Err(e) => {
             let error_content = format!("Failed to run nix-instantiate for commit {}: {}", 
                                        commit_task.commit_id(), e);
-            save_error_to_file(repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
+            save_error_to_file(logger, repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
             return Ok(false);
         }
     };
 
     // Build the derivation
-    eprintln!("[{}] Building derivation for commit {}", 
-             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-             commit_task.commit_id());
+    logger.info("Building derivation.");
 
     let build_result = Command::new("nix-build")
         .arg("--builders-use-substitutes")
@@ -271,14 +254,15 @@ fn process_commit(
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 );
-                save_error_to_file(repo_root, commit_task.commit_id(), "build", &error_content)?;
+                save_error_to_file(logger, repo_root, commit_task.commit_id(), "build", &error_content)?;
                 Ok(false)
             }
         }
         Err(e) => {
+            logger.error("Failed to run nix-build: {e}.");
             let error_content = format!("Failed to run nix-build for commit {}: {}", 
                                        commit_task.commit_id(), e);
-            save_error_to_file(repo_root, commit_task.commit_id(), "build", &error_content)?;
+            save_error_to_file(logger, repo_root, commit_task.commit_id(), "build", &error_content)?;
             Ok(false)
         }
     }
@@ -295,16 +279,12 @@ fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<Vec
         .map(|s| s.to_string())
         .collect();
 
-    for lockfile in &lockfiles {
-        eprintln!("[{}] Found Cargo.lock at {}", 
-                 Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                 lockfile);
-    }
-
     Ok(lockfiles)
 }
 
-fn save_error_to_file(repo_root: &Path, commit_id: &GitCommit, operation: &str, content: &str) -> anyhow::Result<()> {
+fn save_error_to_file(logger: &log::Logger, repo_root: &Path, commit_id: &GitCommit, operation: &str, content: &str) -> anyhow::Result<()> {
+    use chrono::Utc;
+    
     let error_dir = repo_root.parent().unwrap_or(repo_root);
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
     let filename = format!("nix-error-{}-{}-{}.log", commit_id, operation, timestamp);
@@ -313,15 +293,12 @@ fn save_error_to_file(repo_root: &Path, commit_id: &GitCommit, operation: &str, 
     fs::write(&error_path, content)
         .with_context(|| format!("Failed to write error file: {}", error_path.display()))?;
 
-    eprintln!("[{}] Error details saved to: {}", 
-             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-             error_path.display());
+    logger.info(format_args!("Error details saved to: {}", error_path.display()));
 
     Ok(())
 }
 
-fn check_for_pushable_merges(tasks: &mut TaskCollection, _commit_uuid: &uuid::Uuid) -> anyhow::Result<()> {
-    let mut to_update = vec![];
+fn post_approvals(logger: &log::Logger, tasks: &mut TaskCollection, _commit_uuid: &uuid::Uuid) -> anyhow::Result<()> {
     // Check all PRs to see if they're ready for approval or merge status update
     for (_, pr_task) in tasks.pulls() {
         let all_commits_approved_and_successful = pr_task.commits(tasks)
@@ -329,10 +306,6 @@ fn check_for_pushable_merges(tasks: &mut TaskCollection, _commit_uuid: &uuid::Uu
                 *commit.review_status() == ReviewStatus::Approved 
                 && *commit.ci_status() == CiStatus::Success
             });
-
-        let merge_commit = pr_task.merge_commit(tasks);
-        let merge_approved_and_successful = *merge_commit.review_status() == ReviewStatus::Approved 
-            && *merge_commit.ci_status() == CiStatus::Success;
 
         // If all commits succeeded and PR approved, post approval
         if all_commits_approved_and_successful && *pr_task.review_status() == ReviewStatus::Approved {
@@ -344,47 +317,31 @@ fn check_for_pushable_merges(tasks: &mut TaskCollection, _commit_uuid: &uuid::Uu
             };
             
             if let Err(e) = crate::post_github_approval_if_ready(&sh, tasks, &repo, pr_task) {
-                eprintln!("[{}] Failed to post GitHub approval for PR #{}: {}", 
-                         Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                         pr_task.number(), 
-                         e);
+                logger.error(format_args!(
+                    "Failed to post GitHub approval for PR #{}: {}", 
+                     pr_task.number(), 
+                     e,
+                ));
             }
         }
 
         // If all commits succeeded but PR not approved, alert user
         if all_commits_approved_and_successful && *pr_task.review_status() != ReviewStatus::Approved {
-            eprintln!("[{}] PR #{} has all commits approved and successful, but PR itself is not approved. Please approve it.", 
-                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                     pr_task.number());
+            logger.warn(format_args!(
+                "PR #{} has all commits approved and successful, but PR itself is not approved. Please approve it.", 
+                pr_task.number(),
+            ));
         }
-
-        // If everything is approved and successful, bump to needsig
-        if all_commits_approved_and_successful 
-            && merge_approved_and_successful 
-            && *pr_task.review_status() == ReviewStatus::Approved 
-            && *pr_task.merge_status() != MergeStatus::NeedSig 
-            && *pr_task.merge_status() != MergeStatus::Pushed {
-            
-            eprintln!("[{}] PR #{} is ready for signing, updating merge_status to needsig", 
-                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                     pr_task.number());
-
-            to_update.push(*pr_task.uuid());
-        }
-    }
-
-    // For borrowck reasons we have to do this outside of the above loop
-    for uuid in to_update {
-        tasks.update_pr_merge_status(&uuid, MergeStatus::NeedSig)
-            .context("update merge status")?;
     }
     Ok(())
 }
 
-fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> anyhow::Result<()> {
+fn check_and_push_ready_prs(
+    logger: &log::Logger,
+    tasks: &mut TaskCollection,
+) -> anyhow::Result<()> {
     let sh = Shell::new()?;
-    
-    // Find PRs with merge_status:needsig. Collect into a Vec to avoid keepin
+    // Find PRs with merge_status:needsig. Collect into a Vec to avoid keeping
     // a borrow of `tasks`.
     let needsig_prs: Vec<_> = tasks.pulls()
         .filter(|(_, pr)| *pr.merge_status() == MergeStatus::NeedSig)
@@ -392,10 +349,6 @@ fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> anyhow::Result<()> {
         .collect();
 
     for (pr_uuid, pr_number, project) in needsig_prs {
-        eprintln!("[{}] Checking PR #{} for push readiness", 
-                 Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                 pr_number);
-
         // Get repository info
         let pr_task = tasks.pulls().find(|(uuid, _)| **uuid == pr_uuid).unwrap().1;
         let repo = crate::repo::Repository {
@@ -407,18 +360,16 @@ fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> anyhow::Result<()> {
         let refreshed_pr = match tasks.insert_or_refresh_pr(&sh, &repo, pr_number) {
             Ok(pr) => pr,
             Err(e) => {
-                eprintln!("[{}] Failed to refresh PR #{}: {}", 
-                         Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                         pr_number, e);
+                logger.error(format_args!(
+                    "Failed to refresh PR #{}: {}", 
+                    pr_number, e,
+                ));
                 continue;
             }
         };
 
         // If merge status is no longer NeedSig after refresh, skip
         if *refreshed_pr.merge_status() != MergeStatus::NeedSig {
-            eprintln!("[{}] PR #{} merge status changed during refresh, skipping", 
-                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                     pr_number);
             continue;
         }
 
@@ -429,9 +380,10 @@ fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> anyhow::Result<()> {
         let has_signature = match crate::jj::jj_log(&sh, "if(signature, \"true\", \"false\")", &merge_change_id) {
             Ok(result) => result.trim() == "true",
             Err(e) => {
-                eprintln!("[{}] Failed to check signature for PR #{}: {}", 
-                         Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                         pr_number, e);
+                logger.error(format_args!(
+                    "Failed to check signature for PR #{}: {}", 
+                    pr_number, e,
+                ));
                 continue;
             }
         };
@@ -440,9 +392,10 @@ fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> anyhow::Result<()> {
         let refreshed_pr = refreshed_pr.clone();
         let description = merge_description::compute_merge_description(&sh, tasks, &refreshed_pr, &merge_change_id)?;
         if let Err(e) = cmd!(sh, "jj describe --quiet -r {merge_change_id} -m {description}").run() {
-            eprintln!("[{}] Failed to update description for PR #{}: {}", 
-                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                     pr_number, e);
+            logger.error(format_args!(
+                "Failed to update description for PR #{}: {}", 
+                pr_number, e,
+            ));
             continue;
         }
 
@@ -451,9 +404,10 @@ fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> anyhow::Result<()> {
             let merge_commit_id = match crate::jj::jj_log(&sh, "commit_id", merge_change_id) {
                 Ok(id) => id.trim().to_string(),
                 Err(e) => {
-                    eprintln!("[{}] Failed to get commit ID for PR #{}: {}", 
-                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                             pr_number, e);
+                    logger.error(format_args!(
+                        "Failed to get commit ID for PR #{}: {}", 
+                        pr_number, e,
+                    ));
                     continue;
                 }
             };
@@ -461,76 +415,39 @@ fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> anyhow::Result<()> {
             // Get base branch name from stored data
             let base_ref = refreshed_pr.base_ref();
 
-            eprintln!("[{}] {} PR #{} has GPG signature, pushing to {}", 
-                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                     project, pr_number, base_ref);
+            logger.info(format_args!(
+                "{} PR #{} has GPG signature, pushing to {}", 
+                project, pr_number, base_ref,
+            ));
 
             // Push to base branch
             match cmd!(sh, "git push origin {merge_commit_id}:{base_ref}").run() {
                 Ok(_) => {
-                    eprintln!("[{}] Successfully pushed PR #{} to {}", 
-                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                             pr_number, base_ref);
+                    logger.info("Successfully pushed.");
                     
                     // Update merge status to pushed
                     if let Err(e) = tasks.update_pr_merge_status(&pr_uuid, MergeStatus::Pushed) {
-                        eprintln!("[{}] Failed to update merge status for PR #{}: {}", 
-                                 Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                                 pr_number, e);
+                        logger.error(format_args!(
+                            "Failed to update merge status for PR #{}: {}", 
+                            pr_number, e,
+                        ));
                     }
                 }
                 Err(e) => {
-                    eprintln!("[{}] Failed to push PR #{} to {}: {}", 
-                             Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                             pr_number, base_ref, e);
+                    logger.error(format_args!(
+                        "Failed to push PR #{}: {}", 
+                        pr_number, e,
+                    ));
                 }
             }
         } else {
-            eprintln!("[{}] {} PR #{} JJ change {} does not have GPG signature yet", 
-                     Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                     project, pr_number, merge_change_id);
+            // FIXME need to query Github and count ACKs here.
+            logger.info(format_args!(
+                "*** {} PR #{} JJ change {} does not have GPG signature yet. Please sign it.", 
+                project, pr_number, merge_change_id,
+            ));
         }
     }
 
     Ok(())
-}
-
-fn check_needsig_prs(tasks: &TaskCollection, pr_alert_timers: &mut HashMap<usize, Instant>) -> anyhow::Result<()> {
-    for (_, pr_task) in tasks.pulls() {
-        if *pr_task.merge_status() == MergeStatus::NeedSig {
-            let pr_number = pr_task.number();
-            let now = Instant::now();
-            
-            // Check if we should alert (first time or 15 minutes since last alert)
-            let should_alert = pr_alert_timers
-                .get(&pr_number)
-                .map(|last_alert| now.duration_since(*last_alert) >= Duration::from_secs(15 * 60))
-                .unwrap_or(true);
-
-            if should_alert {
-                // Count ACKs by parsing review notes or comments
-                let ack_count = count_acks_in_pr(pr_task)?;
-                
-                eprintln!("[{}] PR #{} needs GPG signature ({} ACKs). Please sign it.", 
-                         Utc::now().format("%Y-%m-%d %H:%M:%S"), 
-                         pr_number, 
-                         ack_count);
-                
-                pr_alert_timers.insert(pr_number, now);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn count_acks_in_pr(pr_task: &crate::tw::PrTask) -> anyhow::Result<usize> {
-    // Simple ACK counting - look for "ACK" in review notes
-    // This is a simplified version; the full implementation would need to
-    // parse GitHub comments and reviews like the Python script does
-    let review_notes = pr_task.review_notes();
-    let ack_count = review_notes.lines()
-        .filter(|line| line.contains("ACK"))
-        .count();
-    
-    Ok(ack_count)
 }
