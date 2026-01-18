@@ -6,7 +6,7 @@ mod state;
 use crate::tw::TaskCollection;
 use crate::tw::serde_types::{CiStatus, ReviewStatus, MergeStatus};
 use crate::git::GitCommit;
-use anyhow::{Context, Result};
+use anyhow::Context as _;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -15,12 +15,14 @@ use std::time::{Duration, Instant};
 use xshell::{Shell, cmd};
 use chrono::Utc;
 
-pub fn run(tasks: &mut TaskCollection) -> Result<(), anyhow::Error> {
+pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut state = state::CiState::new()?;
     let mut pr_alert_timers = HashMap::new();
     let mut backoff_sec = 30;
     let mut sleep_sec = backoff_sec; // trigger status update on first iteration
     let mut busy = false;
+    let mut tasks = TaskCollection::new(task_shell)
+        .context("reloading task database")?;
 
     eprintln!("[{}] Starting CI loop", Utc::now().format("%Y-%m-%d %H:%M:%S"));
 
@@ -32,12 +34,12 @@ pub fn run(tasks: &mut TaskCollection) -> Result<(), anyhow::Error> {
         }
 
         // Find next approved commit that needs CI
-        let next_commit_uuid = find_next_commit_for_ci(tasks);
+        let next_commit_uuid = find_next_commit_for_ci(&tasks);
 
         // Handle idle/busy status
         if next_commit_uuid.is_none() {
             if busy {
-                check_and_push_ready_prs(tasks)?;
+                check_and_push_ready_prs(&mut tasks)?;
                 backoff_sec = 30;
                 sleep_sec = 1;
                 busy = false;
@@ -50,8 +52,8 @@ pub fn run(tasks: &mut TaskCollection) -> Result<(), anyhow::Error> {
                         backoff_sec *= 2;
                     }
 
-                    check_and_push_ready_prs(tasks)?;
-                    check_needsig_prs(tasks, &mut pr_alert_timers)?;
+                    check_and_push_ready_prs(&mut tasks)?;
+                    check_needsig_prs(&mut tasks, &mut pr_alert_timers)?;
 
                     eprintln!("[{}] Nothing to do. (Next message in {} minutes.)", 
                              Utc::now().format("%Y-%m-%d %H:%M:%S"), 
@@ -77,7 +79,7 @@ pub fn run(tasks: &mut TaskCollection) -> Result<(), anyhow::Error> {
         // Process the commit
         let commit_task = tasks.commit(&commit_uuid).unwrap(); // Re-get after update
         let commit_task = commit_task.clone(); // un-borrow `tasks`
-        match process_commit(tasks, &commit_task, &mut state) {
+        match process_commit(&mut tasks, &commit_task, &mut state) {
             Ok(success) => {
                 if success {
                     eprintln!("[{}] Build succeeded for commit {}", 
@@ -87,7 +89,7 @@ pub fn run(tasks: &mut TaskCollection) -> Result<(), anyhow::Error> {
                     
                     // Check all PRs containing this commit for merge readiness
                     let affected_prs: Vec<_> = tasks.pulls()
-                        .filter(|(_, pr_task)| pr_task.commits(tasks).any(|c| c.commit_id() == commit_task.commit_id()))
+                        .filter(|(_, pr_task)| pr_task.commits(&tasks).any(|c| c.commit_id() == commit_task.commit_id()))
                         .map(|(pr_uuid, pr_task)| (*pr_uuid, pr_task.number()))
                         .collect();
 
@@ -101,7 +103,7 @@ pub fn run(tasks: &mut TaskCollection) -> Result<(), anyhow::Error> {
                         }
                     }
                     
-                    check_for_pushable_merges(tasks, &commit_uuid)?;
+                    check_for_pushable_merges(&mut tasks, &commit_uuid)?;
                 } else {
                     eprintln!("[{}] Build failed for commit {}", 
                              Utc::now().format("%Y-%m-%d %H:%M:%S"), 
@@ -138,7 +140,7 @@ fn process_commit(
     tasks: &mut TaskCollection, 
     commit_task: &crate::tw::CommitTask, 
     state: &mut state::CiState
-) -> Result<bool> {
+) -> anyhow::Result<bool> {
     let sh = Shell::new()?;
     let repo_root = commit_task.repo_root();
     let _push_dir = sh.push_dir(repo_root);
@@ -280,7 +282,7 @@ fn process_commit(
     }
 }
 
-fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> Result<Vec<String>> {
+fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<Vec<String>> {
     let output = cmd!(sh, "git ls-tree -r --name-only {commit_id}")
         .read()
         .context("Failed to list files in commit")?;
@@ -300,7 +302,7 @@ fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> Result<Vec<String>
     Ok(lockfiles)
 }
 
-fn save_error_to_file(repo_root: &Path, commit_id: &GitCommit, operation: &str, content: &str) -> Result<()> {
+fn save_error_to_file(repo_root: &Path, commit_id: &GitCommit, operation: &str, content: &str) -> anyhow::Result<()> {
     let error_dir = repo_root.parent().unwrap_or(repo_root);
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
     let filename = format!("nix-error-{}-{}-{}.log", commit_id, operation, timestamp);
@@ -316,7 +318,7 @@ fn save_error_to_file(repo_root: &Path, commit_id: &GitCommit, operation: &str, 
     Ok(())
 }
 
-fn check_for_pushable_merges(tasks: &mut TaskCollection, _commit_uuid: &uuid::Uuid) -> Result<()> {
+fn check_for_pushable_merges(tasks: &mut TaskCollection, _commit_uuid: &uuid::Uuid) -> anyhow::Result<()> {
     let mut to_update = vec![];
     // Check all PRs to see if they're ready for approval or merge status update
     for (_, pr_task) in tasks.pulls() {
@@ -377,7 +379,7 @@ fn check_for_pushable_merges(tasks: &mut TaskCollection, _commit_uuid: &uuid::Uu
     Ok(())
 }
 
-fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> Result<()> {
+fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> anyhow::Result<()> {
     let sh = Shell::new()?;
     
     // Find PRs with merge_status:needsig. Collect into a Vec to avoid keepin
@@ -491,7 +493,7 @@ fn check_and_push_ready_prs(tasks: &mut TaskCollection) -> Result<()> {
     Ok(())
 }
 
-fn check_needsig_prs(tasks: &TaskCollection, pr_alert_timers: &mut HashMap<usize, Instant>) -> Result<()> {
+fn check_needsig_prs(tasks: &TaskCollection, pr_alert_timers: &mut HashMap<usize, Instant>) -> anyhow::Result<()> {
     for (_, pr_task) in tasks.pulls() {
         if *pr_task.merge_status() == MergeStatus::NeedSig {
             let pr_number = pr_task.number();
@@ -519,7 +521,7 @@ fn check_needsig_prs(tasks: &TaskCollection, pr_alert_timers: &mut HashMap<usize
     Ok(())
 }
 
-fn count_acks_in_pr(pr_task: &crate::tw::PrTask) -> Result<usize> {
+fn count_acks_in_pr(pr_task: &crate::tw::PrTask) -> anyhow::Result<usize> {
     // Simple ACK counting - look for "ACK" in review notes
     // This is a simplified version; the full implementation would need to
     // parse GitHub comments and reviews like the Python script does

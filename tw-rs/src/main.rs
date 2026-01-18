@@ -142,7 +142,7 @@ fn real_main(
             Action::Refresh => {
                 eprintln!("[invoking gh here]");
             }
-            Action::Run => run::run(tasks)?,
+            Action::Run => run::run(shell)?,
         }
         return Ok(());
     } else {
