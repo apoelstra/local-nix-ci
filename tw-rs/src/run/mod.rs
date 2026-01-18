@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 use xshell::{Shell, cmd};
 use chrono::Utc;
@@ -19,7 +20,6 @@ struct CiState {
     local_ci_commit_id: String,
     temp_nix_dir: xshell::TempDir,
     pr_alert_timers: HashMap<usize, Instant>,
-    ci_dirty_suffix: String,
     last_ci_check: Instant,
 }
 
@@ -61,13 +61,10 @@ impl CiState {
             .run()
             .is_err();
 
-        let ci_dirty_suffix = if is_dirty {
+        if is_dirty {
             eprintln!("[{}] WARNING: LOCAL_CI repo is dirty, appending -dirty to commit tasks", 
                      Utc::now().format("%Y-%m-%d %H:%M:%S"));
             local_ci_commit_id.push_str("-dirty");
-            "-dirty".to_string()
-        } else {
-            String::new()
         };
 
         eprintln!("[{}] LOCAL_CI commit ID: {}", 
@@ -102,7 +99,6 @@ impl CiState {
             local_ci_commit_id,
             temp_nix_dir,
             pr_alert_timers: HashMap::new(),
-            ci_dirty_suffix,
             last_ci_check: Instant::now(),
         })
     }
@@ -124,10 +120,9 @@ impl CiState {
             .trim()
             .to_string();
 
-        let expected_commit = if self.ci_dirty_suffix.is_empty() {
-            &self.local_ci_commit_id
-        } else {
-            self.local_ci_commit_id.strip_suffix("-dirty").unwrap_or(&self.local_ci_commit_id)
+        let (already_dirty, expected_commit) = match self.local_ci_commit_id.strip_suffix("-dirty") {
+            Some(stripped) => (true, stripped),
+            None => (false, self.local_ci_commit_id.as_str()),
         };
 
         if current_commit != expected_commit {
@@ -142,10 +137,10 @@ impl CiState {
             .run()
             .is_err();
 
-        if is_dirty && self.ci_dirty_suffix.is_empty() {
+        if is_dirty && !already_dirty {
             eprintln!("[{}] WARNING: LOCAL_CI repo became dirty. Please restart the program.", 
                      Utc::now().format("%Y-%m-%d %H:%M:%S"));
-        } else if !is_dirty && !self.ci_dirty_suffix.is_empty() {
+        } else if !is_dirty && already_dirty {
             eprintln!("[{}] WARNING: LOCAL_CI repo is no longer dirty but was dirty on startup. Please restart the program.", 
                      Utc::now().format("%Y-%m-%d %H:%M:%S"));
         }
@@ -327,7 +322,7 @@ fn process_commit(
     // Add ci_dirty_suffix to commit task if needed
     tasks.update_commit_local_ci_commit_id(
         commit_task.uuid(),
-        format!("{}{}", state.local_ci_commit_id, state.ci_dirty_suffix),
+        state.local_ci_commit_id.clone(),
     ).context("failed adding local CI commit ID to task")?;
 
     // Instantiate derivation. Because we want to capture our streams even if they fail,
@@ -336,13 +331,14 @@ fn process_commit(
              Utc::now().format("%Y-%m-%d %H:%M:%S"), 
              commit_task.commit_id());
 
-    let instantiate_result = cmd!(sh, "nix-instantiate")
+    let instantiate_result = Command::new("nix-instantiate")
         .arg("--arg").arg("inlineJsonConfig")
         .arg(format!("{{ gitDir = \"{}\"; projectName = \"{}\"; }}", repo_root.display(), project))
         .arg("--arg").arg("inlineCommitList")
         .arg(format!("[ {} ]", commit_str))
         .arg("--arg").arg("prNum").arg("\"\"")
         .arg(&nixfile_path)
+        .current_dir(repo_root)
         .output();
 
     let derivation_path = match instantiate_result {
@@ -367,9 +363,8 @@ fn process_commit(
             }
         }
         Err(e) => {
-            let mut error_content = format!("Failed to run nix-instantiate for commit {}: {}", 
+            let error_content = format!("Failed to run nix-instantiate for commit {}: {}", 
                                        commit_task.commit_id(), e);
-            error_content.push_str("\nStdout:\n");
             save_error_to_file(&repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
             return Ok(false);
         }
@@ -380,7 +375,7 @@ fn process_commit(
              Utc::now().format("%Y-%m-%d %H:%M:%S"), 
              commit_task.commit_id());
 
-    let build_result = cmd!(sh, "nix-build")
+    let build_result = Command::new("nix-build")
         .arg("--builders-use-substitutes")
         .arg("--no-build-output")
         .arg("--no-out-link")
@@ -391,6 +386,7 @@ fn process_commit(
         .arg(&derivation_path)
         .arg("--log-format").arg("internal-json")
         .arg("-v")
+        .current_dir(repo_root)
         .output();
 
     match build_result {
