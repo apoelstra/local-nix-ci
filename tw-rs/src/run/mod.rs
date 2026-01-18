@@ -55,9 +55,11 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                     check_and_push_ready_prs(&mut tasks)?;
                     check_needsig_prs(&mut tasks, &mut pr_alert_timers)?;
 
-                    eprintln!("[{}] Nothing to do. (Next message in {} minutes.)", 
+                    eprintln!("[{}] Nothing to do. Reloading task database. (Next message in {} minutes.)", 
                              Utc::now().format("%Y-%m-%d %H:%M:%S"), 
                              backoff_sec / 60);
+                    tasks = TaskCollection::new(task_shell)
+                        .context("reloading task database")?;
                     sleep_sec = 1;
                 }
             }
