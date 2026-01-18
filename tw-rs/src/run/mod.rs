@@ -8,6 +8,7 @@ use crate::tw::TaskCollection;
 use crate::tw::serde_types::{CiStatus, ReviewStatus, MergeStatus};
 use crate::git::GitCommit;
 use anyhow::Context as _;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -336,6 +337,78 @@ fn post_approvals(logger: &log::Logger, tasks: &mut TaskCollection, _commit_uuid
     Ok(())
 }
 
+fn get_acks_from_github(
+    sh: &Shell,
+    pr_number: usize,
+    head_commit: &GitCommit,
+) -> anyhow::Result<HashMap<String, String>> {
+    // Look for abbreviated commit id, because not everyone wants to type/paste
+    // the whole thing and the chance of collisions within a PR is small enough
+    let head_abbrev = &head_commit.to_string()[0..6];
+    let mut acks = HashMap::new();
+
+    // Get PR comments using gh CLI
+    let pr_number = pr_number.to_string();
+    let comments_output = cmd!(sh, "gh pr view {pr_number} --json comments")
+        .read()
+        .context("Failed to get PR comments")?;
+    
+    let comments: serde_json::Value = serde_json::from_str(&comments_output)
+        .context("Failed to parse comments JSON")?;
+
+    if let Some(comments_array) = comments["comments"].as_array() {
+        for comment in comments_array {
+            if let (Some(body), Some(author)) = (
+                comment["body"].as_str(),
+                comment["author"]["login"].as_str()
+            ) {
+                // Look for ACK lines that contain the abbreviated commit ID
+                for line in body.lines() {
+                    if line.contains("ACK") 
+                        && line.contains(head_abbrev)
+                        && !line.starts_with("> ")     // omit if quoted comment
+                        && !line.starts_with("    ")   // omit if markdown indentation
+                    {
+                        acks.insert(author.to_string(), line.to_string());
+                        break; // Only take the first ACK line per comment
+                    }
+                }
+            }
+        }
+    }
+
+    // Get PR reviews using gh CLI
+    let reviews_output = cmd!(sh, "gh pr view {pr_number} --json reviews")
+        .read()
+        .context("Failed to get PR reviews")?;
+    
+    let reviews: serde_json::Value = serde_json::from_str(&reviews_output)
+        .context("Failed to parse reviews JSON")?;
+
+    if let Some(reviews_array) = reviews["reviews"].as_array() {
+        for review in reviews_array {
+            if let (Some(body), Some(author)) = (
+                review["body"].as_str(),
+                review["author"]["login"].as_str()
+            ) {
+                // Look for ACK lines that contain the abbreviated commit ID
+                for line in body.lines() {
+                    if line.contains("ACK") 
+                        && line.contains(head_abbrev)
+                        && !line.starts_with("> ")     // omit if quoted comment
+                        && !line.starts_with("    ")   // omit if markdown indentation
+                    {
+                        acks.insert(author.to_string(), line.to_string());
+                        break; // Only take the first ACK line per review
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(acks)
+}
+
 fn check_and_push_ready_prs(
     logger: &log::Logger,
     tasks: &mut TaskCollection,
@@ -441,10 +514,33 @@ fn check_and_push_ready_prs(
                 }
             }
         } else {
-            // FIXME need to query Github and count ACKs here.
+            // Query GitHub for ACKs on this PR
+            let tip_commit = refreshed_pr.tip_commit(tasks);
+            let ack_count = match get_acks_from_github(&sh, pr_number, tip_commit.commit_id()) {
+                Ok(acks) => {
+                    if !acks.is_empty() {
+                        logger.info(format_args!(
+                            "Found {} ACK(s) for PR #{}:", 
+                            acks.len(), pr_number
+                        ));
+                        for (author, ack_msg) in &acks {
+                            logger.info(format_args!("  {}: {}", author, ack_msg));
+                        }
+                    }
+                    acks.len()
+                }
+                Err(e) => {
+                    logger.warn(format_args!(
+                        "Failed to get ACKs for PR #{}: {}", 
+                        pr_number, e
+                    ));
+                    0
+                }
+            };
+
             logger.info(format_args!(
-                "*** {} PR #{} JJ change {} does not have GPG signature yet. Please sign it.", 
-                project, pr_number, merge_change_id,
+                "*** {} PR #{} JJ change {} does not have GPG signature yet. Please sign it. ({} ACK(s))", 
+                project, pr_number, merge_change_id, ack_count,
             ));
         }
     }
