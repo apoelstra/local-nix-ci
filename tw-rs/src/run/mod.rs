@@ -141,7 +141,7 @@ fn process_commit(
 ) -> Result<bool> {
     let sh = Shell::new()?;
     let repo_root = commit_task.repo_root();
-    let _push_dir = sh.push_dir(&repo_root);
+    let _push_dir = sh.push_dir(repo_root);
 
     // Compute nixfile path
     let project = commit_task.project();
@@ -225,14 +225,14 @@ fn process_commit(
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 );
-                save_error_to_file(&repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
+                save_error_to_file(repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
                 return Ok(false);
             }
         }
         Err(e) => {
             let error_content = format!("Failed to run nix-instantiate for commit {}: {}", 
                                        commit_task.commit_id(), e);
-            save_error_to_file(&repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
+            save_error_to_file(repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
             return Ok(false);
         }
     };
@@ -267,14 +267,14 @@ fn process_commit(
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 );
-                save_error_to_file(&repo_root, commit_task.commit_id(), "build", &error_content)?;
+                save_error_to_file(repo_root, commit_task.commit_id(), "build", &error_content)?;
                 Ok(false)
             }
         }
         Err(e) => {
             let error_content = format!("Failed to run nix-build for commit {}: {}", 
                                        commit_task.commit_id(), e);
-            save_error_to_file(&repo_root, commit_task.commit_id(), "build", &error_content)?;
+            save_error_to_file(repo_root, commit_task.commit_id(), "build", &error_content)?;
             Ok(false)
         }
     }

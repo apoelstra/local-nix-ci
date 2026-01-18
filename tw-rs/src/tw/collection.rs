@@ -627,7 +627,7 @@ impl TaskCollection {
 
         // Get the merge commit
         let pr_task = pr_task.clone(); // un-borrow self.pulls
-        let merge_commit = self.commit(&pr_task.merge_uuid())
+        let merge_commit = self.commit(pr_task.merge_uuid())
             .expect("merge commit should exist")
             .clone();
 
