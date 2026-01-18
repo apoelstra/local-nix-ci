@@ -209,13 +209,13 @@ impl TaskCollection {
         let num_str = num.to_string();
 
         // Create 'task add' or 'task modify' command as appropriate.
-        let (task_cmd, new_uuid) = match self
+        let (task_cmd, existing_uuid) = match self
             .pull_numbers
             .get(&(Cow::Borrowed(&repo.project_name), num))
         {
             Some(uuid) => {
-                let uuid = uuid.to_string();
-                (cmd!(task_shell, "task {uuid} modify"), false)
+                let uuid_s = uuid.to_string();
+                (cmd!(task_shell, "task {uuid_s} modify"), Some(*uuid))
             }
             None => {
                 let project_name = &repo.project_name;
@@ -225,7 +225,7 @@ impl TaskCollection {
                         task_shell,
                         "task add rc.confirmation=off rc.verbose=new-uuid project:local-ci.{project_name} pr_number:{num}"
                     ),
-                    true,
+                    None,
                 )
             }
         };
@@ -369,19 +369,17 @@ impl TaskCollection {
 
         // Obtain the PR's UUID, either from the output of `task add` or from our database,
         // and do the final modifications to hook up the merge commit and PR commits.
-        let pr_uuid = if new_uuid {
-            // Extract UUID from the output
-            let idx = match output.find("Created task ") {
-                Some(idx) => idx + 13,
-                None => panic!("Did not find 'Created task' in output of task add: {output}"),
-            };
-            let pr_uuid_str = &output[idx..idx + 36];
-            Uuid::try_parse(pr_uuid_str).map_err(TaskCollectionError::ParseUuid)?
-        } else {
-            *self
-                .pull_numbers
-                .get(&(Cow::Borrowed(&repo.project_name), num))
-                .expect("PR was in main lookup table but not num/project name lookup tabel")
+        let pr_uuid = match existing_uuid {
+            Some(uuid) => uuid,
+            None => {
+                // Extract UUID from the output
+                let idx = match output.find("Created task ") {
+                    Some(idx) => idx + 13,
+                    None => panic!("Did not find 'Created task' in output of task add: {output}"),
+                };
+                let pr_uuid_str = &output[idx..idx + 36];
+                Uuid::try_parse(pr_uuid_str).map_err(TaskCollectionError::ParseUuid)?
+            }
         };
         let pr_uuid_str = pr_uuid.to_string();
 
@@ -402,7 +400,7 @@ impl TaskCollection {
         .quiet()
         .run();
 
-        if !new_uuid {
+        if existing_uuid.is_some() {
             let old = &self.pulls[&pr_uuid];
             if base_commit != old.base_commit()
                 || commit_uuids.last().expect("checked above") != old.dep_uuid()
