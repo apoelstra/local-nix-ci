@@ -23,8 +23,6 @@ pub struct PrInfo {
     pub author: Author,
     #[serde(default)]
     pub commits: Vec<Commit>,
-    #[serde(rename = "baseRefOid")]
-    pub base_commit: GitCommit,
     #[serde(rename = "headRefOid")]
     pub head_commit: GitCommit,
     #[serde(rename = "baseRefName")]

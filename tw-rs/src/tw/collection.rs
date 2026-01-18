@@ -233,7 +233,7 @@ impl TaskCollection {
         // Get PR data from GitHub
         let pr_json = cmd!(
             task_shell,
-            "gh pr view {num_str} --json commits,title,author,baseRefOid,headRefOid,baseRefName"
+            "gh pr view {num_str} --json commits,title,author,headRefOid,baseRefName"
         )
         .read()
         .map_err(TaskCollectionError::Shell)?;
@@ -273,24 +273,25 @@ impl TaskCollection {
         for commit_id in pr_data.commit_ids() {
             git::fetch_commit(task_shell, commit_id).map_err(TaskCollectionError::Git)?;
         }
-        git::fetch_commit(task_shell, &pr_data.base_commit).map_err(TaskCollectionError::Git)?;
+        git::fetch_commit(task_shell, &pr_data.base_ref).map_err(TaskCollectionError::Git)?;
 
         // Create merge commit, if needed.
         let head_commit = &pr_data.head_commit;
-        let base_commit = &pr_data.base_commit;
+        let base_commit = git::resolve_ref(task_shell, &pr_data.base_ref)
+            .map_err(TaskCollectionError::Git)?;
 
         let mut create_new_merge = true;
         if let Some(uuid) = existing_uuid {
             let old = &self.pulls[&uuid];
             let old_tip = self.commits[old.dep_uuid()].commit_id();
-            if base_commit == old.base_commit() && head_commit == old_tip {
+            if base_commit == *old.base_commit() && head_commit == old_tip {
                 create_new_merge = false;
             }
 
         }
 
         if create_new_merge {
-            let merge_change_id = crate::jj::jj_new(task_shell, &[&head_commit, &base_commit])
+            let merge_change_id = crate::jj::jj_new(task_shell, &[head_commit, &base_commit])
                 .map_err(TaskCollectionError::Jj)?;
             let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
                 .map_err(TaskCollectionError::Jj)?;
