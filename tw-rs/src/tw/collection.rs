@@ -209,7 +209,7 @@ impl TaskCollection {
         let num_str = num.to_string();
 
         // Create 'task add' or 'task modify' command as appropriate.
-        let (task_cmd, existing_uuid) = match self
+        let (mut task_cmd, existing_uuid) = match self
             .pull_numbers
             .get(&(Cow::Borrowed(&repo.project_name), num))
         {
@@ -275,22 +275,51 @@ impl TaskCollection {
         }
         git::fetch_commit(task_shell, &pr_data.base_commit).map_err(TaskCollectionError::Git)?;
 
-        // Create merge commit directly using jj
+        // Create merge commit, if needed.
         let head_commit = &pr_data.head_commit;
         let base_commit = &pr_data.base_commit;
-        let merge_change_id = crate::jj::jj_new(task_shell, &[&head_commit, &base_commit])
-            .map_err(TaskCollectionError::Jj)?;
-        let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
-            .map_err(TaskCollectionError::Jj)?;
-        let merge_commit_id = merge_commit_id
-            .parse::<GitCommit>()
-            .expect("if jj new succeeded, then we should have a valid commit id");
 
-        // Check if the merge has conflicts
-        let conflicts_check =
-            crate::jj::jj_log(task_shell, "if(conflict,\"x\",\"\")", &merge_change_id)
+        let mut create_new_merge = true;
+        if let Some(uuid) = existing_uuid {
+            let old = &self.pulls[&uuid];
+            let old_tip = self.commits[old.dep_uuid()].commit_id();
+            if base_commit == old.base_commit() && head_commit == old_tip {
+                create_new_merge = false;
+            }
+
+        }
+
+        if create_new_merge {
+            let merge_change_id = crate::jj::jj_new(task_shell, &[&head_commit, &base_commit])
                 .map_err(TaskCollectionError::Jj)?;
-        let has_conflicts = !conflicts_check.is_empty();
+            let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
+                .map_err(TaskCollectionError::Jj)?;
+            let merge_commit_id = merge_commit_id
+                .parse::<GitCommit>()
+                .expect("if jj new succeeded, then we should have a valid commit id");
+
+            // Create merge commit task
+            let merge_commit = self.insert_or_refresh_commit(
+                task_shell,
+                &repo.project_name,
+                &repo.repo_root,
+                &merge_commit_id,
+            )?;
+            let merge_commit_uuid = merge_commit.uuid().to_string();
+
+            // Add HAS_CONFLICTS tag if the merge has conflicts
+            let conflicts_check =
+                crate::jj::jj_log(task_shell, "if(conflict,\"x\",\"\")", &merge_change_id)
+                    .map_err(TaskCollectionError::Jj)?;
+            if !conflicts_check.is_empty() {
+                let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS").quiet().run();
+            }
+
+            task_cmd = task_cmd
+                .arg(format!("merge_uuid:{}", merge_commit_uuid))
+                .arg("merge_status:unstarted")
+                .arg(format!("merge_change_id:{}", merge_change_id));
+        }
 
         // Add PR-specific fields to the task command, and run it.
         let description = format!("PR #{}: {}", num, pr_data.title);
@@ -305,8 +334,7 @@ impl TaskCollection {
             ))
             .arg(format!("description:{}", description))
             .arg(format!("base_commit:{}", base_commit))
-            .arg(format!("base_ref:{}", pr_data.base_ref))
-            .arg(format!("merge_change_id:{}", merge_change_id));
+            .arg(format!("base_ref:{}", pr_data.base_ref));
         let output = task_cmd.read().map_err(TaskCollectionError::Shell)?;
 
         // Create commit tasks for all commits in the PR and collect their UUIDs
@@ -353,22 +381,9 @@ impl TaskCollection {
             }
         }
 
-        // Create merge commit task
-        let merge_commit = self.insert_or_refresh_commit(
-            task_shell,
-            &repo.project_name,
-            &repo.repo_root,
-            &merge_commit_id,
-        )?;
-        let merge_commit_uuid = merge_commit.uuid().to_string();
-
-        // Add HAS_CONFLICTS tag if the merge has conflicts
-        if has_conflicts {
-            let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS").quiet().run();
-        }
-
         // Obtain the PR's UUID, either from the output of `task add` or from our database,
-        // and do the final modifications to hook up the merge commit and PR commits.
+        // and do the final modifications to hook up the and PR commits. We do this separately
+        // with 'task modify' because the 'depends:' key is weird.
         let pr_uuid = match existing_uuid {
             Some(uuid) => uuid,
             None => {
@@ -392,27 +407,6 @@ impl TaskCollection {
         )
         .quiet()
         .run();
-        // Add UDA to the PR task for the merge commit
-        let _ = cmd!(
-            task_shell,
-            "task {pr_uuid_str} modify merge_uuid:{merge_commit_uuid}"
-        )
-        .quiet()
-        .run();
-
-        if existing_uuid.is_some() {
-            let old = &self.pulls[&pr_uuid];
-            if base_commit != old.base_commit()
-                || commit_uuids.last().expect("checked above") != old.dep_uuid()
-            {
-                let _ = cmd!(
-                    task_shell,
-                    "task {pr_uuid_str} modify merge_status:unstarted"
-                )
-                .quiet()
-                .run();
-            }
-        }
 
         // (Re-)insert the PR UUID into our PR number lookup table
         self.pull_numbers
