@@ -516,6 +516,70 @@ impl TaskCollection {
         entry.get_mut().merge_status = status;
         Ok(())
     }
+
+    pub fn update_commit_review_status(
+        &mut self,
+        uuid: &uuid::Uuid,
+        status: crate::tw::serde_types::ReviewStatus,
+        review_notes: String,
+    ) -> Result<(), UpdateError> {
+        let sh = crate::tw::task_shell()
+            .map_err(UpdateError::CreateShell)?;
+
+        let mut entry = match self.commits.entry(*uuid) {
+            Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
+            Entry::Occupied(hole) => hole,
+        };
+
+        let uuid_str = uuid.to_string();
+        let status_str = match status {
+            crate::tw::serde_types::ReviewStatus::Approved => "approved",
+            crate::tw::serde_types::ReviewStatus::Nacked => "nacked",
+            crate::tw::serde_types::ReviewStatus::NeedsChange => "needschange",
+            crate::tw::serde_types::ReviewStatus::Unreviewed => "unreviewed",
+        };
+
+        cmd!(sh, "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}")
+            .run()
+            .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
+
+        let commit = entry.get_mut();
+        commit.review_status = status;
+        commit.review_notes = review_notes;
+        Ok(())
+    }
+
+    pub fn update_pr_review_status(
+        &mut self,
+        uuid: &uuid::Uuid,
+        status: crate::tw::serde_types::ReviewStatus,
+        review_notes: String,
+    ) -> Result<(), UpdateError> {
+        let sh = crate::tw::task_shell()
+            .map_err(UpdateError::CreateShell)?;
+
+        let mut entry = match self.pulls.entry(*uuid) {
+            Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
+            Entry::Occupied(hole) => hole,
+        };
+
+        let uuid_str = uuid.to_string();
+        let status_str = match status {
+            crate::tw::serde_types::ReviewStatus::Approved => "approved",
+            crate::tw::serde_types::ReviewStatus::Nacked => "nacked",
+            crate::tw::serde_types::ReviewStatus::NeedsChange => "needschange",
+            crate::tw::serde_types::ReviewStatus::Unreviewed => "unreviewed",
+        };
+
+        cmd!(sh, "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}")
+            .run()
+            .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
+
+        let pr = entry.get_mut();
+        pr.review_status = status;
+        pr.review_notes = review_notes;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

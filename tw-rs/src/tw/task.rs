@@ -16,8 +16,8 @@ pub struct PrTask {
 
     project: String,
     repo_root: PathBuf,
-    review_status: ReviewStatus,
-    review_notes: String,
+    pub(super) review_status: ReviewStatus,
+    pub(super) review_notes: String,
 
     title: String,
     author: String,
@@ -114,8 +114,8 @@ pub struct CommitTask {
 
     project: String,
     repo_root: PathBuf,
-    review_status: ReviewStatus,
-    review_notes: String,
+    pub(super) review_status: ReviewStatus,
+    pub(super) review_notes: String,
 
     commit_id: GitCommit,
     is_tip: bool,

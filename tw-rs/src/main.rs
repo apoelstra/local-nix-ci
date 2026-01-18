@@ -468,25 +468,15 @@ fn review_commit_interactive(
             };
 
             // Update the task
-            let uuid = commit_task.uuid().to_string();
-            let status_str = match status {
-                ReviewStatus::Approved => "approved",
-                ReviewStatus::Nacked => "nacked",
-                ReviewStatus::NeedsChange => "needschange",
-                ReviewStatus::Unreviewed => "unreviewed",
-            };
-
-            cmd!(
-                shell,
-                "task {uuid} modify review_status:{status_str} review_notes:{review_notes}"
-            )
-            .run()
-            .context("updating task review status")?;
+            let uuid = *commit_task.uuid(); // borrowck
+            tasks.update_commit_review_status(&uuid, status, review_notes.clone())
+                .context("updating commit review status")?;
 
             println!("Commit {} review status updated to: {}", commit_id, status);
             if !review_notes.is_empty() {
                 println!("Review notes saved.");
             }
+
 
             break;
         }
@@ -599,20 +589,8 @@ fn review_pr_interactive(
                 get_pr_review_notes_from_editor(shell, pull, &status, tip_commit, &commits)?;
 
             // Update the task
-            let uuid = pull.uuid().to_string();
-            let status_str = match status {
-                ReviewStatus::Approved => "approved",
-                ReviewStatus::Nacked => "nacked",
-                ReviewStatus::NeedsChange => "needschange",
-                ReviewStatus::Unreviewed => "unreviewed",
-            };
-
-            cmd!(
-                shell,
-                "task {uuid} modify review_status:{status_str} review_notes:{review_notes}"
-            )
-            .run()
-            .context("updating PR review status")?;
+            tasks.update_pr_review_status(pull.uuid(), status, review_notes.clone())
+                .context("updating PR review status")?;
 
             println!("PR #{} review status updated to: {}", pull.number(), status);
             if !review_notes.is_empty() {
