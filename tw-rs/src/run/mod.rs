@@ -220,6 +220,23 @@ pub fn run(tasks: &mut TaskCollection) -> Result<(), anyhow::Error> {
                              Utc::now().format("%Y-%m-%d %H:%M:%S"), 
                              commit_task.commit_id());
                     tasks.update_commit_ci_status(&commit_uuid, CiStatus::Success)?;
+                    
+                    // Check all PRs containing this commit for merge readiness
+                    let affected_prs: Vec<_> = tasks.pulls()
+                        .filter(|(_, pr_task)| pr_task.commits(tasks).any(|c| c.commit_id() == commit_task.commit_id()))
+                        .map(|(pr_uuid, pr_task)| (*pr_uuid, pr_task.number()))
+                        .collect();
+
+                    for (pr_uuid, pr_number) in affected_prs {
+                        match tasks.check_and_update_pr_merge_readiness(&pr_uuid) {
+                            Ok(true) => eprintln!("[{}] PR #{} is now ready for merge (status updated to needsig)", 
+                                                 Utc::now().format("%Y-%m-%d %H:%M:%S"), pr_number),
+                            Ok(false) => {}, // No change needed
+                            Err(e) => eprintln!("[{}] Warning: Failed to check PR #{} merge readiness: {}", 
+                                               Utc::now().format("%Y-%m-%d %H:%M:%S"), pr_number, e),
+                        }
+                    }
+                    
                     check_for_pushable_merges(tasks, &commit_uuid)?;
                 } else {
                     eprintln!("[{}] Build failed for commit {}", 
