@@ -291,7 +291,7 @@ impl TaskCollection {
         }
 
         if create_new_merge {
-            let merge_change_id = crate::jj::jj_new(task_shell, &[head_commit, &base_commit])
+            let merge_change_id = crate::jj::jj_new(task_shell, &[&base_commit, head_commit])
                 .map_err(TaskCollectionError::Jj)?;
             let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
                 .map_err(TaskCollectionError::Jj)?;
