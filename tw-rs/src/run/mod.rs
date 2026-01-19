@@ -282,11 +282,26 @@ fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<Vec
         .read()
         .context("Failed to list files in commit")?;
 
-    let lockfiles: Vec<String> = output
+    let mut lockfiles: Vec<String> = output
         .lines()
         .filter(|line| line.contains("Cargo") && line.ends_with(".lock"))
         .map(|s| s.to_string())
         .collect();
+
+    // If no lockfiles found in commit, search the ".." directory for auxiliary lockfiles
+    if lockfiles.is_empty() {
+        if let Ok(aux_output) = cmd!(sh, "ls ../*.lock").ignore_status().read() {
+            for line in aux_output.lines() {
+                let filename = line.trim();
+                if !filename.is_empty() && filename.contains("Cargo") {
+                    // Convert to absolute path using realpath
+                    if let Ok(absolute_path) = cmd!(sh, "realpath ../{filename}").read() {
+                        lockfiles.push(absolute_path.trim().to_string());
+                    }
+                }
+            }
+        }
+    }
 
     Ok(lockfiles)
 }
