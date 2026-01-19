@@ -15,14 +15,16 @@ use std::process::Command;
 use std::time::Duration;
 use xshell::{Shell, cmd};
 
+const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
+const MAXIMUM_BACKOFF: Duration = Duration::from_hours(1);
+const IDLE_SLEEP: Duration = Duration::from_secs(3);
+
 pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut logger = log::Logger::new();
     let mut state = state::CiState::new()?;
-    let mut backoff_sec = 30;
-    let mut sleep_sec = backoff_sec; // trigger status update on first iteration
+    let mut backoff = INITIAL_BACKOFF;
+    let mut total_sleep = Duration::ZERO;
     let mut busy = false;
-    let mut tasks = TaskCollection::new(task_shell)
-        .context("reloading task database")?;
 
     logger.info(format_args!("Starting CI loop."));
     loop {
@@ -32,7 +34,11 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
         }
 
         // Find next approved commit that needs CI. Call `check_and_push_ready_prs`
-        // except during idle times.
+        // except during idle times. Reload the task database on every loop iteration,
+        // because until we do, we'll miss any updates the user did via CLI. (Later,
+        // when we daemonize this, we can have the user send a reload signal somehow.)
+        let mut tasks = TaskCollection::new(task_shell)
+            .context("reloading task database")?;
         let commit_uuid = match find_next_commit_for_ci(&tasks) {
             Some(uuid) => {
                 check_and_push_ready_prs(&logger, &mut tasks)?;
@@ -41,27 +47,25 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
             None => {
                 if busy {
                     check_and_push_ready_prs(&logger, &mut tasks)?;
-                    backoff_sec = 30;
-                    sleep_sec = 1;
+                    backoff = INITIAL_BACKOFF;
+                    total_sleep = Duration::ZERO;
                     busy = false;
                 } else {
-                    std::thread::sleep(Duration::from_secs(1));
-                    sleep_sec += 1;
+                    std::thread::sleep(IDLE_SLEEP);
+                    total_sleep += IDLE_SLEEP;
 
-                    if sleep_sec >= backoff_sec {
-                        if backoff_sec < 2400 {
-                            backoff_sec *= 2;
+                    if total_sleep >= backoff {
+                        if backoff < MAXIMUM_BACKOFF {
+                            backoff *= 2;
                         }
 
                         check_and_push_ready_prs(&logger, &mut tasks)?;
 
                         logger.info(format_args!(
                             "Nothing to do. Reloading task database. (Next message in {} minutes.)",
-                            backoff_sec / 60,
+                            backoff.as_secs() / 60,
                         )); 
-                        tasks = TaskCollection::new(task_shell)
-                            .context("reloading task database")?;
-                        sleep_sec = 1;
+                        total_sleep = Duration::ZERO
                     }
                 }
                 continue;
