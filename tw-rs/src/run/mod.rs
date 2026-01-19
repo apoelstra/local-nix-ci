@@ -310,6 +310,11 @@ fn save_error_to_file(logger: &log::Logger, repo_root: &Path, commit_id: &GitCom
 fn post_approvals(logger: &log::Logger, tasks: &mut TaskCollection, _commit_uuid: &uuid::Uuid) -> anyhow::Result<()> {
     // Check all PRs to see if they're ready for approval or merge status update
     for (_, pr_task) in tasks.pulls() {
+        // Skip already-pushed things.
+        if *pr_task.merge_status() == MergeStatus::Pushed {
+            continue;
+        }
+
         let all_commits_approved_and_successful = pr_task.commits(tasks)
             .all(|commit| {
                 *commit.review_status() == ReviewStatus::Approved 

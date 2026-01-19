@@ -793,13 +793,18 @@ fn post_github_approval_if_ready(
         };
 
         // Check if we've already posted this exact approval message
-        let existing_reviews_result = cmd!(shell, "gh pr view {pr_num} --json reviews --jq '.reviews[] | select(.state == \"APPROVED\" and .author.login == \"'{current_user}'\") | .body'")
-            .read();
+        let existing_reviews_result = cmd!(
+            shell,
+                "gh pr view {pr_num} --json reviews --jq '[ .reviews[] | select(.state == \"APPROVED\" and .author.login == \"'{current_user}'\") | .body ]'"
+            )
+            .read()
+            .map_err(anyhow::Error::from)
+            .and_then(|json| serde_json::from_str::<Vec<String>>(&json).map_err(anyhow::Error::from));
 
         let should_post_approval = match existing_reviews_result {
             Ok(existing_reviews) => {
                 let already_posted = existing_reviews
-                    .lines()
+                    .iter()
                     .any(|review_body| review_body.trim() == pr_review_notes.trim());
 
                 if already_posted {
@@ -814,10 +819,10 @@ fn post_github_approval_if_ready(
             }
             Err(e) => {
                 println!(
-                    "Warning: Could not check existing reviews ({}), proceeding with approval",
+                    "ERROR: Could not check existing reviews ({}), proceeding with approval",
                     e
                 );
-                true
+                false
             }
         };
 
