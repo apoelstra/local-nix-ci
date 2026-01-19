@@ -65,7 +65,7 @@ impl CiState {
 
         // Create temp directory and copy *.check-pr.nix files
         let temp_nix_dir = sh.create_temp_dir()?;
-        let nix_files = cmd!(sh, "find . -maxdepth 2 -name '*.nix' -type f")
+        let nix_files = cmd!(sh, "find . -maxdepth 2 ( -name '*.nix' -o -name '*.patch' ) -type f")
             .read()
             .context("Failed to find .check-pr.nix files")?;
 

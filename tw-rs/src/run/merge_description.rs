@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::git::GitCommit;
-use crate::tw::TaskCollection;
 
 use std::collections::HashMap;
 
@@ -12,8 +11,8 @@ use serde_json::Value;
 
 pub fn compute_merge_description(
     sh: &Shell,
-    tasks: &TaskCollection,
     pr_task: &crate::tw::PrTask,
+    head_commit: &GitCommit,
     merge_change_id: &str,
 ) -> anyhow::Result<String> {
     let pr_number = pr_task.number();
@@ -44,7 +43,6 @@ pub fn compute_merge_description(
     
     // Get base and head commits
     let base_commit = pr_task.base_commit();
-    let head_commit = pr_task.tip_commit(tasks).commit_id();
 
     // Build description
     let mut message = if !title.is_empty() {

@@ -491,7 +491,7 @@ fn check_and_push_ready_prs(
 
         // Update merge commit description with latest ACKs
         let refreshed_pr = refreshed_pr.clone();
-        let description = merge_description::compute_merge_description(&sh, tasks, &refreshed_pr, &merge_change_id)?;
+        let description = merge_description::compute_merge_description(&sh, &refreshed_pr, refreshed_pr.tip_commit(&tasks).commit_id(), &merge_change_id)?;
         if let Err(e) = cmd!(sh, "jj describe --quiet -r {merge_change_id} -m {description}").quiet().run() {
             logger.error(format_args!(
                 "Failed to update description for PR #{}: {}", 
