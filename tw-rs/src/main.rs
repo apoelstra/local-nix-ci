@@ -684,16 +684,10 @@ fn get_pr_review_notes_from_editor(
         status
     ));
 
-    if *status == ReviewStatus::Approved {
-        template.push_str(
-            "# This will be posted as a Github approval as soon as all CI runs have passed\n",
-        );
-        template.push_str("# and all commits are approved.\n");
-        template.push_str(&format!(
-            "ACK {}; successfully ran local tests\n",
-            tip_commit
-        ));
-    }
+    template.push_str(
+        "# This will be posted as a Github approval as soon as all CI runs have passed\n",
+    );
+    template.push_str("# and all commits are approved.\n");
 
     template.push_str("# Commit Review Information:\n");
     // Add commit review information
@@ -705,13 +699,28 @@ fn get_pr_review_notes_from_editor(
         template.push_str(":\n");
         let review_notes = commit.review_notes();
         if !review_notes.is_empty() {
-            template.push_str(&format!("#   Review: {}\n", review_notes));
+            template.push_str("#   Review:\n");
+            for line in review_notes.lines() {
+                template.push_str(&format!("#   {}\n", line));
+            }
         } else {
             template.push_str("#   Review: (none)\n");
         }
     }
     template
-        .push_str("# Edit the approval message above. Lines starting with # will be removed.\n");
+        .push_str("# Edit the following message. Lines starting with # will be removed.\n");
+    if *status == ReviewStatus::Approved {
+        template.push_str(&format!(
+            "ACK {}; successfully ran local tests\n",
+            tip_commit
+        ));
+    } else {
+        template.push_str(&format!(
+            "Reviewed PR {} with tip {}\n",
+            pull.number(),
+            tip_commit
+        ));
+    }
 
     shell.write_file(&temp_file, template)?;
 
