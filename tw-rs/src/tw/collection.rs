@@ -526,7 +526,7 @@ impl TaskCollection {
         let status_str = match status {
             MergeStatus::Unstarted => "unstarted",
             MergeStatus::NeedSig => "needsig", 
-            MergeStatus::Pushed => "push",
+            MergeStatus::Pushed => "pushed",
         };
 
         cmd!(sh, "task {uuid_str} modify merge_status:{status_str}")

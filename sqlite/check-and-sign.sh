@@ -80,6 +80,8 @@ if [[ "$(echo "$description" | tr -s '[:space:]')" != "$(echo "$actual_descripti
     echo "--- Actual description ---" >&2
     echo "$actual_description" >&2
     echo "--- End ---" >&2
+    echo "$description" >$HOME/old
+    echo "$actual_description" >$HOME/new
     exit 1
 fi
 

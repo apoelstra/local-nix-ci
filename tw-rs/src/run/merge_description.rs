@@ -17,7 +17,7 @@ pub fn compute_merge_description(
     merge_change_id: &str,
 ) -> anyhow::Result<String> {
     let pr_number = pr_task.number();
-    let project = pr_task.project();
+    let project = pr_task.project().replace('.', "/");
     
     // Get merge commit ID from JJ change
     let merge_commit_id = crate::jj::jj_log(sh, "commit_id", merge_change_id)
@@ -62,7 +62,7 @@ pub fn compute_merge_description(
     // Add PR body
     if !body.is_empty() {
         message.push_str("\n\nPull request description:\n\n  ");
-        message.push_str(&body.replace('\n', "\n  "));
+        message.push_str(&body.trim().replace('\r', "").replace('\n', "\n  "));
         message.push('\n');
     }
 
