@@ -10,6 +10,7 @@ use xshell::{Shell, cmd};
 
 use super::task::PrOrCommitTask;
 use super::{CommitTask, PrTask};
+use crate::gh::{compute_merge_description, MergeDescriptionError};
 use crate::git::{self, GitCommit};
 use crate::tw::serde_types::{CiStatus, MergeStatus, ReviewStatus};
 use crate::tw::shell::{self, UniqueUuidError, get_or_insert_unique_uuid};
@@ -422,8 +423,29 @@ impl TaskCollection {
             .map_err(TaskCollectionError::ParseTask)?;
 
         if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
+            // Count ACKs and update merge description.
+            let merge_change_id = pr_task.merge_change_id().to_owned();
+            let description = compute_merge_description(
+                task_shell,
+                &pr_task,
+                pr_task.tip_commit(self).commit_id(),
+                &merge_change_id,
+            ).map_err(TaskCollectionError::MergeDescription)?;
+
+            // Add to map
             self.pulls.insert(pr_uuid, pr_task);
-            
+
+            // Update the description (has no effect on the task database and we don't
+            // even keep track of this; it will invalidate the merge_commit_id but this
+            // is fine; we only keep track of that commit up to its parents (see above
+            // logic for deciding when to recreate it).
+            if let Err(e) = cmd!(task_shell, "jj describe --quiet -r {merge_change_id} -m {description}").quiet().run() {
+                eprintln!(
+                    "Warning: Failed to update description for PR #{}: {}. If you need this updated, try running 'refresh' again.", 
+                    num, e,
+                );
+            }
+
             // Check if PR is ready for merge after inserting/updating
             let _ = self.check_and_update_pr_merge_readiness(&pr_uuid);
             
@@ -690,6 +712,7 @@ pub enum TaskCollectionError {
     ParseJson(serde_json::Error),
     ParseTask(super::TaskParseError),
     ParseUuid(uuid::Error),
+    MergeDescription(MergeDescriptionError),
     UniqueUuid(UniqueUuidError),
     Shell(xshell::Error),
     Utf8(io::Error),
@@ -717,6 +740,7 @@ impl fmt::Display for TaskCollectionError {
             Self::ParseJson(_) => write!(f, "failed to parse json"),
             Self::ParseTask(_) => write!(f, "failed to parse task"),
             Self::ParseUuid(_) => write!(f, "failed to parse uuid"),
+            Self::MergeDescription(_) => write!(f, "failed to compute description for merge commit"),
             Self::UniqueUuid(_) => write!(f, "no unique UUID for filter"),
             Self::Shell(_) => write!(f, "shell command failed"),
             Self::Utf8(_) => write!(f, "UTF-8 encoding error"),
@@ -738,6 +762,7 @@ impl std::error::Error for TaskCollectionError {
             Self::ParseJson(e) => Some(e),
             Self::ParseTask(e) => Some(e),
             Self::ParseUuid(e) => Some(e),
+            Self::MergeDescription(e) => Some(e),
             Self::UniqueUuid(e) => Some(e),
             Self::Shell(e) => Some(e),
             Self::Utf8(e) => Some(e),

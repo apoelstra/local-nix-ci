@@ -2,30 +2,82 @@
 
 use crate::git::GitCommit;
 
+use core::fmt;
 use std::collections::HashMap;
 
-use anyhow::{self, Context as _};
 use bitcoin_hashes::{HashEngine as _, sha512};
 use xshell::{Shell, cmd};
 use serde_json::Value;
 
+#[derive(Debug)]
+pub enum MergeDescriptionError {
+    GetCommitId(String, crate::jj::Error),
+    ParseCommitId(String, crate::git::Error),
+    GetPrBody(usize, xshell::Error),
+    ParsePrBodyJson(usize, serde_json::Error),
+    GetCommitList(xshell::Error),
+    GetPrComments(usize, xshell::Error),
+    ParseCommentsJson(usize, serde_json::Error),
+    GetPrReviews(usize, xshell::Error),
+    ParseReviewsJson(usize, serde_json::Error),
+    ListTreeContents(GitCommit, xshell::Error),
+    ReadBlob(String, xshell::Error),
+}
+
+impl fmt::Display for MergeDescriptionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::GetCommitId(ref change_id, _) => write!(f, "failed to get commit ID for change ID {change_id}"),
+            Self::ParseCommitId(ref commit_id, _) => write!(f, "failed to parse commit ID {commit_id}"),
+            Self::GetPrBody(pr_num, _) => write!(f, "failed get PR body for {pr_num} from 'gh pr view'"),
+            Self::ParsePrBodyJson(pr_num, _) => write!(f, "failed to parse PR body JSON for {pr_num}"),
+            Self::GetCommitList(_) => write!(f, "failed to get commit list"),
+            Self::GetPrComments(pr_num, _) => write!(f, "failed to get PR comments for {pr_num}"),
+            Self::ParseCommentsJson(pr_num, _) => write!(f, "failed to parse comments JSON for {pr_num}"),
+            Self::GetPrReviews(pr_num, _) => write!(f, "failed to get PR reviews for {pr_num}"),
+            Self::ParseReviewsJson(pr_num, _) => write!(f, "failed to parse reviews JSON for {pr_num}"),
+            Self::ListTreeContents(ref commit, _) => write!(f, "failed to list tree contents for commit {commit}"),
+            Self::ReadBlob(ref blob_id, _) => write!(f, "failed to read blob {blob_id}"),
+        }
+    }
+}
+
+impl std::error::Error for MergeDescriptionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::GetCommitId(_, ref e) => Some(e),
+            Self::ParseCommitId(_, ref e) => Some(e),
+            Self::GetPrBody(_, ref e) => Some(e),
+            Self::ParsePrBodyJson(_, ref e) => Some(e),
+            Self::GetCommitList(ref e) => Some(e),
+            Self::GetPrComments(_, ref e) => Some(e),
+            Self::ParseCommentsJson(_, ref e) => Some(e),
+            Self::GetPrReviews(_, ref e) => Some(e),
+            Self::ParseReviewsJson(_, ref e) => Some(e),
+            Self::ListTreeContents(_, ref e) => Some(e),
+            Self::ReadBlob(_, ref e) => Some(e),
+        }
+    }
+}
+
+    
 pub fn compute_merge_description(
     sh: &Shell,
     pr_task: &crate::tw::PrTask,
     head_commit: &GitCommit,
     merge_change_id: &str,
-) -> anyhow::Result<String> {
+) -> Result<String, MergeDescriptionError> {
     let pr_number = pr_task.number();
     let project = pr_task.project().replace('.', "/");
     
     // Get merge commit ID from JJ change
     let merge_commit_id = crate::jj::jj_log(sh, "commit_id", merge_change_id)
-        .context("Failed to get merge commit ID")?;
+        .map_err(|e| MergeDescriptionError::GetCommitId(merge_change_id.to_owned(), e))?;
     let merge_commit_id = merge_commit_id.trim();
     
     // Parse merge commit ID as GitCommit
     let merge_commit: GitCommit = merge_commit_id.parse()
-        .context("Failed to parse merge commit ID")?;
+        .map_err(|e| MergeDescriptionError::ParseCommitId(merge_commit_id.to_owned(), e))?;
 
     // Get PR info from task and GitHub
     let title = pr_task.title();
@@ -34,10 +86,10 @@ pub fn compute_merge_description(
     let num_s = pr_number.to_string();
     let body_json = cmd!(sh, "gh pr view {num_s} --json body")
         .read()
-        .context("Failed to get PR body")?;
+        .map_err(|e| MergeDescriptionError::GetPrBody(pr_number, e))?;
     
     let body_data: Value = serde_json::from_str(&body_json)
-        .context("Failed to parse PR body JSON")?;
+        .map_err(|e| MergeDescriptionError::ParsePrBodyJson(pr_number, e))?;
     
     let body = body_data["body"].as_str().unwrap_or("").to_string();
     
@@ -54,7 +106,7 @@ pub fn compute_merge_description(
     // Add commit list
     let commit_list = cmd!(sh, "git --no-pager log --no-merges --topo-order --pretty='format:%H %s (%an)' {base_commit}..{head_commit}")
         .read()
-        .context("Failed to get commit list")?;
+        .map_err(MergeDescriptionError::GetCommitList)?;
     message.push_str(&commit_list);
 
     // Add PR body
@@ -65,8 +117,7 @@ pub fn compute_merge_description(
     }
 
     // Get comments and reviews from GitHub using gh tool
-    let acks = get_acks_from_github(sh, pr_number, head_commit)
-        .context("Failed to get ACKs from GitHub")?;
+    let acks = get_acks_from_github(sh, pr_number, head_commit)?;
 
     // Add ACKs section
     if !acks.is_empty() {
@@ -79,8 +130,7 @@ pub fn compute_merge_description(
     }
 
     // Add tree SHA512
-    let tree_hash = tree_sha512sum(sh, &merge_commit)
-        .context("Failed to compute tree SHA512")?;
+    let tree_hash = tree_sha512sum(sh, &merge_commit)?;
     message.push_str(&format!("\n\nTree-SHA512: {}", tree_hash));
 
     Ok(message)
@@ -90,18 +140,18 @@ fn get_acks_from_github(
     sh: &Shell,
     pr_number: usize,
     head_commit: &GitCommit,
-) -> anyhow::Result<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, MergeDescriptionError> {
     let head_abbrev = &head_commit.to_string()[..6];
     let mut acks = Vec::new();
-    let pr_number = pr_number.to_string();
+    let pr_number_s = pr_number.to_string();
 
     // Get PR comments using gh tool
-    let comments_json = cmd!(sh, "gh pr view {pr_number} --json comments")
+    let comments_json = cmd!(sh, "gh pr view {pr_number_s} --json comments")
         .read()
-        .context("Failed to get PR comments")?;
+        .map_err(|e| MergeDescriptionError::GetPrComments(pr_number, e))?;
     
     let comments_data: Value = serde_json::from_str(&comments_json)
-        .context("Failed to parse comments JSON")?;
+        .map_err(|e| MergeDescriptionError::ParseCommentsJson(pr_number, e))?;
 
     if let Some(comments_array) = comments_data["comments"].as_array() {
         for comment in comments_array {
@@ -125,12 +175,12 @@ fn get_acks_from_github(
     }
 
     // Get PR reviews using gh tool
-    let reviews_json = cmd!(sh, "gh pr view {pr_number} --json reviews")
+    let reviews_json = cmd!(sh, "gh pr view {pr_number_s} --json reviews")
         .read()
-        .context("Failed to get PR reviews")?;
+        .map_err(|e| MergeDescriptionError::GetPrReviews(pr_number, e))?;
     
     let reviews_data: Value = serde_json::from_str(&reviews_json)
-        .context("Failed to parse reviews JSON")?;
+        .map_err(|e| MergeDescriptionError::ParseReviewsJson(pr_number, e))?;
 
     if let Some(reviews_array) = reviews_data["reviews"].as_array() {
         for review in reviews_array {
@@ -159,11 +209,11 @@ fn get_acks_from_github(
     Ok(acks)
 }
 
-fn tree_sha512sum(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<String> {
+fn tree_sha512sum(sh: &Shell, commit_id: &GitCommit) -> Result<String, MergeDescriptionError> {
     // Get all files in the tree recursively
     let ls_tree_output = cmd!(sh, "git ls-tree --full-tree -r {commit_id}")
         .read()
-        .context("Failed to list tree contents")?;
+        .map_err(|e| MergeDescriptionError::ListTreeContents(commit_id.clone(), e))?;
 
     let mut files = Vec::new();
     let mut blob_by_name = HashMap::new();
@@ -193,7 +243,7 @@ fn tree_sha512sum(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<String> {
             // Get blob content
             let blob_content = cmd!(sh, "git cat-file blob {blob_id}")
                 .output()
-                .with_context(|| format!("Failed to read blob {}", blob_id))?;
+                .map_err(|e| MergeDescriptionError::ReadBlob(blob_id.clone(), e))?;
 
             // Hash the blob content
             let file_hash = sha512::Hash::hash(&blob_content.stdout);
