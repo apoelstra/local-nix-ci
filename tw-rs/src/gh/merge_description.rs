@@ -16,10 +16,6 @@ pub enum MergeDescriptionError {
     GetPrBody(usize, xshell::Error),
     ParsePrBodyJson(usize, serde_json::Error),
     GetCommitList(xshell::Error),
-    GetPrComments(usize, xshell::Error),
-    ParseCommentsJson(usize, serde_json::Error),
-    GetPrReviews(usize, xshell::Error),
-    ParseReviewsJson(usize, serde_json::Error),
     ListTreeContents(GitCommit, xshell::Error),
     ReadBlob(String, xshell::Error),
 }
@@ -32,10 +28,6 @@ impl fmt::Display for MergeDescriptionError {
             Self::GetPrBody(pr_num, _) => write!(f, "failed get PR body for {pr_num} from 'gh pr view'"),
             Self::ParsePrBodyJson(pr_num, _) => write!(f, "failed to parse PR body JSON for {pr_num}"),
             Self::GetCommitList(_) => write!(f, "failed to get commit list"),
-            Self::GetPrComments(pr_num, _) => write!(f, "failed to get PR comments for {pr_num}"),
-            Self::ParseCommentsJson(pr_num, _) => write!(f, "failed to parse comments JSON for {pr_num}"),
-            Self::GetPrReviews(pr_num, _) => write!(f, "failed to get PR reviews for {pr_num}"),
-            Self::ParseReviewsJson(pr_num, _) => write!(f, "failed to parse reviews JSON for {pr_num}"),
             Self::ListTreeContents(ref commit, _) => write!(f, "failed to list tree contents for commit {commit}"),
             Self::ReadBlob(ref blob_id, _) => write!(f, "failed to read blob {blob_id}"),
         }
@@ -50,22 +42,50 @@ impl std::error::Error for MergeDescriptionError {
             Self::GetPrBody(_, ref e) => Some(e),
             Self::ParsePrBodyJson(_, ref e) => Some(e),
             Self::GetCommitList(ref e) => Some(e),
-            Self::GetPrComments(_, ref e) => Some(e),
-            Self::ParseCommentsJson(_, ref e) => Some(e),
-            Self::GetPrReviews(_, ref e) => Some(e),
-            Self::ParseReviewsJson(_, ref e) => Some(e),
             Self::ListTreeContents(_, ref e) => Some(e),
             Self::ReadBlob(_, ref e) => Some(e),
         }
     }
 }
 
+#[derive(Debug)]
+pub enum GetAcksError {
+    GetPrComments(usize, xshell::Error),
+    ParseCommentsJson(usize, serde_json::Error),
+    GetPrReviews(usize, xshell::Error),
+    ParseReviewsJson(usize, serde_json::Error),
+}
     
+impl fmt::Display for GetAcksError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::GetPrComments(pr_num, _) => write!(f, "failed to get PR comments for {pr_num}"),
+            Self::ParseCommentsJson(pr_num, _) => write!(f, "failed to parse comments JSON for {pr_num}"),
+            Self::GetPrReviews(pr_num, _) => write!(f, "failed to get PR reviews for {pr_num}"),
+            Self::ParseReviewsJson(pr_num, _) => write!(f, "failed to parse reviews JSON for {pr_num}"),
+        }
+    }
+}
+
+impl std::error::Error for GetAcksError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::GetPrComments(_, ref e) => Some(e),
+            Self::ParseCommentsJson(_, ref e) => Some(e),
+            Self::GetPrReviews(_, ref e) => Some(e),
+            Self::ParseReviewsJson(_, ref e) => Some(e),
+        }
+    }
+}
+
+/// Computes a complete merge description that can be used as the git message for the merge
+/// commit, and also a list of (author, message) ACKs that can be stored in the task database.
 pub fn compute_merge_description(
     sh: &Shell,
     pr_task: &crate::tw::PrTask,
     head_commit: &GitCommit,
     merge_change_id: &str,
+    acks: &[(String, String)],
 ) -> Result<String, MergeDescriptionError> {
     let pr_number = pr_task.number();
     let project = pr_task.project().replace('.', "/");
@@ -116,9 +136,6 @@ pub fn compute_merge_description(
         message.push('\n');
     }
 
-    // Get comments and reviews from GitHub using gh tool
-    let acks = get_acks_from_github(sh, pr_number, head_commit)?;
-
     // Add ACKs section
     if !acks.is_empty() {
         message.push_str("\n\nACKs for top commit:\n");
@@ -136,11 +153,11 @@ pub fn compute_merge_description(
     Ok(message)
 }
 
-fn get_acks_from_github(
+pub fn get_acks_from_github(
     sh: &Shell,
     pr_number: usize,
     head_commit: &GitCommit,
-) -> Result<Vec<(String, String)>, MergeDescriptionError> {
+) -> Result<Vec<(String, String)>, GetAcksError> {
     let head_abbrev = &head_commit.to_string()[..6];
     let mut acks = Vec::new();
     let pr_number_s = pr_number.to_string();
@@ -148,10 +165,10 @@ fn get_acks_from_github(
     // Get PR comments using gh tool
     let comments_json = cmd!(sh, "gh pr view {pr_number_s} --json comments")
         .read()
-        .map_err(|e| MergeDescriptionError::GetPrComments(pr_number, e))?;
+        .map_err(|e| GetAcksError::GetPrComments(pr_number, e))?;
     
     let comments_data: Value = serde_json::from_str(&comments_json)
-        .map_err(|e| MergeDescriptionError::ParseCommentsJson(pr_number, e))?;
+        .map_err(|e| GetAcksError::ParseCommentsJson(pr_number, e))?;
 
     if let Some(comments_array) = comments_data["comments"].as_array() {
         for comment in comments_array {
@@ -177,10 +194,10 @@ fn get_acks_from_github(
     // Get PR reviews using gh tool
     let reviews_json = cmd!(sh, "gh pr view {pr_number_s} --json reviews")
         .read()
-        .map_err(|e| MergeDescriptionError::GetPrReviews(pr_number, e))?;
+        .map_err(|e| GetAcksError::GetPrReviews(pr_number, e))?;
     
     let reviews_data: Value = serde_json::from_str(&reviews_json)
-        .map_err(|e| MergeDescriptionError::ParseReviewsJson(pr_number, e))?;
+        .map_err(|e| GetAcksError::ParseReviewsJson(pr_number, e))?;
 
     if let Some(reviews_array) = reviews_data["reviews"].as_array() {
         for review in reviews_array {
@@ -205,7 +222,7 @@ fn get_acks_from_github(
             }
         }
     }
-
+    
     Ok(acks)
 }
 

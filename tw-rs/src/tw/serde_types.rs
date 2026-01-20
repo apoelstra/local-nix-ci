@@ -106,6 +106,8 @@ pub struct Task {
     #[serde(default)]
     pub pr_number: Option<usize>,
     #[serde(default)]
+    pub github_acks: String,
+    #[serde(default)]
     pub base_commit: Option<GitCommit>,
     #[serde(default)]
     pub merge_change_id: Option<String>,

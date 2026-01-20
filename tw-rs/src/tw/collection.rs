@@ -10,7 +10,7 @@ use xshell::{Shell, cmd};
 
 use super::task::PrOrCommitTask;
 use super::{CommitTask, PrTask};
-use crate::gh::{compute_merge_description, MergeDescriptionError};
+use crate::gh::{get_acks_from_github, compute_merge_description, GetAcksError, MergeDescriptionError};
 use crate::git::{self, GitCommit};
 use crate::tw::serde_types::{CiStatus, MergeStatus, ReviewStatus};
 use crate::tw::shell::{self, UniqueUuidError, get_or_insert_unique_uuid};
@@ -423,11 +423,14 @@ impl TaskCollection {
         if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
             // Count ACKs and update merge description.
             let merge_change_id = pr_task.merge_change_id().to_owned();
+            let acks = get_acks_from_github(task_shell, num, head_commit)
+                .map_err(TaskCollectionError::GetAcks)?;
             let description = compute_merge_description(
                 task_shell,
                 &pr_task,
                 pr_task.tip_commit(self).commit_id(),
                 &merge_change_id,
+                &acks,
             ).map_err(TaskCollectionError::MergeDescription)?;
 
             // Add to map
@@ -710,6 +713,7 @@ pub enum TaskCollectionError {
     ParseJson(serde_json::Error),
     ParseTask(super::TaskParseError),
     ParseUuid(uuid::Error),
+    GetAcks(GetAcksError),
     MergeDescription(MergeDescriptionError),
     UniqueUuid(UniqueUuidError),
     Shell(xshell::Error),
@@ -738,6 +742,7 @@ impl fmt::Display for TaskCollectionError {
             Self::ParseJson(_) => write!(f, "failed to parse json"),
             Self::ParseTask(_) => write!(f, "failed to parse task"),
             Self::ParseUuid(_) => write!(f, "failed to parse uuid"),
+            Self::GetAcks(_) => write!(f, "failed to get ACKs from Github"),
             Self::MergeDescription(_) => write!(f, "failed to compute description for merge commit"),
             Self::UniqueUuid(_) => write!(f, "no unique UUID for filter"),
             Self::Shell(_) => write!(f, "shell command failed"),
@@ -760,6 +765,7 @@ impl std::error::Error for TaskCollectionError {
             Self::ParseJson(e) => Some(e),
             Self::ParseTask(e) => Some(e),
             Self::ParseUuid(e) => Some(e),
+            Self::GetAcks(e) => Some(e),
             Self::MergeDescription(e) => Some(e),
             Self::UniqueUuid(e) => Some(e),
             Self::Shell(e) => Some(e),
