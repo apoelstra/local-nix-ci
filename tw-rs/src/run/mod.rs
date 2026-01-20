@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use xshell::{Shell, cmd};
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
@@ -22,7 +22,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut logger = log::Logger::new();
     let mut state = state::CiState::new()?;
     let mut backoff = INITIAL_BACKOFF;
-    let mut total_sleep = Duration::ZERO;
+    let mut last_check = Instant::now();
     let mut busy = false;
 
     logger.info(format_args!("Starting CI loop."));
@@ -47,13 +47,11 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                 if busy {
                     check_and_push_ready_prs(&logger, &mut tasks)?;
                     backoff = INITIAL_BACKOFF;
-                    total_sleep = Duration::ZERO;
+                    last_check = Instant::now();
                     busy = false;
                 } else {
                     std::thread::sleep(IDLE_SLEEP);
-                    total_sleep += IDLE_SLEEP;
-
-                    if total_sleep >= backoff {
+                    if last_check.elapsed() >= backoff {
                         if backoff < MAXIMUM_BACKOFF {
                             backoff *= 2;
                         }
@@ -64,7 +62,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                             "Nothing to do. Reloading task database. (Next message in {} minutes.)",
                             backoff.as_secs() / 60,
                         )); 
-                        total_sleep = Duration::ZERO
+                        last_check = Instant::now();
                     }
                 }
                 continue;
