@@ -118,10 +118,12 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
     }
 
     // Then try to fetch it from origin then upstream.
-    if cmd!(shell, "git fetch origin {commit}").run().is_ok() && now_have_commit(shell, &commit) {
+    if cmd!(shell, "git fetch --force origin {commit}:+refs/heads/local-ci/last-fetch").run().is_ok() && now_have_commit(shell, &commit) {
+        let _ = cmd!(shell, "jj git import").quiet().run();
         return Ok(());
     }
-    if cmd!(shell, "git fetch upstream {commit}").run().is_ok() && now_have_commit(shell, &commit) {
+    if cmd!(shell, "git fetch --force upstream {commit}:+refs/heads/local-ci/last-fetch").run().is_ok() && now_have_commit(shell, &commit) {
+        let _ = cmd!(shell, "jj git import").quiet().run();
         return Ok(());
     }
 
@@ -131,7 +133,7 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
     ))
 }
 
-/// Always tries to fetch a commit or ref from GIthub, regardless if we have it locally.
+/// Always tries to fetch a commit or ref from Github, regardless if we have it locally.
 pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<GitCommit, Error> {
     cmd!(shell, "git fetch origin {remote_ref}")
         .run()

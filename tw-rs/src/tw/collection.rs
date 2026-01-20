@@ -260,6 +260,7 @@ impl TaskCollection {
         // Before invoking task/jj/git fetch, check for merge commits and bail early, to make
         // an effort not to pollute the task database with crap from bad PRs.
         for commit_id in pr_data.commit_ids() {
+            git::fetch_commit(task_shell, commit_id).map_err(TaskCollectionError::Git)?;
             let parents =
                 git::list_parents(task_shell, commit_id).map_err(TaskCollectionError::Git)?;
             if parents.len() > 1 {
@@ -290,6 +291,8 @@ impl TaskCollection {
         }
 
         if create_new_merge {
+            git::fetch_commit(task_shell, &head_commit).map_err(TaskCollectionError::Git)?;
+            git::fetch_commit(task_shell, &base_commit).map_err(TaskCollectionError::Git)?;
             let merge_change_id = crate::jj::jj_new(task_shell, &[&base_commit, head_commit])
                 .map_err(TaskCollectionError::Jj)?;
             let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
