@@ -21,6 +21,7 @@ pub struct PrTask {
 
     title: String,
     author: String,
+    github_acks: String,
     number: usize,
     pub(super) merge_status: MergeStatus,
     base_commit: GitCommit,
@@ -63,6 +64,10 @@ impl PrTask {
 
     pub fn author(&self) -> &str {
         &self.author
+    }
+
+    pub fn github_acks(&self) -> &str {
+        &self.github_acks
     }
 
     pub fn review_status(&self) -> &ReviewStatus {
@@ -385,6 +390,7 @@ impl PrOrCommitTask {
 
                 title,
                 author,
+                github_acks: task_json.github_acks,
                 number,
                 merge_status: task_json.merge_status,
                 base_commit,

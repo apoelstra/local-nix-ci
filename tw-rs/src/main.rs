@@ -228,6 +228,10 @@ fn real_main(
                         ReviewStatus::Approved => { /* done */ }
                     }
 
+                    println!("=== Github Acks ===");
+                    println!("{}", pull.github_acks());
+                    println!();
+
                     println!("=== Commits ===");
                     let commits: Vec<_> = pull.commits(tasks).collect();
 

@@ -321,6 +321,15 @@ impl TaskCollection {
                 .arg(format!("merge_change_id:{}", merge_change_id));
         }
 
+        // Get the latest set of ACKs from Github. 
+        let acks = get_acks_from_github(task_shell, num, head_commit)
+            .map_err(TaskCollectionError::GetAcks)?;
+        let github_acks_string = acks
+            .iter()
+            .map(|&(ref author, ref message)| format!("{author}: {message}"))
+            .collect::<Vec<String>>()
+            .join("\n");
+
         // Add PR-specific fields to the task command, and run it.
         let description = format!("PR #{}: {}", num, pr_data.title);
         let task_cmd = task_cmd
@@ -334,7 +343,8 @@ impl TaskCollection {
             ))
             .arg(format!("description:{}", description))
             .arg(format!("base_commit:{}", base_commit))
-            .arg(format!("base_ref:{}", pr_data.base_ref));
+            .arg(format!("base_ref:{}", pr_data.base_ref))
+            .arg(format!("github_acks:{}", github_acks_string));
         let output = task_cmd.read().map_err(TaskCollectionError::Shell)?;
 
         // Create commit tasks for all commits in the PR and collect their UUIDs
@@ -421,10 +431,8 @@ impl TaskCollection {
             .map_err(TaskCollectionError::ParseTask)?;
 
         if let super::task::PrOrCommitTask::Pr(pr_task) = pr_task {
-            // Count ACKs and update merge description.
+            // Update merge description now that we have the complete data.
             let merge_change_id = pr_task.merge_change_id().to_owned();
-            let acks = get_acks_from_github(task_shell, num, head_commit)
-                .map_err(TaskCollectionError::GetAcks)?;
             let description = compute_merge_description(
                 task_shell,
                 &pr_task,
