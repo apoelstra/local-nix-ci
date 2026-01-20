@@ -274,12 +274,10 @@ impl TaskCollection {
         for commit_id in pr_data.commit_ids() {
             git::fetch_commit(task_shell, commit_id).map_err(TaskCollectionError::Git)?;
         }
-        git::fetch_commit(task_shell, &pr_data.base_ref).map_err(TaskCollectionError::Git)?;
-
-        // Create merge commit, if needed.
-        let head_commit = &pr_data.head_commit;
-        let base_commit = git::resolve_ref(task_shell, &pr_data.base_ref)
+        // Fetch the base ref, and create the merge commit, if needed.
+        let base_commit = git::fetch_resolve_ref(task_shell, &pr_data.base_ref)
             .map_err(TaskCollectionError::Git)?;
+        let head_commit = &pr_data.head_commit;
 
         let mut create_new_merge = true;
         if let Some(uuid) = existing_uuid {

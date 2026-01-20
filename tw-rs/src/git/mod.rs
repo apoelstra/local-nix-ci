@@ -99,6 +99,7 @@ pub fn resolve_ref<R: AsRef<OsStr>>(shell: &Shell, git_ref: R) -> Result<GitComm
     GitCommit::from_str(output.trim())
 }
 
+
 /// Checks whether a commit is available locally; failing that tries to fetch it from origin;
 /// failing that tries to fetch it from upstream; and failing that returns an error.
 pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Error> {
@@ -117,10 +118,10 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
     }
 
     // Then try to fetch it from origin then upstream.
-    if cmd!(shell, "git fetch origin {commit}").run().is_ok() && now_have_commit(shell, commit) {
+    if cmd!(shell, "git fetch origin {commit}").run().is_ok() && now_have_commit(shell, &commit) {
         return Ok(());
     }
-    if cmd!(shell, "git fetch upstream {commit}").run().is_ok() && now_have_commit(shell, commit) {
+    if cmd!(shell, "git fetch upstream {commit}").run().is_ok() && now_have_commit(shell, &commit) {
         return Ok(());
     }
 
@@ -128,4 +129,21 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
     Err(Error::CommitNotFound(
         commit.as_ref().to_string_lossy().to_string(),
     ))
+}
+
+/// Always tries to fetch a commit or ref from GIthub, regardless if we have it locally.
+pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<GitCommit, Error> {
+    cmd!(shell, "git fetch origin {remote_ref}")
+        .run()
+        .map_err(Error::Shell)
+        .and_then(|_| resolve_ref(shell, format!("origin/{remote_ref}")))
+        .or_else(|e| {
+            // Attempt 'upstream' on error, but failing that just return the error we got for 'origin'
+            if cmd!(shell, "git fetch upstream {remote_ref}").run().is_ok() {
+                if let Ok(r) = resolve_ref(shell, format!("upstream/{remote_ref}")) {
+                    return Ok(r);
+                }
+            }
+            Err(e)
+        })
 }
