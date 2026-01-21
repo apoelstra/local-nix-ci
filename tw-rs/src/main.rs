@@ -808,7 +808,7 @@ fn post_github_approval_if_ready(
         // Check if we've already posted this exact approval message
         let existing_reviews_result = cmd!(
             shell,
-                "gh pr view {pr_num} --json reviews --jq '[ .reviews[] | select(.state == \"APPROVED\" and .author.login == \"'{current_user}'\") | .body ]'"
+                "gh pr view {pr_num} --json reviews --jq '[ .reviews[] | select(.author.login == \"'{current_user}'\") | .body ]'"
             )
             .read()
             .map_err(anyhow::Error::from)
