@@ -696,8 +696,12 @@ fn get_pr_review_notes_from_editor(
     template.push_str("# and all commits are approved.\n");
 
     template.push_str("# Commit Review Information:\n");
+    let mut post_full_ack = true;
     // Add commit review information
     for commit in commits {
+        if *commit.review_status() != ReviewStatus::Approved {
+            post_full_ack = false;
+        }
         template.push_str(&format!("# {}", commit.commit_id()));
         if commit.is_tip() {
             template.push_str(" (TIP)");
@@ -716,10 +720,17 @@ fn get_pr_review_notes_from_editor(
     template
         .push_str("# Edit the following message. Lines starting with # will be removed.\n");
     if *status == ReviewStatus::Approved {
-        template.push_str(&format!(
-            "ACK {}; successfully ran local tests\n",
-            tip_commit
-        ));
+        if post_full_ack {
+            template.push_str(&format!(
+                "ACK {}; successfully ran local tests\n",
+                tip_commit
+            ));
+        } else {
+            template.push_str(&format!(
+                "utACK {}\n",
+                tip_commit
+            ));
+        }
     } else {
         template.push_str(&format!(
             "Reviewed PR {} with tip {}\n",
@@ -768,21 +779,21 @@ fn post_github_approval_if_ready(
 
     // Check if all commits are approved and CI successful
     let mut all_commits_approved_and_ci = true;
+    let mut all_commits_utacked = true;
     for commit in pull.commits(tasks) {
-        // Skip merge commits for this check
-        if commit.is_merge_commit() {
-            continue;
-        }
         if *commit.review_status() != ReviewStatus::Approved
             || *commit.ci_status() != CiStatus::Success
         {
             all_commits_approved_and_ci = false;
+            if !matches!(*commit.review_status(), ReviewStatus::Approved | ReviewStatus::ApprovedNoCi) {
+                all_commits_utacked = false;
+            }
             break;
         }
     }
 
     // If all commits successful and PR is approved, post approval on GitHub
-    if all_commits_approved_and_ci {
+    if all_commits_approved_and_ci || all_commits_utacked {
         println!(
             "All commits in PR #{} are successful and PR is approved. Checking if approval already posted...",
             pull.number()
