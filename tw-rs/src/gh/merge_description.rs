@@ -130,7 +130,11 @@ pub fn compute_merge_description(
     message.push_str(&commit_list);
 
     // Add PR body
-    if !body.is_empty() {
+    // FIXME in check-and-sign.sh we always put this in, but it might be nicer to only
+    // do it for non-empty bodies? The removal was suggested by Claude. I could go
+    // either way, but sticking with "be compatible with the existing script" to
+    // minimize the likelihood of confusing tooling.
+    { // if !body.is_empty() {
         message.push_str("\n\nPull request description:\n\n  ");
         message.push_str(&body.trim().replace('\r', "").replace('\n', "\n  "));
         message.push('\n');
