@@ -81,7 +81,7 @@ verbose=
 # status in local CI system
 uda.ci_status.type=string
 uda.ci_status.label=Local CI Status
-uda.ci_status.values=unstarted,started,success,failed
+uda.ci_status.values=unstarted,started,success,failed,cancelled
 uda.ci_status.default=unstarted
 uda.ci_git_commit.type=string
 uda.ci_git_commit.label=Commit ID of local CI during last test

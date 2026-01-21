@@ -13,6 +13,7 @@ pub enum CiStatus {
     Started,
     Success,
     Failed,
+    Cancelled,
 }
 
 impl fmt::Display for CiStatus {
@@ -22,6 +23,7 @@ impl fmt::Display for CiStatus {
             Self::Started => f.write_str("started"),
             Self::Success => f.write_str("success"),
             Self::Failed => f.write_str("FAILED"),
+            Self::Cancelled => f.write_str("cancelled"),
         }
     }
 }

@@ -286,8 +286,16 @@ impl TaskCollection {
             let old_tip = self.commits[old.dep_uuid()].commit_id();
             if base_commit == *old.base_commit() && head_commit == old_tip {
                 create_new_merge = false;
+            } else {
+                // Attempt to cancel the old merge commit. If this fails, no harm, it'll
+                // just get tested wastefully. If it succeeds and something down the line
+                // fails, little harm -- the PR will be stalled until the user retries
+                // refreshing after the network issue or bug has been resolved.
+                let merge_uuid = old.merge_uuid().clone(); // unborrow self
+                if let Err(e) = self.update_commit_ci_status(&merge_uuid, CiStatus::Cancelled) {
+                    eprintln!("{e}");
+                }
             }
-
         }
 
         if create_new_merge {
@@ -532,6 +540,7 @@ impl TaskCollection {
             CiStatus::Started => "started", 
             CiStatus::Success => "success",
             CiStatus::Failed => "failed",
+            CiStatus::Cancelled => "cancelled",
         };
 
         cmd!(sh, "task {uuid_str} modify ci_status:{status_str}")
