@@ -68,7 +68,7 @@ impl Next {
             ReviewStatus::NeedsChange | ReviewStatus::Nacked => {
                 self.update(Next::Failed);
             }
-            ReviewStatus::Approved => {
+            ReviewStatus::Approved | ReviewStatus::ApprovedNoCi => {
                 if *commit.ci_status() == CiStatus::Failed {
                     self.update(Next::Failed);
                 }
@@ -225,7 +225,7 @@ fn real_main(
                         ReviewStatus::NeedsChange | ReviewStatus::Nacked => {
                             next.update(Next::Failed);
                         }
-                        ReviewStatus::Approved => { /* done */ }
+                        ReviewStatus::Approved | ReviewStatus::ApprovedNoCi => { /* done */ }
                     }
 
                     println!("=== Github Acks ===");
@@ -452,12 +452,13 @@ fn review_commit_interactive(
         // Prompt for action
         println!("What would you like to do?");
         println!("1) Approve");
-        println!("2) NACK");
-        println!("3) Needs Change");
-        println!("4) Erase review (mark unreviewed)");
-        println!("5) Re-view diff");
-        println!("6) Cancel");
-        print!("Choice (1-6): ");
+        println!("2) Approve (but don't run CI)");
+        println!("3) NACK");
+        println!("4) Needs Change");
+        println!("5) Erase review (mark unreviewed)");
+        println!("6) Re-view diff");
+        println!("7) Cancel");
+        print!("Choice (1-7): ");
         io::stdout().flush()?;
 
         let mut input = String::new();
@@ -466,19 +467,20 @@ fn review_commit_interactive(
 
         let new_status = match choice {
             "1" => Some(ReviewStatus::Approved),
-            "2" => Some(ReviewStatus::Nacked),
-            "3" => Some(ReviewStatus::NeedsChange),
-            "4" => Some(ReviewStatus::Unreviewed),
-            "5" => {
+            "2" => Some(ReviewStatus::ApprovedNoCi),
+            "3" => Some(ReviewStatus::Nacked),
+            "4" => Some(ReviewStatus::NeedsChange),
+            "5" => Some(ReviewStatus::Unreviewed),
+            "6" => {
                 // Continue loop to re-show diff
                 continue;
             }
-            "6" => {
+            "7" => {
                 println!("Review cancelled.");
                 break;
             }
             _ => {
-                println!("Invalid choice. Please select 1-6.");
+                println!("Invalid choice. Please select 1-7.");
                 continue;
             }
         };

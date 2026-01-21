@@ -55,6 +55,7 @@ pub enum ReviewStatus {
     NeedsChange,
     Nacked,
     Approved,
+    ApprovedNoCi,
 }
 
 impl fmt::Display for ReviewStatus {
@@ -64,6 +65,7 @@ impl fmt::Display for ReviewStatus {
             Self::NeedsChange => f.write_str("needs change"),
             Self::Nacked => f.write_str("NACKed"),
             Self::Approved => f.write_str("ACKed"),
+            Self::ApprovedNoCi => f.write_str("ACKed (but skip CI)"),
         }
     }
 }

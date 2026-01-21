@@ -598,6 +598,7 @@ impl TaskCollection {
         let uuid_str = uuid.to_string();
         let status_str = match status {
             ReviewStatus::Approved => "approved",
+            ReviewStatus::ApprovedNoCi => "approvednoci",
             ReviewStatus::Nacked => "nacked",
             ReviewStatus::NeedsChange => "needschange",
             ReviewStatus::Unreviewed => "unreviewed",
@@ -631,6 +632,7 @@ impl TaskCollection {
         let uuid_str = uuid.to_string();
         let status_str = match status {
             ReviewStatus::Approved => "approved",
+            ReviewStatus::ApprovedNoCi => "approvednoci",
             ReviewStatus::Nacked => "nacked",
             ReviewStatus::NeedsChange => "needschange",
             ReviewStatus::Unreviewed => "unreviewed",
