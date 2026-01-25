@@ -288,12 +288,14 @@ fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<Vec
 
     // If no lockfiles found in commit, search the ".." directory for auxiliary lockfiles
     if lockfiles.is_empty() {
-        if let Ok(aux_output) = cmd!(sh, "ls ../*.lock").ignore_status().read() {
+        // xshell can't expand wildcards, so we need to invoke `find` rather than `ls ../*.lock`;
+        // find will expand the wildcards for us.
+        if let Ok(aux_output) = cmd!(sh, "find ../ -maxdepth 1 -name Cargo*.lock").ignore_status().read() {
             for line in aux_output.lines() {
                 let filename = line.trim();
                 if !filename.is_empty() && filename.contains("Cargo") {
                     // Convert to absolute path using realpath
-                    if let Ok(absolute_path) = cmd!(sh, "realpath ../{filename}").read() {
+                    if let Ok(absolute_path) = cmd!(sh, "realpath {filename}").read() {
                         lockfiles.push(absolute_path.trim().to_string());
                     }
                 }
