@@ -196,6 +196,7 @@ fn process_commit(
     // we must use std::process::Command directly rather than xshell.
     logger.info("Instantiating derivation.");
     let instantiate_result = Command::new("nix-instantiate")
+        .arg("--show-trace")
         .arg("--arg").arg("inlineJsonConfig")
         .arg(format!("{{ gitDir = \"{}\"; projectName = \"{}\"; }}", repo_root.display(), project))
         .arg("--arg").arg("inlineCommitList")
