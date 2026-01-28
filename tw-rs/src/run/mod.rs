@@ -25,6 +25,24 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut busy = false;
 
     logger.info(format_args!("Starting CI loop."));
+    
+    // Reset any tasks with CI status "started" back to "unstarted"
+    let mut tasks = TaskCollection::new(task_shell)
+        .context("loading task database for startup reset")?;
+    
+    let started_commits: Vec<uuid::Uuid> = tasks.commits()
+        .filter(|(_, commit)| *commit.ci_status() == CiStatus::Started)
+        .map(|(uuid, _)| *uuid)
+        .collect();
+    
+    if !started_commits.is_empty() {
+        logger.info(format_args!("Resetting {} task(s) from 'started' to 'unstarted' status.", started_commits.len()));
+        for commit_uuid in started_commits {
+            if let Err(e) = tasks.update_commit_ci_status(&commit_uuid, CiStatus::Unstarted) {
+                logger.warn(format_args!("Failed to reset task {}: {}", commit_uuid, e));
+            }
+        }
+    }
     loop {
         // Check CI repo status periodically
         if let Err(e) = state.check_ci_repo_status() {
