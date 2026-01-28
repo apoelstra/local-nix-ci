@@ -271,6 +271,27 @@ impl TaskCollection {
             }
         }
 
+        // Check if commits have changed and reset review status if needed
+        let mut reset_review_status = false;
+        let mut previous_review_notes = String::new();
+        let mut previous_tip_commit = None;
+        
+        if let Some(uuid) = existing_uuid {
+            let existing_pr = &self.pulls[&uuid];
+            let existing_tip_commit = self.commits[existing_pr.dep_uuid()].commit_id();
+            
+            // Check if the tip commit has changed
+            if existing_tip_commit != &pr_data.head_commit {
+                reset_review_status = true;
+                previous_tip_commit = Some(existing_tip_commit.clone());
+                
+                // Preserve existing review notes if any
+                if !existing_pr.review_notes().is_empty() {
+                    previous_review_notes = existing_pr.review_notes().to_string();
+                }
+            }
+        }
+
         // Try to fetch all commits
         for commit_id in pr_data.commit_ids() {
             git::fetch_commit(task_shell, commit_id).map_err(TaskCollectionError::Git)?;
@@ -341,9 +362,24 @@ impl TaskCollection {
             .collect::<Vec<String>>()
             .join("\n");
 
+        // Prepare review notes, potentially including previous review
+        let review_notes = if reset_review_status && !previous_review_notes.is_empty() {
+            let previous_tip = previous_tip_commit.as_ref().unwrap();
+            format!(
+                "# Previous review on tip {}:\n{}\n\n(Review reset due to commit changes)",
+                previous_tip,
+                previous_review_notes.lines()
+                    .map(|line| format!("# {}", line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        } else {
+            String::new()
+        };
+
         // Add PR-specific fields to the task command, and run it.
         let description = format!("PR #{}: {}", num, pr_data.title);
-        let task_cmd = task_cmd
+        let mut task_cmd = task_cmd
             .arg(format!("repo_root:{}", repo.repo_root.display()))
             .arg(format!("pr_title:{}", pr_data.title))
             .arg(format!("pr_author:{}", pr_data.author.login))
@@ -356,6 +392,13 @@ impl TaskCollection {
             .arg(format!("base_commit:{}", base_commit))
             .arg(format!("base_ref:{}", pr_data.base_ref))
             .arg(format!("github_acks:{}", github_acks_string));
+
+        // Reset review status if commits changed
+        if reset_review_status {
+            task_cmd = task_cmd
+                .arg("review_status:unreviewed")
+                .arg(format!("review_notes:{}", review_notes));
+        }
         let output = task_cmd.read().map_err(TaskCollectionError::Shell)?;
 
         // Create commit tasks for all commits in the PR and collect their UUIDs
