@@ -119,10 +119,10 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
     // Then try to fetch it from origin then upstream.
     if cmd!(
         shell,
-        "git fetch --force origin {commit}:+refs/heads/local-ci/last-fetch"
+        "git fetch --force origin +{commit}:refs/heads/local-ci/last-fetch"
     )
     .quiet()
-    .ignore_stdout()
+    .ignore_stderr()
     .run()
     .is_ok()
         && now_have_commit(shell, &commit)
@@ -132,10 +132,10 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
     }
     if cmd!(
         shell,
-        "git fetch --force upstream {commit}:+refs/heads/local-ci/last-fetch"
+        "git fetch --force upstream +{commit}:refs/heads/local-ci/last-fetch"
     )
     .quiet()
-    .ignore_stdout()
+    .ignore_stderr()
     .run()
     .is_ok()
         && now_have_commit(shell, &commit)
@@ -154,7 +154,7 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
 pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<GitCommit, Error> {
     cmd!(shell, "git fetch origin {remote_ref}")
         .quiet()
-        .ignore_stdout()
+        .ignore_stderr()
         .run()
         .map_err(Error::Shell)
         .and_then(|_| resolve_ref(shell, format!("origin/{remote_ref}")))
