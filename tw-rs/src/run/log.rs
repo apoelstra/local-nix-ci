@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use core::fmt;
+use std::error::Error;
 
 use chrono::Utc;
 
@@ -52,9 +53,17 @@ impl Logger {
         eprintln!("{}", args);
     }
 
-    pub fn error<D: fmt::Display>(&self, args: D) {
+    pub fn error<D>(&self, mut error: Option<&(dyn Error + 'static)>, args: D)
+    where
+        D: fmt::Display,
+    {
         self.prefix();
         eprintln!("ERROR: {}", args);
+
+        while let Some(e) = error {
+            eprintln!("    caused by: {e}");
+            error = e.source();
+        }
     }
 
     pub fn warn<D: fmt::Display>(&self, args: D) {

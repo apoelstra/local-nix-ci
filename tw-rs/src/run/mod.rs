@@ -46,7 +46,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     loop {
         // Check CI repo status periodically
         if let Err(e) = state.check_ci_repo_status() {
-            logger.error(format_args!("Failed to check CI repo status: {e}"));
+            logger.error(Some(e.as_ref()), "Failed to check CI repo status");
         }
 
         // Find next approved commit that needs CI. Call `check_and_push_ready_prs`
@@ -128,12 +128,12 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                     
                     post_approvals(&logger, &mut tasks, &commit_uuid)?;
                 } else {
-                    logger.error("FAILED");
+                    logger.error(None, "FAILED");
                     tasks.update_commit_ci_status(&commit_uuid, CiStatus::Failed)?;
                 }
             }
             Err(e) => {
-                logger.error(format_args!("Unable to process commit: {e}"));
+                logger.error(Some(e.as_ref()), "Unable to process commit");
                 tasks.update_commit_ci_status(&commit_uuid, CiStatus::Failed)?;
             }
         }
@@ -284,7 +284,7 @@ fn process_commit(
             }
         }
         Err(e) => {
-            logger.error("Failed to run nix-build: {e}.");
+            logger.error(Some(&e), "Failed to run nix-build.");
             let error_content = format!("Failed to run nix-build for commit {}: {}", 
                                        commit_task.commit_id(), e);
             save_error_to_file(logger, repo_root, commit_task.commit_id(), "build", &error_content)?;
@@ -364,10 +364,11 @@ fn post_approvals(logger: &log::Logger, tasks: &mut TaskCollection, _commit_uuid
             };
             
             if let Err(e) = crate::post_github_approval_if_ready(&sh, tasks, &repo, pr_task) {
-                logger.error(format_args!(
-                    "Failed to post GitHub approval for PR #{}: {}", 
+                logger.error(
+                    Some(e.as_ref()),
+                    format_args!(
+                    "Failed to post GitHub approval for PR #{}",
                      pr_task.number(), 
-                     e,
                 ));
             }
         }
@@ -407,9 +408,11 @@ fn check_and_push_ready_prs(
         let refreshed_pr = match tasks.insert_or_refresh_pr(&sh, &repo, pr_number) {
             Ok(pr) => pr,
             Err(e) => {
-                logger.error(format_args!(
-                    "Failed to refresh PR #{}: {}", 
-                    pr_number, e,
+                logger.error(
+                    Some(&e),
+                    format_args!(
+                    "Failed to refresh PR #{}.", 
+                    pr_number,
                 ));
                 continue;
             }
@@ -427,9 +430,11 @@ fn check_and_push_ready_prs(
         let has_signature = match crate::jj::jj_log(&sh, "if(signature, \"true\", \"false\")", &merge_change_id) {
             Ok(result) => result.trim() == "true",
             Err(e) => {
-                logger.error(format_args!(
-                    "Failed to check signature for PR #{}: {}", 
-                    pr_number, e,
+                logger.error(
+                    Some(&e),
+                    format_args!(
+                    "Failed to check signature for PR #{}.", 
+                    pr_number,
                 ));
                 continue;
             }
@@ -443,9 +448,11 @@ fn check_and_push_ready_prs(
             let merge_commit_id = match crate::jj::jj_log(&sh, "commit_id", merge_change_id) {
                 Ok(id) => id.trim().to_string(),
                 Err(e) => {
-                    logger.error(format_args!(
-                        "Failed to get commit ID for PR #{}: {}", 
-                        pr_number, e,
+                    logger.error(
+                        Some(&e),
+                        format_args!(
+                        "Failed to get commit ID for PR #{}", 
+                        pr_number,
                     ));
                     continue;
                 }
@@ -466,16 +473,20 @@ fn check_and_push_ready_prs(
                     
                     // Update merge status to pushed
                     if let Err(e) = tasks.update_pr_merge_status(&pr_uuid, MergeStatus::Pushed) {
-                        logger.error(format_args!(
-                            "Failed to update merge status for PR #{}: {}", 
-                            pr_number, e,
+                        logger.error(
+                            Some(&e),
+                            format_args!(
+                            "Failed to update merge status for PR #{}.", 
+                            pr_number,
                         ));
                     }
                 }
                 Err(e) => {
-                    logger.error(format_args!(
-                        "Failed to push PR #{}: {}", 
-                        pr_number, e,
+                    logger.error(
+                        Some(&e),
+                        format_args!(
+                        "Failed to push PR #{}.", 
+                        pr_number,
                     ));
                 }
             }
