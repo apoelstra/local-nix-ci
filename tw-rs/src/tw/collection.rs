@@ -10,7 +10,9 @@ use xshell::{Shell, cmd};
 
 use super::task::PrOrCommitTask;
 use super::{CommitTask, PrTask};
-use crate::gh::{get_acks_from_github, compute_merge_description, GetAcksError, MergeDescriptionError};
+use crate::gh::{
+    GetAcksError, MergeDescriptionError, compute_merge_description, get_acks_from_github,
+};
 use crate::git::{self, GitCommit};
 use crate::tw::serde_types::{CiStatus, MergeStatus, ReviewStatus};
 use crate::tw::shell::{self, UniqueUuidError, get_or_insert_unique_uuid};
@@ -275,16 +277,16 @@ impl TaskCollection {
         let mut reset_review_status = false;
         let mut previous_review_notes = String::new();
         let mut previous_tip_commit = None;
-        
+
         if let Some(uuid) = existing_uuid {
             let existing_pr = &self.pulls[&uuid];
             let existing_tip_commit = self.commits[existing_pr.dep_uuid()].commit_id();
-            
+
             // Check if the tip commit has changed
             if existing_tip_commit != &pr_data.head_commit {
                 reset_review_status = true;
                 previous_tip_commit = Some(existing_tip_commit.clone());
-                
+
                 // Preserve existing review notes if any
                 if !existing_pr.review_notes().is_empty() {
                     previous_review_notes = existing_pr.review_notes().to_string();
@@ -344,7 +346,9 @@ impl TaskCollection {
                 crate::jj::jj_log(task_shell, "if(conflict,\"x\",\"\")", &merge_change_id)
                     .map_err(TaskCollectionError::Jj)?;
             if !conflicts_check.is_empty() {
-                let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS").quiet().run();
+                let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS")
+                    .quiet()
+                    .run();
             }
 
             task_cmd = task_cmd
@@ -353,7 +357,7 @@ impl TaskCollection {
                 .arg(format!("merge_change_id:{}", merge_change_id));
         }
 
-        // Get the latest set of ACKs from Github. 
+        // Get the latest set of ACKs from Github.
         let acks = get_acks_from_github(task_shell, num, head_commit)
             .map_err(TaskCollectionError::GetAcks)?;
         let github_acks_string = acks
@@ -368,7 +372,8 @@ impl TaskCollection {
             format!(
                 "# Previous review on tip {}:\n{}\n\n(Review reset due to commit changes)",
                 previous_tip,
-                previous_review_notes.lines()
+                previous_review_notes
+                    .lines()
                     .map(|line| format!("# {}", line))
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -420,7 +425,9 @@ impl TaskCollection {
             // Mark the last commit as TIP_COMMIT
             if *commit_id == pr_data.commits.last().unwrap().oid {
                 let commit_uuid = commit.uuid().to_string();
-                let _ = cmd!(task_shell, "task {commit_uuid} modify +TIP_COMMIT").quiet().run();
+                let _ = cmd!(task_shell, "task {commit_uuid} modify +TIP_COMMIT")
+                    .quiet()
+                    .run();
             }
         }
 
@@ -463,7 +470,9 @@ impl TaskCollection {
         let pr_uuid_str = pr_uuid.to_string();
 
         // Add dependency to the PR task for the tip commit
-        let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:").quiet().run(); // Clear dependencies
+        let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:")
+            .quiet()
+            .run(); // Clear dependencies
         let tip_commit_uuid_str = commit_uuids.last().expect("checked above").to_string();
         let _ = cmd!(
             task_shell,
@@ -493,7 +502,8 @@ impl TaskCollection {
                 pr_task.tip_commit(self).commit_id(),
                 &merge_change_id,
                 &acks,
-            ).map_err(TaskCollectionError::MergeDescription)?;
+            )
+            .map_err(TaskCollectionError::MergeDescription)?;
 
             // Add to map
             self.pulls.insert(pr_uuid, pr_task);
@@ -502,16 +512,22 @@ impl TaskCollection {
             // even keep track of this; it will invalidate the merge_commit_id but this
             // is fine; we only keep track of that commit up to its parents (see above
             // logic for deciding when to recreate it).
-            if let Err(e) = cmd!(task_shell, "jj describe --quiet -r {merge_change_id} -m {description}").quiet().run() {
+            if let Err(e) = cmd!(
+                task_shell,
+                "jj describe --quiet -r {merge_change_id} -m {description}"
+            )
+            .quiet()
+            .run()
+            {
                 eprintln!(
-                    "Warning: Failed to update description for PR #{}: {}. If you need this updated, try running 'refresh' again.", 
+                    "Warning: Failed to update description for PR #{}: {}. If you need this updated, try running 'refresh' again.",
                     num, e,
                 );
             }
 
             // Check if PR is ready for merge after inserting/updating
             let _ = self.check_and_update_pr_merge_readiness(&pr_uuid);
-            
+
             Ok(&self.pulls[&pr_uuid])
         } else {
             panic!("Somehow created non-PR task");
@@ -521,10 +537,9 @@ impl TaskCollection {
     pub fn update_commit_local_ci_commit_id(
         &mut self,
         uuid: &uuid::Uuid,
-        commit_id: String
+        commit_id: String,
     ) -> Result<(), UpdateError> {
-        let sh = crate::tw::task_shell()
-            .map_err(UpdateError::CreateShell)?;
+        let sh = crate::tw::task_shell().map_err(UpdateError::CreateShell)?;
 
         let mut entry = match self.commits.entry(*uuid) {
             Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
@@ -544,10 +559,9 @@ impl TaskCollection {
     pub fn update_commit_derivation(
         &mut self,
         uuid: &uuid::Uuid,
-        derivation: String
+        derivation: String,
     ) -> Result<(), UpdateError> {
-        let sh = crate::tw::task_shell()
-            .map_err(UpdateError::CreateShell)?;
+        let sh = crate::tw::task_shell().map_err(UpdateError::CreateShell)?;
 
         let mut entry = match self.commits.entry(*uuid) {
             Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
@@ -567,10 +581,9 @@ impl TaskCollection {
     pub fn update_commit_ci_status(
         &mut self,
         uuid: &uuid::Uuid,
-        status: CiStatus
+        status: CiStatus,
     ) -> Result<(), UpdateError> {
-        let sh = crate::tw::task_shell()
-            .map_err(UpdateError::CreateShell)?;
+        let sh = crate::tw::task_shell().map_err(UpdateError::CreateShell)?;
 
         let mut entry = match self.commits.entry(*uuid) {
             Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
@@ -580,7 +593,7 @@ impl TaskCollection {
         let uuid_str = uuid.to_string();
         let status_str = match status {
             CiStatus::Unstarted => "unstarted",
-            CiStatus::Started => "started", 
+            CiStatus::Started => "started",
             CiStatus::Success => "success",
             CiStatus::Failed => "failed",
             CiStatus::Cancelled => "cancelled",
@@ -598,10 +611,9 @@ impl TaskCollection {
     pub fn update_pr_merge_status(
         &mut self,
         uuid: &uuid::Uuid,
-        status: MergeStatus
+        status: MergeStatus,
     ) -> Result<(), UpdateError> {
-        let sh = crate::tw::task_shell()
-            .map_err(UpdateError::CreateShell)?;
+        let sh = crate::tw::task_shell().map_err(UpdateError::CreateShell)?;
 
         let mut entry = match self.pulls.entry(*uuid) {
             Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
@@ -611,7 +623,7 @@ impl TaskCollection {
         let uuid_str = uuid.to_string();
         let status_str = match status {
             MergeStatus::Unstarted => "unstarted",
-            MergeStatus::NeedSig => "needsig", 
+            MergeStatus::NeedSig => "needsig",
             MergeStatus::Pushed => "pushed",
         };
 
@@ -630,8 +642,7 @@ impl TaskCollection {
         status: ReviewStatus,
         review_notes: String,
     ) -> Result<(), UpdateError> {
-        let sh = crate::tw::task_shell()
-            .map_err(UpdateError::CreateShell)?;
+        let sh = crate::tw::task_shell().map_err(UpdateError::CreateShell)?;
 
         let mut entry = match self.commits.entry(*uuid) {
             Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
@@ -647,10 +658,13 @@ impl TaskCollection {
             ReviewStatus::Unreviewed => "unreviewed",
         };
 
-        cmd!(sh, "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}")
-            .quiet()
-            .run()
-            .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
+        cmd!(
+            sh,
+            "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}"
+        )
+        .quiet()
+        .run()
+        .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 
         let commit = entry.get_mut();
         commit.review_status = status;
@@ -664,8 +678,7 @@ impl TaskCollection {
         status: ReviewStatus,
         review_notes: String,
     ) -> Result<(), UpdateError> {
-        let sh = crate::tw::task_shell()
-            .map_err(UpdateError::CreateShell)?;
+        let sh = crate::tw::task_shell().map_err(UpdateError::CreateShell)?;
 
         let mut entry = match self.pulls.entry(*uuid) {
             Entry::Vacant(_) => return Err(UpdateError::UnknownUuid(*uuid)),
@@ -681,10 +694,13 @@ impl TaskCollection {
             ReviewStatus::Unreviewed => "unreviewed",
         };
 
-        cmd!(sh, "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}")
-            .quiet()
-            .run()
-            .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
+        cmd!(
+            sh,
+            "task {uuid_str} modify review_status:{status_str} review_notes:{review_notes}"
+        )
+        .quiet()
+        .run()
+        .map_err(|e| UpdateError::ExecuteModify(*uuid, e))?;
 
         let pr = entry.get_mut();
         pr.review_status = status;
@@ -731,7 +747,8 @@ impl TaskCollection {
 
         // Get the merge commit
         let pr_task = pr_task.clone(); // un-borrow self.pulls
-        let mut merge_commit = self.commit(pr_task.merge_uuid())
+        let mut merge_commit = self
+            .commit(pr_task.merge_uuid())
             .expect("merge commit should exist")
             .clone();
 
@@ -739,14 +756,18 @@ impl TaskCollection {
         if merge_commit.is_clean_merge()
             && *merge_commit.review_status() == ReviewStatus::Unreviewed
         {
-            let auto_review_notes = format!("Auto-approved clean merge commit for PR #{}", pr_task.number());
+            let auto_review_notes = format!(
+                "Auto-approved clean merge commit for PR #{}",
+                pr_task.number()
+            );
             self.update_commit_review_status(
                 merge_commit.uuid(),
                 ReviewStatus::Approved,
                 auto_review_notes,
             )?;
             // Important: reload the merge commit after updating the task collection!
-            merge_commit = self.commit(pr_task.merge_uuid())
+            merge_commit = self
+                .commit(pr_task.merge_uuid())
                 .expect("merge commit should exist")
                 .clone();
         }
@@ -808,7 +829,9 @@ impl fmt::Display for TaskCollectionError {
             Self::ParseTask(_) => write!(f, "failed to parse task"),
             Self::ParseUuid(_) => write!(f, "failed to parse uuid"),
             Self::GetAcks(_) => write!(f, "failed to get ACKs from Github"),
-            Self::MergeDescription(_) => write!(f, "failed to compute description for merge commit"),
+            Self::MergeDescription(_) => {
+                write!(f, "failed to compute description for merge commit")
+            }
             Self::UniqueUuid(_) => write!(f, "no unique UUID for filter"),
             Self::Shell(_) => write!(f, "shell command failed"),
             Self::Utf8(_) => write!(f, "UTF-8 encoding error"),

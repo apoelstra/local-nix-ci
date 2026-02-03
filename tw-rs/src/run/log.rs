@@ -9,7 +9,7 @@ use crate::tw::CommitTask;
 
 /// Utility function for formatting the current time
 fn now() -> impl fmt::Display {
-     Utc::now().format("%Y-%m-%d %H:%M:%S")
+    Utc::now().format("%Y-%m-%d %H:%M:%S")
 }
 
 pub struct Logger {
@@ -18,9 +18,7 @@ pub struct Logger {
 
 impl Logger {
     pub fn new() -> Self {
-        Logger {
-            task: None,
-        }
+        Logger { task: None }
     }
 
     pub fn set_task(&mut self, task: Option<CommitTask>) {

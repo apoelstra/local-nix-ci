@@ -3,9 +3,9 @@
 mod log;
 mod state;
 
-use crate::tw::TaskCollection;
-use crate::tw::serde_types::{CiStatus, ReviewStatus, MergeStatus};
 use crate::git::GitCommit;
+use crate::tw::TaskCollection;
+use crate::tw::serde_types::{CiStatus, MergeStatus, ReviewStatus};
 use anyhow::Context as _;
 use std::fs;
 use std::path::Path;
@@ -25,18 +25,22 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut busy = false;
 
     logger.info(format_args!("Starting CI loop."));
-    
+
     // Reset any tasks with CI status "started" back to "unstarted"
-    let mut tasks = TaskCollection::new(task_shell)
-        .context("loading task database for startup reset")?;
-    
-    let started_commits: Vec<uuid::Uuid> = tasks.commits()
+    let mut tasks =
+        TaskCollection::new(task_shell).context("loading task database for startup reset")?;
+
+    let started_commits: Vec<uuid::Uuid> = tasks
+        .commits()
         .filter(|(_, commit)| *commit.ci_status() == CiStatus::Started)
         .map(|(uuid, _)| *uuid)
         .collect();
-    
+
     if !started_commits.is_empty() {
-        logger.info(format_args!("Resetting {} task(s) from 'started' to 'unstarted' status.", started_commits.len()));
+        logger.info(format_args!(
+            "Resetting {} task(s) from 'started' to 'unstarted' status.",
+            started_commits.len()
+        ));
         for commit_uuid in started_commits {
             if let Err(e) = tasks.update_commit_ci_status(&commit_uuid, CiStatus::Unstarted) {
                 logger.warn(format_args!("Failed to reset task {}: {}", commit_uuid, e));
@@ -53,8 +57,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
         // except during idle times. Reload the task database on every loop iteration,
         // because until we do, we'll miss any updates the user did via CLI. (Later,
         // when we daemonize this, we can have the user send a reload signal somehow.)
-        let mut tasks = TaskCollection::new(task_shell)
-            .context("reloading task database")?;
+        let mut tasks = TaskCollection::new(task_shell).context("reloading task database")?;
         let commit_uuid = match find_next_commit_for_ci(&tasks) {
             Some(uuid) => {
                 check_and_push_ready_prs(&logger, &mut tasks)?;
@@ -78,7 +81,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                         logger.info(format_args!(
                             "Nothing to do. Reloading task database. (Next message in {} minutes.)",
                             backoff.as_secs() / 60,
-                        )); 
+                        ));
                         last_check = Instant::now();
                     }
                 }
@@ -103,10 +106,11 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                 if success {
                     logger.info("SUCCESS.");
                     tasks.update_commit_ci_status(&commit_uuid, CiStatus::Success)?;
-                    
+
                     // Check all PRs containing this commit for merge readiness
                     for pr_number in commit_task.prs() {
-                        let pr_task = tasks.pull_by_number(commit_task.project(), *pr_number)
+                        let pr_task = tasks
+                            .pull_by_number(commit_task.project(), *pr_number)
                             .expect("PR in task collection")
                             .clone(); // clone to unborrow `tasks`
                         match tasks.check_and_update_pr_merge_readiness(pr_task.uuid()) {
@@ -117,15 +121,15 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                                     pr_task.merge_change_id(),
                                     pr_task.github_acks().lines().count(),
                                 ));
-                            },
-                            Ok(false) => {}, // No change needed
+                            }
+                            Ok(false) => {} // No change needed
                             Err(e) => logger.warn(format_args!(
-                                "Failed to check PR #{} merge readiness: {}", 
+                                "Failed to check PR #{} merge readiness: {}",
                                 pr_number, e
                             )),
                         }
                     }
-                    
+
                     post_approvals(&logger, &mut tasks, &commit_uuid)?;
                 } else {
                     logger.error(None, "FAILED");
@@ -143,8 +147,9 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
 
 fn find_next_commit_for_ci(tasks: &TaskCollection) -> Option<uuid::Uuid> {
     for (uuid, commit) in tasks.commits() {
-        if *commit.review_status() == ReviewStatus::Approved 
-            && *commit.ci_status() == CiStatus::Unstarted {
+        if *commit.review_status() == ReviewStatus::Approved
+            && *commit.ci_status() == CiStatus::Unstarted
+        {
             return Some(*uuid);
         }
     }
@@ -153,9 +158,9 @@ fn find_next_commit_for_ci(tasks: &TaskCollection) -> Option<uuid::Uuid> {
 
 fn process_commit(
     logger: &log::Logger,
-    tasks: &mut TaskCollection, 
-    commit_task: &crate::tw::CommitTask, 
-    state: &mut state::CiState
+    tasks: &mut TaskCollection,
+    commit_task: &crate::tw::CommitTask,
+    state: &mut state::CiState,
 ) -> anyhow::Result<bool> {
     let sh = Shell::new()?;
     let repo_root = commit_task.repo_root();
@@ -167,12 +172,15 @@ fn process_commit(
     let nixfile_path = state.temp_nix_dir().join(&nixfile_name);
 
     if !nixfile_path.exists() {
-        return Err(anyhow::anyhow!("Nixfile not found: {}", nixfile_path.display()));
+        return Err(anyhow::anyhow!(
+            "Nixfile not found: {}",
+            nixfile_path.display()
+        ));
     }
 
     // Find Cargo.lock files
     let lockfiles = find_cargo_lockfiles(&sh, commit_task.commit_id())?;
-    
+
     // Check for Cargo.toml without Cargo.lock
     let commit_id = commit_task.commit_id();
     let has_cargo_toml = cmd!(sh, "git ls-tree -r --name-only {commit_id}")
@@ -181,14 +189,17 @@ fn process_commit(
         .any(|line| line.ends_with("Cargo.toml"));
 
     if has_cargo_toml && lockfiles.is_empty() {
-        return Err(anyhow::anyhow!("Found Cargo.toml files but no Cargo.lock files"));
+        return Err(anyhow::anyhow!(
+            "Found Cargo.toml files but no Cargo.lock files"
+        ));
     }
 
     // Build cargo nixes JSON
     let cargo_nixes = if lockfiles.is_empty() {
         "{}".to_string()
     } else {
-        let entries: Vec<String> = lockfiles.iter()
+        let entries: Vec<String> = lockfiles
+            .iter()
             .map(|lockfile| format!("\"{}\" = null", lockfile))
             .collect();
         format!("{{ {}; }}", entries.join("; "))
@@ -205,21 +216,28 @@ fn process_commit(
     );
 
     // Add ci_dirty_suffix to commit task if needed
-    tasks.update_commit_local_ci_commit_id(
-        commit_task.uuid(),
-        state.local_ci_commit_id().to_owned(),
-    ).context("failed adding local CI commit ID to task")?;
+    tasks
+        .update_commit_local_ci_commit_id(commit_task.uuid(), state.local_ci_commit_id().to_owned())
+        .context("failed adding local CI commit ID to task")?;
 
     // Instantiate derivation. Because we want to capture our streams even if they fail,
     // we must use std::process::Command directly rather than xshell.
     logger.info("Instantiating derivation.");
     let instantiate_result = Command::new("nix-instantiate")
         .arg("--show-trace")
-        .arg("--arg").arg("inlineJsonConfig")
-        .arg(format!("{{ gitDir = \"{}\"; projectName = \"{}\"; }}", repo_root.display(), project))
-        .arg("--arg").arg("inlineCommitList")
+        .arg("--arg")
+        .arg("inlineJsonConfig")
+        .arg(format!(
+            "{{ gitDir = \"{}\"; projectName = \"{}\"; }}",
+            repo_root.display(),
+            project
+        ))
+        .arg("--arg")
+        .arg("inlineCommitList")
         .arg(format!("[ {} ]", commit_str))
-        .arg("--arg").arg("prNum").arg("\"\"")
+        .arg("--arg")
+        .arg("prNum")
+        .arg("\"\"")
         .arg(&nixfile_path)
         .current_dir(repo_root)
         .output();
@@ -229,7 +247,7 @@ fn process_commit(
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 logger.info(format_args!("Instantiated derivation: {path}"));
-                
+
                 tasks.update_commit_derivation(commit_task.uuid(), path.clone())?;
                 path
             } else {
@@ -239,14 +257,29 @@ fn process_commit(
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 );
-                save_error_to_file(logger, repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
+                save_error_to_file(
+                    logger,
+                    repo_root,
+                    commit_task.commit_id(),
+                    "instantiate",
+                    &error_content,
+                )?;
                 return Ok(false);
             }
         }
         Err(e) => {
-            let error_content = format!("Failed to run nix-instantiate for commit {}: {}", 
-                                       commit_task.commit_id(), e);
-            save_error_to_file(logger, repo_root, commit_task.commit_id(), "instantiate", &error_content)?;
+            let error_content = format!(
+                "Failed to run nix-instantiate for commit {}: {}",
+                commit_task.commit_id(),
+                e
+            );
+            save_error_to_file(
+                logger,
+                repo_root,
+                commit_task.commit_id(),
+                "instantiate",
+                &error_content,
+            )?;
             return Ok(false);
         }
     };
@@ -261,9 +294,11 @@ fn process_commit(
         .arg("--keep-failed")
         .arg("--keep-derivations")
         .arg("--keep-outputs")
-        .arg("--log-lines").arg("100")
+        .arg("--log-lines")
+        .arg("100")
         .arg(&derivation_path)
-        .arg("--log-format").arg("internal-json")
+        .arg("--log-format")
+        .arg("internal-json")
         .arg("-v")
         .current_dir(repo_root)
         .output();
@@ -279,15 +314,30 @@ fn process_commit(
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 );
-                save_error_to_file(logger, repo_root, commit_task.commit_id(), "build", &error_content)?;
+                save_error_to_file(
+                    logger,
+                    repo_root,
+                    commit_task.commit_id(),
+                    "build",
+                    &error_content,
+                )?;
                 Ok(false)
             }
         }
         Err(e) => {
             logger.error(Some(&e), "Failed to run nix-build.");
-            let error_content = format!("Failed to run nix-build for commit {}: {}", 
-                                       commit_task.commit_id(), e);
-            save_error_to_file(logger, repo_root, commit_task.commit_id(), "build", &error_content)?;
+            let error_content = format!(
+                "Failed to run nix-build for commit {}: {}",
+                commit_task.commit_id(),
+                e
+            );
+            save_error_to_file(
+                logger,
+                repo_root,
+                commit_task.commit_id(),
+                "build",
+                &error_content,
+            )?;
             Ok(false)
         }
     }
@@ -308,7 +358,10 @@ fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<Vec
     if lockfiles.is_empty() {
         // xshell can't expand wildcards, so we need to invoke `find` rather than `ls ../*.lock`;
         // find will expand the wildcards for us.
-        if let Ok(aux_output) = cmd!(sh, "find ../ -maxdepth 1 -name Cargo*.lock").ignore_status().read() {
+        if let Ok(aux_output) = cmd!(sh, "find ../ -maxdepth 1 -name Cargo*.lock")
+            .ignore_status()
+            .read()
+        {
             for line in aux_output.lines() {
                 let filename = line.trim();
                 if !filename.is_empty() && filename.contains("Cargo") {
@@ -324,9 +377,15 @@ fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<Vec
     Ok(lockfiles)
 }
 
-fn save_error_to_file(logger: &log::Logger, repo_root: &Path, commit_id: &GitCommit, operation: &str, content: &str) -> anyhow::Result<()> {
+fn save_error_to_file(
+    logger: &log::Logger,
+    repo_root: &Path,
+    commit_id: &GitCommit,
+    operation: &str,
+    content: &str,
+) -> anyhow::Result<()> {
     use chrono::Utc;
-    
+
     let error_dir = repo_root.parent().unwrap_or(repo_root);
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
     let filename = format!("nix-error-{}-{}-{}.log", commit_id, operation, timestamp);
@@ -335,12 +394,19 @@ fn save_error_to_file(logger: &log::Logger, repo_root: &Path, commit_id: &GitCom
     fs::write(&error_path, content)
         .with_context(|| format!("Failed to write error file: {}", error_path.display()))?;
 
-    logger.info(format_args!("Error details saved to: {}", error_path.display()));
+    logger.info(format_args!(
+        "Error details saved to: {}",
+        error_path.display()
+    ));
 
     Ok(())
 }
 
-fn post_approvals(logger: &log::Logger, tasks: &mut TaskCollection, _commit_uuid: &uuid::Uuid) -> anyhow::Result<()> {
+fn post_approvals(
+    logger: &log::Logger,
+    tasks: &mut TaskCollection,
+    _commit_uuid: &uuid::Uuid,
+) -> anyhow::Result<()> {
     // Check all PRs to see if they're ready for approval or merge status update
     for (_, pr_task) in tasks.pulls() {
         // Skip already-pushed things.
@@ -348,33 +414,35 @@ fn post_approvals(logger: &log::Logger, tasks: &mut TaskCollection, _commit_uuid
             continue;
         }
 
-        let all_commits_approved_and_successful = pr_task.commits(tasks)
-            .all(|commit| {
-                *commit.review_status() == ReviewStatus::Approved 
+        let all_commits_approved_and_successful = pr_task.commits(tasks).all(|commit| {
+            *commit.review_status() == ReviewStatus::Approved
                 && *commit.ci_status() == CiStatus::Success
-            });
+        });
 
         // If all commits succeeded and PR approved, post approval
-        if all_commits_approved_and_successful && *pr_task.review_status() == ReviewStatus::Approved {
+        if all_commits_approved_and_successful && *pr_task.review_status() == ReviewStatus::Approved
+        {
             let sh = Shell::new()?;
             let repo_root = pr_task.repo_root();
             let repo = crate::repo::Repository {
                 project_name: pr_task.project().to_string(),
                 repo_root: repo_root.to_owned(),
             };
-            
+
             if let Err(e) = crate::post_github_approval_if_ready(&sh, tasks, &repo, pr_task) {
                 logger.error(
                     Some(e.as_ref()),
                     format_args!(
-                    "Failed to post GitHub approval for PR #{}",
-                     pr_task.number(), 
-                ));
+                        "Failed to post GitHub approval for PR #{}",
+                        pr_task.number(),
+                    ),
+                );
             }
         }
 
         // If all commits succeeded but PR not approved, alert user
-        if all_commits_approved_and_successful && *pr_task.review_status() != ReviewStatus::Approved {
+        if all_commits_approved_and_successful && *pr_task.review_status() != ReviewStatus::Approved
+        {
             logger.warn(format_args!(
                 "PR #{} has all commits approved and successful, but PR itself is not approved. Please approve it.", 
                 pr_task.number(),
@@ -391,7 +459,8 @@ fn check_and_push_ready_prs(
     let sh = Shell::new()?;
     // Find PRs with merge_status:needsig. Collect into a Vec to avoid keeping
     // a borrow of `tasks`.
-    let needsig_prs: Vec<_> = tasks.pulls()
+    let needsig_prs: Vec<_> = tasks
+        .pulls()
         .filter(|(_, pr)| *pr.merge_status() == MergeStatus::NeedSig)
         .map(|(uuid, pr)| (*uuid, pr.number(), pr.project().to_string()))
         .collect();
@@ -410,10 +479,8 @@ fn check_and_push_ready_prs(
             Err(e) => {
                 logger.error(
                     Some(&e),
-                    format_args!(
-                    "Failed to refresh PR #{}.", 
-                    pr_number,
-                ));
+                    format_args!("Failed to refresh PR #{}.", pr_number,),
+                );
                 continue;
             }
         };
@@ -427,18 +494,17 @@ fn check_and_push_ready_prs(
         let merge_change_id = refreshed_pr.merge_change_id().to_owned();
 
         // Check if JJ change has GPG signature
-        let has_signature = match crate::jj::jj_log(&sh, "if(signature, \"true\", \"false\")", &merge_change_id) {
-            Ok(result) => result.trim() == "true",
-            Err(e) => {
-                logger.error(
-                    Some(&e),
-                    format_args!(
-                    "Failed to check signature for PR #{}.", 
-                    pr_number,
-                ));
-                continue;
-            }
-        };
+        let has_signature =
+            match crate::jj::jj_log(&sh, "if(signature, \"true\", \"false\")", &merge_change_id) {
+                Ok(result) => result.trim() == "true",
+                Err(e) => {
+                    logger.error(
+                        Some(&e),
+                        format_args!("Failed to check signature for PR #{}.", pr_number,),
+                    );
+                    continue;
+                }
+            };
 
         // Update merge commit description with latest ACKs
         let refreshed_pr = refreshed_pr.clone();
@@ -450,10 +516,8 @@ fn check_and_push_ready_prs(
                 Err(e) => {
                     logger.error(
                         Some(&e),
-                        format_args!(
-                        "Failed to get commit ID for PR #{}", 
-                        pr_number,
-                    ));
+                        format_args!("Failed to get commit ID for PR #{}", pr_number,),
+                    );
                     continue;
                 }
             };
@@ -462,7 +526,7 @@ fn check_and_push_ready_prs(
             let base_ref = refreshed_pr.base_ref();
 
             logger.info(format_args!(
-                "{} PR #{} has GPG signature, pushing to {}", 
+                "{} PR #{} has GPG signature, pushing to {}",
                 project, pr_number, base_ref,
             ));
 
@@ -470,24 +534,17 @@ fn check_and_push_ready_prs(
             match cmd!(sh, "git push origin {merge_commit_id}:{base_ref}").run() {
                 Ok(_) => {
                     logger.info("Successfully pushed.");
-                    
+
                     // Update merge status to pushed
                     if let Err(e) = tasks.update_pr_merge_status(&pr_uuid, MergeStatus::Pushed) {
                         logger.error(
                             Some(&e),
-                            format_args!(
-                            "Failed to update merge status for PR #{}.", 
-                            pr_number,
-                        ));
+                            format_args!("Failed to update merge status for PR #{}.", pr_number,),
+                        );
                     }
                 }
                 Err(e) => {
-                    logger.error(
-                        Some(&e),
-                        format_args!(
-                        "Failed to push PR #{}.", 
-                        pr_number,
-                    ));
+                    logger.error(Some(&e), format_args!("Failed to push PR #{}.", pr_number,));
                 }
             }
         } else {

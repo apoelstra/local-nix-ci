@@ -99,7 +99,6 @@ pub fn resolve_ref<R: AsRef<OsStr>>(shell: &Shell, git_ref: R) -> Result<GitComm
     GitCommit::from_str(output.trim())
 }
 
-
 /// Checks whether a commit is available locally; failing that tries to fetch it from origin;
 /// failing that tries to fetch it from upstream; and failing that returns an error.
 pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Error> {
@@ -118,11 +117,29 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
     }
 
     // Then try to fetch it from origin then upstream.
-    if cmd!(shell, "git fetch --force origin {commit}:+refs/heads/local-ci/last-fetch").quiet().ignore_stdout().run().is_ok() && now_have_commit(shell, &commit) {
+    if cmd!(
+        shell,
+        "git fetch --force origin {commit}:+refs/heads/local-ci/last-fetch"
+    )
+    .quiet()
+    .ignore_stdout()
+    .run()
+    .is_ok()
+        && now_have_commit(shell, &commit)
+    {
         let _ = cmd!(shell, "jj git import").quiet().run();
         return Ok(());
     }
-    if cmd!(shell, "git fetch --force upstream {commit}:+refs/heads/local-ci/last-fetch").quiet().ignore_stdout().run().is_ok() && now_have_commit(shell, &commit) {
+    if cmd!(
+        shell,
+        "git fetch --force upstream {commit}:+refs/heads/local-ci/last-fetch"
+    )
+    .quiet()
+    .ignore_stdout()
+    .run()
+    .is_ok()
+        && now_have_commit(shell, &commit)
+    {
         let _ = cmd!(shell, "jj git import").quiet().run();
         return Ok(());
     }
@@ -143,7 +160,12 @@ pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<GitCommit, E
         .and_then(|_| resolve_ref(shell, format!("origin/{remote_ref}")))
         .or_else(|e| {
             // Attempt 'upstream' on error, but failing that just return the error we got for 'origin'
-            if cmd!(shell, "git fetch upstream {remote_ref}").quiet().ignore_stdout().run().is_ok() {
+            if cmd!(shell, "git fetch upstream {remote_ref}")
+                .quiet()
+                .ignore_stdout()
+                .run()
+                .is_ok()
+            {
                 if let Ok(r) = resolve_ref(shell, format!("upstream/{remote_ref}")) {
                     return Ok(r);
                 }

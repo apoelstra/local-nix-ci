@@ -495,7 +495,8 @@ fn review_commit_interactive(
 
             // Update the task
             let uuid = *commit_task.uuid(); // borrowck
-            tasks.update_commit_review_status(&uuid, status, review_notes.clone())
+            tasks
+                .update_commit_review_status(&uuid, status, review_notes.clone())
                 .context("updating commit review status")?;
 
             println!("Commit {} review status updated to: {}", commit_id, status);
@@ -507,16 +508,23 @@ fn review_commit_interactive(
             if status == ReviewStatus::Approved {
                 let mut to_update = vec![];
                 for (pr_uuid, pr_task) in tasks.pulls() {
-                    let contains_commit = pr_task.commits(tasks).any(|c| c.commit_id() == commit_id);
+                    let contains_commit =
+                        pr_task.commits(tasks).any(|c| c.commit_id() == commit_id);
                     if contains_commit {
                         to_update.push((*pr_uuid, pr_task.number()));
                     }
                 }
                 for (pr_uuid, pr_number) in to_update {
                     match tasks.check_and_update_pr_merge_readiness(&pr_uuid) {
-                        Ok(true) => println!("PR #{} is now ready for merge (status updated to needsig)", pr_number),
-                        Ok(false) => {}, // No change needed
-                        Err(e) => eprintln!("Warning: Failed to check PR #{} merge readiness: {}", pr_number, e),
+                        Ok(true) => println!(
+                            "PR #{} is now ready for merge (status updated to needsig)",
+                            pr_number
+                        ),
+                        Ok(false) => {} // No change needed
+                        Err(e) => eprintln!(
+                            "Warning: Failed to check PR #{} merge readiness: {}",
+                            pr_number, e
+                        ),
                     }
                 }
             }
@@ -632,7 +640,8 @@ fn review_pr_interactive(
                 get_pr_review_notes_from_editor(shell, pull, &status, tip_commit, &commits)?;
 
             // Update the task
-            tasks.update_pr_review_status(pull.uuid(), status, review_notes.clone())
+            tasks
+                .update_pr_review_status(pull.uuid(), status, review_notes.clone())
                 .context("updating PR review status")?;
 
             println!("PR #{} review status updated to: {}", pull.number(), status);
@@ -647,17 +656,22 @@ fn review_pr_interactive(
                 // Check if PR is ready for merge (this also handles auto-approval of clean merge commits)
                 let pr_uuid = *pull.uuid();
                 match tasks.check_and_update_pr_merge_readiness(&pr_uuid) {
-                    Ok(true) => println!("PR #{} is now ready for merge (status updated to needsig)", pull.number()),
+                    Ok(true) => println!(
+                        "PR #{} is now ready for merge (status updated to needsig)",
+                        pull.number()
+                    ),
                     Ok(false) => {
                         let merge_commit = pull.merge_commit(tasks);
                         if merge_commit.is_merge_commit() && !merge_commit.is_clean_merge() {
-                            eprintln!("Warning: Merge commit is not clean and needs manual review.");
+                            eprintln!(
+                                "Warning: Merge commit is not clean and needs manual review."
+                            );
                             eprintln!(
                                 "Please review the merge commit separately: tw-rs commit {} review",
                                 merge_commit.commit_id()
                             );
                         }
-                    },
+                    }
                     Err(e) => eprintln!("Warning: Failed to check PR merge readiness: {}", e),
                 }
             }
@@ -717,8 +731,7 @@ fn get_pr_review_notes_from_editor(
             template.push_str("#   Review: (none)\n");
         }
     }
-    template
-        .push_str("# Edit the following message. Lines starting with # will be removed.\n");
+    template.push_str("# Edit the following message. Lines starting with # will be removed.\n");
     if *status == ReviewStatus::Approved {
         if post_full_ack {
             template.push_str(&format!(
@@ -726,10 +739,7 @@ fn get_pr_review_notes_from_editor(
                 tip_commit
             ));
         } else {
-            template.push_str(&format!(
-                "utACK {}\n",
-                tip_commit
-            ));
+            template.push_str(&format!("utACK {}\n", tip_commit));
         }
     } else {
         template.push_str(&format!(
@@ -785,7 +795,10 @@ fn post_github_approval_if_ready(
             || *commit.ci_status() != CiStatus::Success
         {
             all_commits_approved_and_ci = false;
-            if !matches!(*commit.review_status(), ReviewStatus::Approved | ReviewStatus::ApprovedNoCi) {
+            if !matches!(
+                *commit.review_status(),
+                ReviewStatus::Approved | ReviewStatus::ApprovedNoCi
+            ) {
                 all_commits_utacked = false;
             }
             break;

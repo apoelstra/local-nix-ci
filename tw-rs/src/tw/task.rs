@@ -376,8 +376,7 @@ impl PrOrCommitTask {
             )?;
             let merge_uuid =
                 unwrap_field(uuid, task_str, "pr", "merge_uuid", task_json.merge_uuid)?;
-            let base_ref =
-                unwrap_field(uuid, task_str, "pr", "base_ref", task_json.base_ref)?;
+            let base_ref = unwrap_field(uuid, task_str, "pr", "base_ref", task_json.base_ref)?;
 
             Ok(PrOrCommitTask::Pr(PrTask {
                 uuid,

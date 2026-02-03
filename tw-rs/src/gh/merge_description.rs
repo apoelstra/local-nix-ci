@@ -6,8 +6,8 @@ use core::fmt;
 use std::collections::HashMap;
 
 use bitcoin_hashes::{HashEngine as _, sha512};
-use xshell::{Shell, cmd};
 use serde_json::Value;
+use xshell::{Shell, cmd};
 
 #[derive(Debug)]
 pub enum MergeDescriptionError {
@@ -23,12 +23,22 @@ pub enum MergeDescriptionError {
 impl fmt::Display for MergeDescriptionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            Self::GetCommitId(ref change_id, _) => write!(f, "failed to get commit ID for change ID {change_id}"),
-            Self::ParseCommitId(ref commit_id, _) => write!(f, "failed to parse commit ID {commit_id}"),
-            Self::GetPrBody(pr_num, _) => write!(f, "failed get PR body for {pr_num} from 'gh pr view'"),
-            Self::ParsePrBodyJson(pr_num, _) => write!(f, "failed to parse PR body JSON for {pr_num}"),
+            Self::GetCommitId(ref change_id, _) => {
+                write!(f, "failed to get commit ID for change ID {change_id}")
+            }
+            Self::ParseCommitId(ref commit_id, _) => {
+                write!(f, "failed to parse commit ID {commit_id}")
+            }
+            Self::GetPrBody(pr_num, _) => {
+                write!(f, "failed get PR body for {pr_num} from 'gh pr view'")
+            }
+            Self::ParsePrBodyJson(pr_num, _) => {
+                write!(f, "failed to parse PR body JSON for {pr_num}")
+            }
             Self::GetCommitList(_) => write!(f, "failed to get commit list"),
-            Self::ListTreeContents(ref commit, _) => write!(f, "failed to list tree contents for commit {commit}"),
+            Self::ListTreeContents(ref commit, _) => {
+                write!(f, "failed to list tree contents for commit {commit}")
+            }
             Self::ReadBlob(ref blob_id, _) => write!(f, "failed to read blob {blob_id}"),
         }
     }
@@ -55,14 +65,18 @@ pub enum GetAcksError {
     GetPrReviews(usize, xshell::Error),
     ParseReviewsJson(usize, serde_json::Error),
 }
-    
+
 impl fmt::Display for GetAcksError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             Self::GetPrComments(pr_num, _) => write!(f, "failed to get PR comments for {pr_num}"),
-            Self::ParseCommentsJson(pr_num, _) => write!(f, "failed to parse comments JSON for {pr_num}"),
+            Self::ParseCommentsJson(pr_num, _) => {
+                write!(f, "failed to parse comments JSON for {pr_num}")
+            }
             Self::GetPrReviews(pr_num, _) => write!(f, "failed to get PR reviews for {pr_num}"),
-            Self::ParseReviewsJson(pr_num, _) => write!(f, "failed to parse reviews JSON for {pr_num}"),
+            Self::ParseReviewsJson(pr_num, _) => {
+                write!(f, "failed to parse reviews JSON for {pr_num}")
+            }
         }
     }
 }
@@ -89,30 +103,31 @@ pub fn compute_merge_description(
 ) -> Result<String, MergeDescriptionError> {
     let pr_number = pr_task.number();
     let project = pr_task.project().replace('.', "/");
-    
+
     // Get merge commit ID from JJ change
     let merge_commit_id = crate::jj::jj_log(sh, "commit_id", merge_change_id)
         .map_err(|e| MergeDescriptionError::GetCommitId(merge_change_id.to_owned(), e))?;
     let merge_commit_id = merge_commit_id.trim();
-    
+
     // Parse merge commit ID as GitCommit
-    let merge_commit: GitCommit = merge_commit_id.parse()
+    let merge_commit: GitCommit = merge_commit_id
+        .parse()
         .map_err(|e| MergeDescriptionError::ParseCommitId(merge_commit_id.to_owned(), e))?;
 
     // Get PR info from task and GitHub
     let title = pr_task.title();
-    
+
     // Get PR body from GitHub using gh tool
     let num_s = pr_number.to_string();
     let body_json = cmd!(sh, "gh pr view {num_s} --json body")
         .read()
         .map_err(|e| MergeDescriptionError::GetPrBody(pr_number, e))?;
-    
+
     let body_data: Value = serde_json::from_str(&body_json)
         .map_err(|e| MergeDescriptionError::ParsePrBodyJson(pr_number, e))?;
-    
+
     let body = body_data["body"].as_str().unwrap_or("").to_string();
-    
+
     // Get base and head commits
     let base_commit = pr_task.base_commit();
 
@@ -134,7 +149,8 @@ pub fn compute_merge_description(
     // do it for non-empty bodies? The removal was suggested by Claude. I could go
     // either way, but sticking with "be compatible with the existing script" to
     // minimize the likelihood of confusing tooling.
-    { // if !body.is_empty() {
+    {
+        // if !body.is_empty() {
         message.push_str("\n\nPull request description:\n\n  ");
         message.push_str(&body.trim().replace('\r', "").replace('\n', "\n  "));
         message.push('\n');
@@ -170,7 +186,7 @@ pub fn get_acks_from_github(
     let comments_json = cmd!(sh, "gh pr view {pr_number_s} --json comments")
         .read()
         .map_err(|e| GetAcksError::GetPrComments(pr_number, e))?;
-    
+
     let comments_data: Value = serde_json::from_str(&comments_json)
         .map_err(|e| GetAcksError::ParseCommentsJson(pr_number, e))?;
 
@@ -185,7 +201,8 @@ pub fn get_acks_from_github(
                     if line.contains("ACK") 
                         && line.contains(head_abbrev)
                         && !line.starts_with("> ")     // omit quoted comments
-                        && !line.starts_with("    ")   // omit markdown indentation
+                        && !line.starts_with("    ")
+                    // omit markdown indentation
                     {
                         acks.push((author.to_string(), line.to_string()));
                         break; // Only take first ACK per user
@@ -199,22 +216,22 @@ pub fn get_acks_from_github(
     let reviews_json = cmd!(sh, "gh pr view {pr_number_s} --json reviews")
         .read()
         .map_err(|e| GetAcksError::GetPrReviews(pr_number, e))?;
-    
+
     let reviews_data: Value = serde_json::from_str(&reviews_json)
         .map_err(|e| GetAcksError::ParseReviewsJson(pr_number, e))?;
 
     if let Some(reviews_array) = reviews_data["reviews"].as_array() {
         for review in reviews_array {
-            if let (Some(body), Some(author)) = (
-                review["body"].as_str(),
-                review["author"]["login"].as_str(),
-            ) {
+            if let (Some(body), Some(author)) =
+                (review["body"].as_str(), review["author"]["login"].as_str())
+            {
                 // Look for ACK lines that contain the abbreviated commit ID
                 for line in body.lines() {
                     if line.contains("ACK") 
                         && line.contains(head_abbrev)
                         && !line.starts_with("> ")     // omit quoted comments
-                        && !line.starts_with("    ")   // omit markdown indentation
+                        && !line.starts_with("    ")
+                    // omit markdown indentation
                     {
                         // Check if we already have an ACK from this user
                         if !acks.iter().any(|(name, _)| name == author) {
@@ -226,7 +243,7 @@ pub fn get_acks_from_github(
             }
         }
     }
-    
+
     Ok(acks)
 }
 
@@ -244,7 +261,7 @@ fn tree_sha512sum(sh: &Shell, commit_id: &GitCommit) -> Result<String, MergeDesc
         if let Some(tab_pos) = line.find('\t') {
             let metadata_part = &line[..tab_pos];
             let name = &line[tab_pos + 1..];
-            
+
             let parts: Vec<&str> = metadata_part.split_whitespace().collect();
             if parts.len() >= 3 && parts[1] == "blob" {
                 files.push(name.to_string());
@@ -268,7 +285,7 @@ fn tree_sha512sum(sh: &Shell, commit_id: &GitCommit) -> Result<String, MergeDesc
 
             // Hash the blob content
             let file_hash = sha512::Hash::hash(&blob_content.stdout);
-            
+
             // Update overall hash: hash + "  " + filename + "\n"
             overall_engine.input(file_hash.to_string().as_bytes());
             overall_engine.input(b"  ");
@@ -280,4 +297,3 @@ fn tree_sha512sum(sh: &Shell, commit_id: &GitCommit) -> Result<String, MergeDesc
     let final_hash = sha512::Hash::from_engine(overall_engine);
     Ok(final_hash.to_string())
 }
-
