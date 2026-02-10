@@ -622,6 +622,7 @@ impl TaskCollection {
 
         let uuid_str = uuid.to_string();
         let status_str = match status {
+            MergeStatus::Cancelled => "cancelled",
             MergeStatus::Unstarted => "unstarted",
             MergeStatus::NeedSig => "needsig",
             MergeStatus::Pushed => "pushed",

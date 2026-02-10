@@ -31,6 +31,7 @@ impl fmt::Display for CiStatus {
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MergeStatus {
+    Cancelled,
     #[default]
     Unstarted,
     NeedSig,
@@ -40,6 +41,7 @@ pub enum MergeStatus {
 impl fmt::Display for MergeStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("cancelled"),
             Self::Unstarted => f.write_str("unstarted"),
             Self::NeedSig => f.write_str("NEEDS SIGNATURE"),
             Self::Pushed => f.write_str("pushed"),
