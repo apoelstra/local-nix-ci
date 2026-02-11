@@ -350,7 +350,7 @@ fn find_cargo_lockfiles(sh: &Shell, commit_id: &GitCommit) -> anyhow::Result<Vec
 
     let mut lockfiles: Vec<String> = output
         .lines()
-        .filter(|line| line.contains("Cargo") && line.ends_with(".lock"))
+        .filter(|line| line.starts_with("Cargo") && line.ends_with(".lock"))
         .map(|s| s.to_string())
         .collect();
 
