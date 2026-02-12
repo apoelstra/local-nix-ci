@@ -137,6 +137,7 @@ pub struct CommitTask {
     is_tip: bool,
     is_merge_commit: bool,
     is_clean_merge: bool,
+    has_conflicts: bool,
     pub(super) ci_status: CiStatus,
     pub(super) local_ci_commit_id: Option<String>,
     pub(super) derivation: Option<String>,
@@ -184,6 +185,10 @@ impl CommitTask {
 
     pub fn ci_status(&self) -> &CiStatus {
         &self.ci_status
+    }
+
+    pub fn has_conflicts(&self) -> bool {
+        self.has_conflicts
     }
 
     pub fn is_tip(&self) -> bool {
@@ -316,6 +321,7 @@ impl PrOrCommitTask {
         let is_tip = task_json.has_tag("TIP_COMMIT");
         let is_merge_commit = task_json.has_tag("MERGE_COMMIT");
         let is_clean_merge = task_json.has_tag("CLEAN_MERGE");
+        let has_conflicts = task_json.has_tag("HAS_CONFLICTS");
 
         let project = task_json
             .project
@@ -347,6 +353,7 @@ impl PrOrCommitTask {
                 is_tip,
                 is_merge_commit,
                 is_clean_merge,
+                has_conflicts,
                 local_ci_commit_id: task_json.local_ci_commit_id,
                 derivation: task_json.derivation,
                 claimed_by: task_json.claimed_by,

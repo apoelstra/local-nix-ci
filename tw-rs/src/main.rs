@@ -664,10 +664,10 @@ fn review_pr_interactive(
                         let merge_commit = pull.merge_commit(tasks);
                         if merge_commit.is_merge_commit() && !merge_commit.is_clean_merge() {
                             eprintln!(
-                                "Warning: Merge commit is not clean and needs manual review."
+                                "Warning: Merge commit is not clean and may need manual review."
                             );
                             eprintln!(
-                                "Please review the merge commit separately: tw-rs commit {} review",
+                                "If you want to review the merge commit separately: tw-rs commit {} review",
                                 merge_commit.commit_id()
                             );
                         }

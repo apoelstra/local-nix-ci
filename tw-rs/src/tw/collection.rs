@@ -753,12 +753,12 @@ impl TaskCollection {
             .expect("merge commit should exist")
             .clone();
 
-        // Auto-approve clean merge commit if all commits are approved
-        if merge_commit.is_clean_merge()
+        // Auto-approve merge commit if it doesn't have conflicts and all commits are approved
+        if !merge_commit.has_conflicts()
             && *merge_commit.review_status() == ReviewStatus::Unreviewed
         {
             let auto_review_notes = format!(
-                "Auto-approved clean merge commit for PR #{}",
+                "Auto-approved non-conflicted merge commit for PR #{}",
                 pr_task.number()
             );
             self.update_commit_review_status(
