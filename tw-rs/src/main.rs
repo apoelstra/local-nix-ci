@@ -807,11 +807,6 @@ fn post_github_approval_if_ready(
 
     // If all commits successful and PR is approved, post approval on GitHub
     if all_commits_approved_and_ci || all_commits_utacked {
-        println!(
-            "All commits in PR #{} are successful and PR is approved. Checking if approval already posted...",
-            pull.number()
-        );
-
         // Get PR review notes
         let pr_review_notes = pull.review_notes();
         let pr_num = pull.number().to_string();
