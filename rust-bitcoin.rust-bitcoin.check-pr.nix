@@ -19,7 +19,7 @@ in import ./rust.check-pr.nix {
       else if workspace == "hashes"
       then utils.featuresForSrc {
         include = [ [ "std" "schemars" ] ];
-        exclude = [ "actual-serde" "schemars" ];
+        exclude = [ "actual-arbitrary" "actual-serde" "schemars" ];
       } { inherit src cargoToml needsNoStd; }
       else utils.featuresForSrc { } { inherit src cargoToml needsNoStd; };
 

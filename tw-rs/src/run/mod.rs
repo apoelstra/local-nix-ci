@@ -297,8 +297,6 @@ fn process_commit(
         .arg("--log-lines")
         .arg("100")
         .arg(&derivation_path)
-        .arg("--log-format")
-        .arg("internal-json")
         .arg("-v")
         .current_dir(repo_root)
         .output();
