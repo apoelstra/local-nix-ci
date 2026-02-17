@@ -542,9 +542,22 @@ rec {
     generatedCargoNix:
     let
       cargoNixPath = "${generatedCargoNix}";
+      blurb = ''
+        echo 'Cargo.nix: ${cargoNixPath}'
+        echo 'Project name: ${projectName}'
+        echo 'PR number: ${builtins.toString prNum}'
+        echo 'rustc: ${builtins.toString rustc}'
+        echo 'lockFile: ${lockFile}'
+        echo 'Source commit: ${builtins.toString src.commitId}'
+        echo 'Source: ${builtins.toString src.src}'
+        echo 'Workspace: ${if isNull workspace then "[no workspaces]" else workspace}'
+        echo 'Features: ${builtins.toJSON features}'
+        echo 'Patches: ${builtins.toJSON patches}'
+      '';
+      blurbHash = builtins.hashString "sha256" blurb;
       releaseModeName = if releaseMode then "release" else "debug";
       memoName = builtins.unsafeDiscardStringContext
-        "${projectName}-called-cargo-nix-${builtins.toString prNum}-${src.shortId}-${lockFile}-${rustc.version}-${releaseModeName}";
+        "${projectName}-called-cargo-nix-${builtins.toString prNum}-${src.shortId}-${blurbHash}";
       # We are given the IFD for the crate in question as `generatedCargoNix`. But to get
       # an actual derivation, we first need to call it (setting various arguments
       # according to the matrix values), then take the `build` attribute of that,
@@ -577,16 +590,7 @@ rec {
               preUnpack = ''
                 set +x
                 echo "[buildRustCrate override for crate ${crate.crateName} (root)]"
-                echo 'Cargo.nix: ${cargoNixPath}'
-                echo 'Project name: ${projectName}'
-                echo 'PR number: ${builtins.toString prNum}'
-                echo 'rustc: ${builtins.toString rustc}'
-                echo 'lockFile: ${lockFile}'
-                echo 'Source commit: ${builtins.toString src.commitId}'
-                echo 'Source: ${builtins.toString src.src}'
-                echo 'Workspace: ${if isNull workspace then "[no workspaces]" else workspace}'
-                echo 'Features: ${builtins.toJSON features}'
-                echo 'Patches: ${builtins.toJSON patches}'
+                ${blurb}
 
                 export CARGO_BIN_NAME="${projectName}"
                 export CARGO_CRATE_NAME="${crate.crateName}"
