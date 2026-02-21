@@ -408,7 +408,7 @@ fn post_approvals(
     // Check all PRs to see if they're ready for approval or merge status update
     for (_, pr_task) in tasks.pulls() {
         // Skip already-pushed things.
-        if *pr_task.merge_status() == MergeStatus::Pushed {
+        if matches!(*pr_task.merge_status(), MergeStatus::Cancelled | MergeStatus::Pushed) {
             continue;
         }
 
