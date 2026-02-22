@@ -48,9 +48,6 @@ pub struct RunQueue {
 
 impl RunQueue {
     pub fn status(&self) {
-        println!("Queue status:");
-        println!();
-
         // PR Commit Queue
         println!("PR Commit Queue ({} commits):", self.pr_commit_queue.len());
         for &uuid in &self.pr_commit_queue {
@@ -181,15 +178,16 @@ impl RunQueue {
                     continue;
                 }
             }
-            // If we already know about the task just skip it.
-            if new.map.contains_key(&uuid) {
-                continue;
-            }
             // Queue the next thing.
             if stack.is_empty() {
                 if let Some(next) = iter.next() {
                     stack.push(next);
                 }
+            }
+            // If we already know about the task just skip it.
+            if new.map.contains_key(&uuid) {
+                println!("[skipping already-seen commit {}]", commit.commit_id());
+                continue;
             }
 
             // If the task is not approved, we don't need to do it.
