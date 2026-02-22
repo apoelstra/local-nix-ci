@@ -90,6 +90,10 @@ impl PrTask {
         &self.merge_change_id
     }
 
+    pub fn ack_count(&self) -> usize {
+        self.github_acks.lines().count()
+    }
+
     pub fn merge_commit<'tc>(&self, collection: &'tc super::TaskCollection) -> &'tc CommitTask {
         collection
             .commit(&self.merge_uuid)
@@ -203,7 +207,7 @@ impl CommitTask {
         self.is_clean_merge
     }
 
-    pub(super) fn dep_uuid(&self) -> Option<&Uuid> {
+    pub fn dep_uuid(&self) -> Option<&Uuid> {
         self.parent_commit_uuid.as_ref()
     }
 }

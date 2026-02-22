@@ -114,9 +114,19 @@ impl TaskCollection {
         self.pulls.iter()
     }
 
+    /// The number of PRs stored in this task collection.
+    pub fn n_pulls(&self) -> usize {
+        self.pulls.len()
+    }
+
     /// Returns an iterator over all commits in the database.
     pub fn commits(&self) -> impl Iterator<Item = (&Uuid, &CommitTask)> {
         self.commits.iter()
+    }
+
+    /// The number of commits stored in this task collection.
+    pub fn n_commits(&self) -> usize {
+        self.commits.len()
     }
 
     /// Looks up a commit by UUID

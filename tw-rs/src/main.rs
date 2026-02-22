@@ -16,7 +16,7 @@ use xshell::{Shell, cmd};
 use self::args::{Action, Target};
 use self::git::GitCommit;
 use self::tw::CommitTask;
-use self::tw::serde_types::{CiStatus, ReviewStatus};
+use self::tw::serde_types::{CiStatus, MergeStatus, ReviewStatus};
 
 fn check_required_tools() -> xshell::Result<()> {
     let sh = Shell::new()?;

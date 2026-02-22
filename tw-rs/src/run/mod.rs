@@ -2,6 +2,7 @@
 
 mod log;
 mod state;
+mod task;
 
 use crate::git::GitCommit;
 use crate::tw::TaskCollection;
@@ -16,12 +17,14 @@ use xshell::{Shell, cmd};
 const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
 const MAXIMUM_BACKOFF: Duration = Duration::from_hours(1);
 const IDLE_SLEEP: Duration = Duration::from_secs(3);
+const DATABASE_RELOAD_INTERVAL: Duration = Duration::from_secs(5 * 60); // 5 minutes
 
 pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut logger = log::Logger::new();
     let mut state = state::CiState::new()?;
     let mut backoff = INITIAL_BACKOFF;
     let mut last_check = Instant::now();
+    let mut last_db_reload = Instant::now();
     let mut busy = false;
 
     logger.info(format_args!("Starting CI loop."));
@@ -47,24 +50,34 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
             }
         }
     }
+
+    // Create initial RunQueue
+    let mut run_queue = task::RunQueue::new(&tasks);
     loop {
         // Check CI repo status periodically
         if let Err(e) = state.check_ci_repo_status() {
             logger.error(Some(e.as_ref()), "Failed to check CI repo status");
         }
 
-        // Find next approved commit that needs CI. Call `check_and_push_ready_prs`
-        // except during idle times. Reload the task database on every loop iteration,
-        // because until we do, we'll miss any updates the user did via CLI. (Later,
-        // when we daemonize this, we can have the user send a reload signal somehow.)
-        let mut tasks = TaskCollection::new(task_shell).context("reloading task database")?;
-        let commit_uuid = match find_next_commit_for_ci(&tasks) {
-            Some(uuid) => {
+        // Reload the task database at most every 5 minutes
+        if last_db_reload.elapsed() >= DATABASE_RELOAD_INTERVAL {
+            logger.info("Reloading task database...");
+            tasks = TaskCollection::new(task_shell).context("reloading task database")?;
+            run_queue = task::RunQueue::new(&tasks);
+            last_db_reload = Instant::now();
+            logger.info("Done reloading task database.");
+        }
+
+        // Find next approved commit that needs CI
+        let commit_task = match run_queue.pop_next_task(&tasks) {
+            Some(task) => {
+                run_queue.status();
                 check_and_push_ready_prs(&logger, &mut tasks)?;
-                uuid
+                task
             }
             None => {
                 if busy {
+                    run_queue.status();
                     check_and_push_ready_prs(&logger, &mut tasks)?;
                     backoff = INITIAL_BACKOFF;
                     last_check = Instant::now();
@@ -76,6 +89,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                             backoff *= 2;
                         }
 
+                        run_queue.status();
                         check_and_push_ready_prs(&logger, &mut tasks)?;
 
                         logger.info(format_args!(
@@ -90,7 +104,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
         };
 
         busy = true;
-        let commit_task = tasks.commit(&commit_uuid).unwrap();
+        let commit_uuid = *commit_task.uuid();
 
         logger.newline();
         logger.set_task(Some(commit_task.clone()));
@@ -99,8 +113,6 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
         tasks.update_commit_ci_status(&commit_uuid, CiStatus::Started)?;
 
         // Process the commit
-        let commit_task = tasks.commit(&commit_uuid).unwrap(); // Re-get after update
-        let commit_task = commit_task.clone(); // un-borrow `tasks`
         match process_commit(&logger, &mut tasks, &commit_task, &mut state) {
             Ok(success) => {
                 if success {
@@ -145,16 +157,6 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     }
 }
 
-fn find_next_commit_for_ci(tasks: &TaskCollection) -> Option<uuid::Uuid> {
-    for (uuid, commit) in tasks.commits() {
-        if *commit.review_status() == ReviewStatus::Approved
-            && *commit.ci_status() == CiStatus::Unstarted
-        {
-            return Some(*uuid);
-        }
-    }
-    None
-}
 
 fn process_commit(
     logger: &log::Logger,
@@ -547,7 +549,7 @@ fn check_and_push_ready_prs(
             }
         } else {
             // Query GitHub for ACKs on this PR
-            let ack_count = refreshed_pr.github_acks().lines().count();
+            let ack_count = refreshed_pr.ack_count();
 
             logger.info(format_args!(
                 "*** {} PR #{} JJ change {} does not have GPG signature yet. Please sign it. ({} ACK(s))", 
