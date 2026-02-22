@@ -55,6 +55,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     // Create initial RunQueue
     logger.info(format_args!("Constructing run queue."));
     let mut run_queue = task::RunQueue::new(&tasks);
+    run_queue.status();
     logger.info(format_args!("Initial setup done. Starting CI loop."));
     loop {
         // Check CI repo status periodically
@@ -69,18 +70,17 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
             run_queue = task::RunQueue::new(&tasks);
             last_db_reload = Instant::now();
             logger.info("Done reloading task database.");
+            run_queue.status();
         }
 
         // Find next approved commit that needs CI
         let commit_task = match run_queue.pop_next_task(&tasks) {
             Some(task) => {
-                run_queue.status();
                 check_and_push_ready_prs(&logger, &mut tasks)?;
                 task
             }
             None => {
                 if busy {
-                    run_queue.status();
                     check_and_push_ready_prs(&logger, &mut tasks)?;
                     backoff = INITIAL_BACKOFF;
                     last_check = Instant::now();
@@ -92,7 +92,6 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                             backoff *= 2;
                         }
 
-                        run_queue.status();
                         check_and_push_ready_prs(&logger, &mut tasks)?;
 
                         logger.info(format_args!(

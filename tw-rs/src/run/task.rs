@@ -53,7 +53,7 @@ impl RunQueue {
         for &uuid in &self.pr_commit_queue {
             let task = self.map.get(&uuid).unwrap();
             let pr_display = format_pr_numbers(&task.task.prs());
-            println!("  {}{} {}", pr_display, task.task.commit_id(), task.task.description());
+            println!("  {}{}", pr_display, task.task.commit_id());
         }
         println!();
 
@@ -62,7 +62,7 @@ impl RunQueue {
         for &uuid in &self.merge_commit_queue {
             let task = self.map.get(&uuid).unwrap();
             let pr_display = format_pr_numbers(&task.task.prs());
-            println!("  {}{} {}", pr_display, task.task.commit_id(), task.task.description());
+            println!("  {}{}", pr_display, task.task.commit_id());
         }
         println!();
 
@@ -72,7 +72,7 @@ impl RunQueue {
             for &uuid in &self.unapproved_parent_queue {
                 let task = self.map.get(&uuid).unwrap();
                 let pr_display = format_pr_numbers(&task.task.prs());
-                println!("  {}{} {} (waiting for parent approval)", pr_display, task.task.commit_id(), task.task.description());
+                println!("  {}{} (waiting for parent approval)", pr_display, task.task.commit_id());
             }
             println!();
         }
@@ -186,7 +186,6 @@ impl RunQueue {
             }
             // If we already know about the task just skip it.
             if new.map.contains_key(&uuid) {
-                println!("[skipping already-seen commit {}]", commit.commit_id());
                 continue;
             }
 
