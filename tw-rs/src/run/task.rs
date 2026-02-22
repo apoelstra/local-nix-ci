@@ -48,30 +48,26 @@ pub struct RunQueue {
 
 impl RunQueue {
     pub fn status(&self) {
-        println!("RunQueue Status:");
+        println!("Queue status:");
         println!();
 
         // PR Commit Queue
-        if !self.pr_commit_queue.is_empty() {
-            println!("PR Commit Queue ({} commits):", self.pr_commit_queue.len());
-            for &uuid in &self.pr_commit_queue {
-                let task = self.map.get(&uuid).unwrap();
-                let pr_display = format_pr_numbers(&task.task.prs());
-                println!("  {}{} {}", pr_display, task.task.commit_id(), task.task.description());
-            }
-            println!();
+        println!("PR Commit Queue ({} commits):", self.pr_commit_queue.len());
+        for &uuid in &self.pr_commit_queue {
+            let task = self.map.get(&uuid).unwrap();
+            let pr_display = format_pr_numbers(&task.task.prs());
+            println!("  {}{} {}", pr_display, task.task.commit_id(), task.task.description());
         }
+        println!();
 
         // Merge Commit Queue
-        if !self.merge_commit_queue.is_empty() {
-            println!("Merge Commit Queue ({} commits):", self.merge_commit_queue.len());
-            for &uuid in &self.merge_commit_queue {
-                let task = self.map.get(&uuid).unwrap();
-                let pr_display = format_pr_numbers(&task.task.prs());
-                println!("  {}{} {}", pr_display, task.task.commit_id(), task.task.description());
-            }
-            println!();
+        println!("Merge Commit Set ({} commits):", self.merge_commit_queue.len());
+        for &uuid in &self.merge_commit_queue {
+            let task = self.map.get(&uuid).unwrap();
+            let pr_display = format_pr_numbers(&task.task.prs());
+            println!("  {}{} {}", pr_display, task.task.commit_id(), task.task.description());
         }
+        println!();
 
         // Unapproved Parent Queue
         if !self.unapproved_parent_queue.is_empty() {
@@ -179,7 +175,7 @@ impl RunQueue {
             // where we push-and-restart.
             if let Some(parent) = commit.dep_uuid() {
                 // If we already know about the task just skip it.
-                if !new.map.contains_key(&uuid) {
+                if !new.map.contains_key(&parent) {
                     stack.push((uuid, commit));
                     stack.push((parent, collection.commit(parent).unwrap()));
                     continue;

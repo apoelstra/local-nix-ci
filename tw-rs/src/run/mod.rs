@@ -27,11 +27,12 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut last_db_reload = Instant::now();
     let mut busy = false;
 
-    logger.info(format_args!("Starting CI loop."));
+    logger.info(format_args!("Doing initial setup."));
 
     // Reset any tasks with CI status "started" back to "unstarted"
     let mut tasks =
         TaskCollection::new(task_shell).context("loading task database for startup reset")?;
+    logger.info(format_args!("Loaded tasks from task database."));
 
     let started_commits: Vec<uuid::Uuid> = tasks
         .commits()
@@ -39,11 +40,11 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
         .map(|(uuid, _)| *uuid)
         .collect();
 
+    logger.info(format_args!(
+        "Resetting {} task(s) from 'started' to 'unstarted' status.",
+        started_commits.len()
+    ));
     if !started_commits.is_empty() {
-        logger.info(format_args!(
-            "Resetting {} task(s) from 'started' to 'unstarted' status.",
-            started_commits.len()
-        ));
         for commit_uuid in started_commits {
             if let Err(e) = tasks.update_commit_ci_status(&commit_uuid, CiStatus::Unstarted) {
                 logger.warn(format_args!("Failed to reset task {}: {}", commit_uuid, e));
@@ -52,7 +53,9 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     }
 
     // Create initial RunQueue
+    logger.info(format_args!("Constructing run queue."));
     let mut run_queue = task::RunQueue::new(&tasks);
+    logger.info(format_args!("Initial setup done. Starting CI loop."));
     loop {
         // Check CI repo status periodically
         if let Err(e) = state.check_ci_repo_status() {
@@ -61,7 +64,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
 
         // Reload the task database at most every 5 minutes
         if last_db_reload.elapsed() >= DATABASE_RELOAD_INTERVAL {
-            logger.info("Reloading task database...");
+            logger.info("Reloading task database and reconstructing queue...");
             tasks = TaskCollection::new(task_shell).context("reloading task database")?;
             run_queue = task::RunQueue::new(&tasks);
             last_db_reload = Instant::now();
@@ -93,7 +96,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                         check_and_push_ready_prs(&logger, &mut tasks)?;
 
                         logger.info(format_args!(
-                            "Nothing to do. Reloading task database. (Next message in {} minutes.)",
+                            "Nothing to do. (Next message in {} minutes.)",
                             backoff.as_secs() / 60,
                         ));
                         last_check = Instant::now();
