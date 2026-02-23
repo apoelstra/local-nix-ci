@@ -44,9 +44,63 @@ pub struct RunQueue {
     /// we should count the ACKs on that one and do that many commits from pr_commit_queue
     /// before doing this. This will give the user plenty of time to sign it.
     merge_commit_queue: HashSet<uuid::Uuid>,
+    /// Counter of PR commits done since last merge commit
+    pr_commits_since_merge: usize,
 }
 
 impl RunQueue {
+    /// Get the best eligible merge commit, sorted by ACK count (highest first).
+    /// If ignore_conflicts is true, ignore the conflict check and return any ready merge commit.
+    fn get_best_eligible_merge_commit(&self, collection: &TaskCollection, ignore_conflicts: bool) -> Option<uuid::Uuid> {
+        let mut eligible_merges = Vec::new();
+
+        for &merge_uuid in &self.merge_commit_queue {
+            // Find the PR that contains this merge commit
+            let pr_task = collection.pulls()
+                .find(|(_, pr)| pr.merge_uuid() == &merge_uuid)
+                .map(|(_, pr)| pr);
+            
+            if let Some(pr_task) = pr_task {
+                // Check if all commits in the PR have passed CI (State::Success)
+                let all_commits_passed = pr_task.commits(collection)
+                    .all(|commit| {
+                        self.map.get(commit.uuid())
+                            .map(|task| task.state == State::Success)
+                            .unwrap_or(false)
+                    });
+                
+                if all_commits_passed {
+                    if ignore_conflicts {
+                        // Add to eligible list regardless of conflicts
+                        eligible_merges.push((merge_uuid, pr_task.ack_count()));
+                    } else {
+                        // Check for conflicting merge commits with CiStatus::Success
+                        let has_conflicting_success = collection.pulls()
+                            .any(|(_, other_pr)| {
+                                // Same project and same base commit, but different PR
+                                other_pr.project() == pr_task.project() &&
+                                other_pr.base_ref() == pr_task.base_ref() &&
+                                *other_pr.merge_status() == MergeStatus::NeedSig &&
+                                other_pr.merge_uuid() != pr_task.merge_uuid() &&
+                                // Check if the other merge commit has CiStatus::Success
+                                self.map.get(other_pr.merge_uuid())
+                                    .map(|task| task.state == State::Success)
+                                    .unwrap_or(false)
+                            });
+                        
+                        if !has_conflicting_success {
+                            eligible_merges.push((merge_uuid, pr_task.ack_count()));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by ACK count (highest first) and return the best one
+        eligible_merges.sort_by(|a, b| b.1.cmp(&a.1));
+        eligible_merges.first().map(|(uuid, _)| *uuid)
+    }
+
     pub fn status(&self) {
         // PR Commit Queue
         println!("PR Commit Queue ({} commits):", self.pr_commit_queue.len());
@@ -102,50 +156,36 @@ impl RunQueue {
     }
 
     pub fn pop_next_task(&mut self, collection: &TaskCollection) -> Option<CommitTask> {
-        // Priority 1: pr_commit_queue (ordinary commits)
-        if let Some(uuid) = self.pr_commit_queue.pop_front() {
-            return self.map.remove(&uuid).map(|task| task.task);
+        // Phase 1: Always try merge commits first (if any are eligible); resetting the counter
+        if let Some(merge_uuid) = self.get_best_eligible_merge_commit(collection, false) {
+            self.merge_commit_queue.remove(&merge_uuid);
+            self.pr_commits_since_merge = 0;
+            return self.map.remove(&merge_uuid).map(|task| task.task);
         }
 
-        // Priority 2: merge_commit_queue (if all commits in PR have passed CI)
-        for &merge_uuid in &self.merge_commit_queue {
-            // Find the PR that contains this merge commit
-            let pr_task = collection.pulls()
-                .find(|(_, pr)| pr.merge_uuid() == &merge_uuid)
-                .map(|(_, pr)| pr);
-            
-            if let Some(pr_task) = pr_task {
-                // Check if all commits in the PR have passed CI (State::Success)
-                let all_commits_passed = pr_task.commits(collection)
-                    .all(|commit| {
-                        self.map.get(commit.uuid())
-                            .map(|task| task.state == State::Success)
-                            .unwrap_or(false)
-                    });
-                
-                if all_commits_passed {
-                    // Check for conflicting merge commits with "need signature" status
-                    let conflicting_needsig_count = collection.pulls()
-                        .filter(|(_, other_pr)| {
-                            // Same project and same base commit
-                            other_pr.project() == pr_task.project() &&
-                            other_pr.base_commit() == pr_task.base_commit() &&
-                            *other_pr.merge_status() == MergeStatus::NeedSig
-                        })
-                        .map(|(_, pr)| pr.ack_count())
-                        .sum::<usize>();
-                    
-                    // If there are conflicting merge commits needing signature,
-                    // we should do that many commits from pr_commit_queue first
-                    if conflicting_needsig_count == 0 || self.pr_commit_queue.len() < conflicting_needsig_count {
-                        self.merge_commit_queue.remove(&merge_uuid);
-                        return self.map.remove(&merge_uuid).map(|task| task.task);
-                    }
-                }
+        // Phase 2: If no merge commits available, do up to 4 PR commits; incrementing the counter
+        if self.pr_commits_since_merge < 4 {
+            if let Some(uuid) = self.pr_commit_queue.pop_front() {
+                self.pr_commits_since_merge += 1;
+                return self.map.remove(&uuid).map(|task| task.task);
             }
         }
 
-        // Priority 3: unapproved_parent_queue (lowest priority)
+        // Phase 3: After 4 PR commits, do any available merge commit (even if it would be ineligible by the conflict check); resetting the counter
+        if self.pr_commits_since_merge >= 4 || self.pr_commit_queue.is_empty() {
+            if let Some(merge_uuid) = self.get_best_eligible_merge_commit(collection, true) {
+                self.merge_commit_queue.remove(&merge_uuid);
+                self.pr_commits_since_merge = 0;
+                return self.map.remove(&merge_uuid).map(|task| task.task);
+            }
+        }
+
+        // Phase 4: If there are no merge commits, just do PR commits. If there are no PR commits, try unapproved parent queue.
+        if let Some(uuid) = self.pr_commit_queue.pop_front() {
+            self.pr_commits_since_merge += 1;
+            return self.map.remove(&uuid).map(|task| task.task);
+        }
+
         if let Some(uuid) = self.unapproved_parent_queue.pop_front() {
             return self.map.remove(&uuid).map(|task| task.task);
         }
@@ -160,6 +200,7 @@ impl RunQueue {
             pr_commit_queue: VecDeque::with_capacity(collection.n_commits()),
             unapproved_parent_queue: VecDeque::with_capacity(collection.n_commits()),
             merge_commit_queue: HashSet::with_capacity(collection.n_pulls()),
+            pr_commits_since_merge: 0,
         };
 
         let mut iter = collection.commits();
