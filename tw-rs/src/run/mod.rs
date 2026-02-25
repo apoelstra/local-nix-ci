@@ -18,6 +18,7 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
 const MAXIMUM_BACKOFF: Duration = Duration::from_hours(1);
 const IDLE_SLEEP: Duration = Duration::from_secs(3);
 const DATABASE_RELOAD_INTERVAL: Duration = Duration::from_secs(5 * 60); // 5 minutes
+const GITHUB_RELOAD_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut logger = log::Logger::new();
@@ -25,6 +26,8 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     let mut backoff = INITIAL_BACKOFF;
     let mut last_check = Instant::now();
     let mut last_db_reload = Instant::now();
+    let mut last_gh_reload = Instant::now();
+    let mut need_gh_refresh = false;
     let mut busy = false;
 
     logger.info(format_args!("Doing initial setup."));
@@ -64,24 +67,27 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
         }
 
         // Reload the task database at most every 5 minutes
+        if need_gh_refresh || last_gh_reload.elapsed() >= GITHUB_RELOAD_INTERVAL {
+            logger.info("Doing PR refresh and Github push...");
+            check_and_push_ready_prs(&logger, &mut tasks)?;
+            last_gh_reload = Instant::now();
+        }
         if last_db_reload.elapsed() >= DATABASE_RELOAD_INTERVAL {
             logger.info("Reloading task database and reconstructing queue...");
             tasks = TaskCollection::new(task_shell).context("reloading task database")?;
-            run_queue = task::RunQueue::new(&tasks);
-            last_db_reload = Instant::now();
             logger.info("Done reloading task database.");
+            last_db_reload = Instant::now();
+            run_queue = task::RunQueue::new(&tasks);
             run_queue.status();
         }
 
         // Find next approved commit that needs CI
         let commit_task = match run_queue.pop_next_task(&tasks) {
             Some(task) => {
-                check_and_push_ready_prs(&logger, &mut tasks)?;
                 task
             }
             None => {
                 if busy {
-                    check_and_push_ready_prs(&logger, &mut tasks)?;
                     backoff = INITIAL_BACKOFF;
                     last_check = Instant::now();
                     busy = false;
@@ -91,9 +97,6 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                         if backoff < MAXIMUM_BACKOFF {
                             backoff *= 2;
                         }
-
-                        check_and_push_ready_prs(&logger, &mut tasks)?;
-
                         logger.info(format_args!(
                             "Nothing to do. (Next message in {} minutes.)",
                             backoff.as_secs() / 60,
@@ -145,6 +148,12 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                     }
 
                     post_approvals(&logger, &mut tasks, &commit_uuid)?;
+                    if commit_task.is_merge_commit() {
+                        // Whenever we pass a merge commit, we probably pushed it (FIXME refactor
+                        // the pushing and refreshing logic and pull it into RunQueue) so force
+                        // a refresh from github to get all new merge commits.
+                        need_gh_refresh = true;
+                    }
                 } else {
                     logger.error(None, "FAILED");
                     tasks.update_commit_ci_status(&commit_uuid, CiStatus::Failed)?;
