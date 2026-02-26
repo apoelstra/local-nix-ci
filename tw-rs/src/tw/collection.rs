@@ -142,6 +142,70 @@ impl TaskCollection {
             .find(|task| task.project() == project && task.commit_id() == commit_id)
     }
 
+    /// Refreshes the merge commit for a given UUID.
+    ///
+    /// If it creates a new merge commit, returns the UUID of the CommitTask in the tracker
+    /// as well as the merge's change ID as a string.
+    ///
+    /// Will *not* create a merge commit if: the provided `existing_uuid` is a UUID of a task
+    /// in the tracker, whose base and head commits match the provided base and head commits.
+    fn refresh_merge_commit(
+        &mut self,
+        task_shell: &Shell,
+        repo: &crate::repo::Repository,
+        existing_uuid: Option<&Uuid>,
+        base_commit: &GitCommit,
+        head_commit: &GitCommit,
+    ) -> Result<Option<(Uuid, String)>, TaskCollectionError> {
+        if let Some(uuid) = existing_uuid {
+            let old = &self.pulls[&uuid];
+            let old_tip = self.commits[old.dep_uuid()].commit_id();
+            if base_commit == old.base_commit() && head_commit == old_tip {
+                return Ok(None);
+            } else {
+                // Attempt to cancel the old merge commit. If this fails, no harm, it'll
+                // just get tested wastefully. If it succeeds and something down the line
+                // fails, little harm -- the PR will be stalled until the user retries
+                // refreshing after the network issue or bug has been resolved.
+                let merge_uuid = old.merge_uuid().clone(); // unborrow self
+                if let Err(e) = self.update_commit_ci_status(&merge_uuid, CiStatus::Cancelled) {
+                    eprintln!("{e}");
+                }
+            }
+        }
+
+        git::fetch_commit(task_shell, &head_commit).map_err(TaskCollectionError::Git)?;
+        git::fetch_commit(task_shell, &base_commit).map_err(TaskCollectionError::Git)?;
+        let merge_change_id = crate::jj::jj_new(task_shell, &[base_commit, head_commit])
+            .map_err(TaskCollectionError::Jj)?;
+        let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
+            .map_err(TaskCollectionError::Jj)?;
+        let merge_commit_id = merge_commit_id
+            .parse::<GitCommit>()
+            .expect("if jj new succeeded, then we should have a valid commit id");
+
+        // Create merge commit task
+        let merge_commit = self.insert_or_refresh_commit(
+            task_shell,
+            &repo.project_name,
+            &repo.repo_root,
+            &merge_commit_id,
+        )?;
+        let merge_commit_uuid = merge_commit.uuid().to_string();
+
+        // Add HAS_CONFLICTS tag if the merge has conflicts
+        let conflicts_check =
+            crate::jj::jj_log(task_shell, "if(conflict,\"x\",\"\")", &merge_change_id)
+                .map_err(TaskCollectionError::Jj)?;
+        if !conflicts_check.is_empty() {
+            let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS")
+                .quiet()
+                .run();
+        }
+
+        Ok(Some((*merge_commit.uuid(), merge_change_id)))
+    }
+
     /// Creates or updates a commit task. Returns the UUID of the task (new or existing).
     /// If the task already exists, updates repo_root and description if they differ.
     pub fn insert_or_refresh_commit(
@@ -312,55 +376,13 @@ impl TaskCollection {
         let base_commit = git::fetch_resolve_ref(task_shell, &pr_data.base_ref)
             .map_err(TaskCollectionError::Git)?;
         let head_commit = &pr_data.head_commit;
-
-        let mut create_new_merge = true;
-        if let Some(uuid) = existing_uuid {
-            let old = &self.pulls[&uuid];
-            let old_tip = self.commits[old.dep_uuid()].commit_id();
-            if base_commit == *old.base_commit() && head_commit == old_tip {
-                create_new_merge = false;
-            } else {
-                // Attempt to cancel the old merge commit. If this fails, no harm, it'll
-                // just get tested wastefully. If it succeeds and something down the line
-                // fails, little harm -- the PR will be stalled until the user retries
-                // refreshing after the network issue or bug has been resolved.
-                let merge_uuid = old.merge_uuid().clone(); // unborrow self
-                if let Err(e) = self.update_commit_ci_status(&merge_uuid, CiStatus::Cancelled) {
-                    eprintln!("{e}");
-                }
-            }
-        }
-
-        if create_new_merge {
-            git::fetch_commit(task_shell, &head_commit).map_err(TaskCollectionError::Git)?;
-            git::fetch_commit(task_shell, &base_commit).map_err(TaskCollectionError::Git)?;
-            let merge_change_id = crate::jj::jj_new(task_shell, &[&base_commit, head_commit])
-                .map_err(TaskCollectionError::Jj)?;
-            let merge_commit_id = crate::jj::jj_log(task_shell, "commit_id", &merge_change_id)
-                .map_err(TaskCollectionError::Jj)?;
-            let merge_commit_id = merge_commit_id
-                .parse::<GitCommit>()
-                .expect("if jj new succeeded, then we should have a valid commit id");
-
-            // Create merge commit task
-            let merge_commit = self.insert_or_refresh_commit(
-                task_shell,
-                &repo.project_name,
-                &repo.repo_root,
-                &merge_commit_id,
-            )?;
-            let merge_commit_uuid = merge_commit.uuid().to_string();
-
-            // Add HAS_CONFLICTS tag if the merge has conflicts
-            let conflicts_check =
-                crate::jj::jj_log(task_shell, "if(conflict,\"x\",\"\")", &merge_change_id)
-                    .map_err(TaskCollectionError::Jj)?;
-            if !conflicts_check.is_empty() {
-                let _ = cmd!(task_shell, "task {merge_commit_uuid} modify +HAS_CONFLICTS")
-                    .quiet()
-                    .run();
-            }
-
+        if let Some((merge_commit_uuid, merge_change_id)) = self.refresh_merge_commit(
+            task_shell,
+            repo,
+            existing_uuid.as_ref(),
+            &base_commit,
+            head_commit,
+        )? {
             task_cmd = task_cmd
                 .arg(format!("merge_uuid:{}", merge_commit_uuid))
                 .arg("merge_status:unstarted")

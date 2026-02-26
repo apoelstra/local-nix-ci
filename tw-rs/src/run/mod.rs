@@ -56,6 +56,8 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
     }
 
     // Create initial RunQueue
+    logger.info(format_args!("Doing initial check-and-refresh."));
+    check_and_push_ready_prs(&logger, &mut tasks)?;
     logger.info(format_args!("Constructing run queue."));
     let mut run_queue = task::RunQueue::new(&tasks);
     run_queue.status();
