@@ -84,6 +84,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
         }
 
         // Find next approved commit that needs CI
+        run_queue.refresh_merge_commits(&logger, task_shell, &mut tasks);
         let commit_task = match run_queue.pop_next_task(&tasks) {
             Some(task) => {
                 task

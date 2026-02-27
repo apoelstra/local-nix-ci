@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use core::mem;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::tw::{CommitTask, TaskCollection};
@@ -51,7 +52,11 @@ pub struct RunQueue {
 impl RunQueue {
     /// Get the best eligible merge commit, sorted by ACK count (highest first).
     /// If ignore_conflicts is true, ignore the conflict check and return any ready merge commit.
-    fn get_best_eligible_merge_commit(&self, collection: &TaskCollection, ignore_conflicts: bool) -> Option<uuid::Uuid> {
+    fn get_best_eligible_merge_commit(
+        &self,
+        collection: &TaskCollection,
+        ignore_conflicts: bool,
+    ) -> Option<uuid::Uuid> {
         let mut eligible_merges = Vec::new();
 
         for &merge_uuid in &self.merge_commit_queue {
@@ -153,6 +158,36 @@ impl RunQueue {
             }
             println!();
         }
+    }
+
+    pub fn refresh_merge_commits(
+        &mut self,
+        logger: &super::log::Logger,
+        task_shell: &crate::Shell,
+        collection: &mut TaskCollection,
+        
+    ) {
+        // First, refresh all the merge commits
+        let mut refreshed_merge_commits = HashSet::with_capacity(self.merge_commit_queue.len());
+        for merge_uuid in mem::take(&mut self.merge_commit_queue) {
+            match collection.refresh_merge_commit(task_shell, &merge_uuid) {
+                Ok(new_uuids) => {
+                    if new_uuids.is_empty() {
+                        refreshed_merge_commits.insert(merge_uuid);
+
+                    }
+                    refreshed_merge_commits.extend(new_uuids);
+                }
+                Err(e) => {
+                    logger.warn(format_args!(
+                        "Dropping merge commit {} until next queue refresh (failed to refresh commit)",
+                        merge_uuid,
+                    ));
+                    logger.warn(format_args!("{:?}", e));
+                }
+            };
+        }
+        self.merge_commit_queue = refreshed_merge_commits;
     }
 
     pub fn pop_next_task(&mut self, collection: &TaskCollection) -> Option<CommitTask> {

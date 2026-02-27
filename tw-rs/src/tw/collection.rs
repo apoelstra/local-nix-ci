@@ -142,17 +142,18 @@ impl TaskCollection {
             .find(|task| task.project() == project && task.commit_id() == commit_id)
     }
 
-    /// Refreshes the merge commit for a given UUID.
+    /// Refreshes the merge commit for a given PR, keyed by UUID.
     ///
     /// If it creates a new merge commit, returns the UUID of the CommitTask in the tracker
     /// as well as the merge's change ID as a string.
     ///
     /// Will *not* create a merge commit if: the provided `existing_uuid` is a UUID of a task
     /// in the tracker, whose base and head commits match the provided base and head commits.
-    fn refresh_merge_commit(
+    fn create_merge_commit(
         &mut self,
         task_shell: &Shell,
-        repo: &crate::repo::Repository,
+        project_name: &str,
+        repo_root: &std::path::Path,
         existing_uuid: Option<&Uuid>,
         base_commit: &GitCommit,
         head_commit: &GitCommit,
@@ -187,8 +188,8 @@ impl TaskCollection {
         // Create merge commit task
         let merge_commit = self.insert_or_refresh_commit(
             task_shell,
-            &repo.project_name,
-            &repo.repo_root,
+            project_name,
+            repo_root,
             &merge_commit_id,
         )?;
         let merge_commit_uuid = merge_commit.uuid().to_string();
@@ -270,6 +271,60 @@ impl TaskCollection {
         } else {
             panic!("Somehow created non-committask");
         }
+    }
+
+    /// Refreshes a given merge commit by querying the local git repo and Github.
+    ///
+    /// Returns a list of newly created UUIDs. This list may be empty (if the merge
+    /// commit is current) or it may contain multiple UUIDs (if this was a merge
+    /// commit for multiple PRs somehow, and after refreshing, they no longer shared
+    /// a merge commit).
+    pub fn refresh_merge_commit(
+        &mut self,
+        task_shell: &Shell,
+        original_commit_uuid: &Uuid,
+    ) -> Result<Vec<Uuid>, TaskCollectionError> {
+        // To avoid double-borrowing self, first pull all the UUIDs of matching PRs into a vector.
+        let uuids_prs = self
+            .pulls
+            .iter()
+            .filter_map(|(uuid, pr_task)| if pr_task.merge_uuid() == original_commit_uuid {
+                Some((*uuid, pr_task.clone()))
+            } else {
+                None
+            })
+            .collect::<Vec<_>>();
+
+        let mut ret = vec![];
+        for (pr_uuid, pr) in uuids_prs {
+            let _guard = task_shell.push_dir(pr.repo_root());
+            let num_str = pr.number().to_string();
+            let pr_json = cmd!(
+                task_shell,
+                "gh pr view {num_str} --json headRefOid,baseRefName"
+            )
+            .read()
+            .map_err(TaskCollectionError::Shell)?;
+            let pr_data: crate::gh::PrInfo =
+                serde_json::from_str(&pr_json).map_err(TaskCollectionError::ParseJson)?;
+
+            let base_commit = git::fetch_resolve_ref(task_shell, &pr_data.base_ref)
+                .map_err(TaskCollectionError::Git)?;
+
+            if let Some((new_uuid, _)) = self.create_merge_commit(
+                task_shell,
+                pr.project(),
+                pr.repo_root(),
+                Some(&pr_uuid),
+                &base_commit,
+                &pr_data.head_commit,
+            )? {
+                ret.push(new_uuid);
+            }
+
+        }
+
+        Ok(ret)
     }
 
     /// Refreshes a PR's data by querying the local git repo and Github. If the PR does not
@@ -376,9 +431,10 @@ impl TaskCollection {
         let base_commit = git::fetch_resolve_ref(task_shell, &pr_data.base_ref)
             .map_err(TaskCollectionError::Git)?;
         let head_commit = &pr_data.head_commit;
-        if let Some((merge_commit_uuid, merge_change_id)) = self.refresh_merge_commit(
+        if let Some((merge_commit_uuid, merge_change_id)) = self.create_merge_commit(
             task_shell,
-            repo,
+            &repo.project_name,
+            &repo.repo_root,
             existing_uuid.as_ref(),
             &base_commit,
             head_commit,
