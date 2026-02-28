@@ -163,15 +163,6 @@ impl TaskCollection {
             let old_tip = self.commits[old.dep_uuid()].commit_id();
             if base_commit == old.base_commit() && head_commit == old_tip {
                 return Ok(None);
-            } else {
-                // Attempt to cancel the old merge commit. If this fails, no harm, it'll
-                // just get tested wastefully. If it succeeds and something down the line
-                // fails, little harm -- the PR will be stalled until the user retries
-                // refreshing after the network issue or bug has been resolved.
-                let merge_uuid = old.merge_uuid().clone(); // unborrow self
-                if let Err(e) = self.update_commit_ci_status(&merge_uuid, CiStatus::Cancelled) {
-                    eprintln!("{e}");
-                }
             }
         }
 
@@ -311,7 +302,7 @@ impl TaskCollection {
             let base_commit = git::fetch_resolve_ref(task_shell, &pr_data.base_ref)
                 .map_err(TaskCollectionError::Git)?;
 
-            if let Some((new_uuid, _)) = self.create_merge_commit(
+            if let Some((new_uuid, new_change_id)) = self.create_merge_commit(
                 task_shell,
                 pr.project(),
                 pr.repo_root(),
@@ -319,6 +310,21 @@ impl TaskCollection {
                 &base_commit,
                 &pr_data.head_commit,
             )? {
+                // Attempt to cancel the old merge commit. If this fails, no harm, it'll
+                // just get tested wastefully. If it succeeds and something down the line
+                // fails, little harm -- the PR will be stalled until the user retries
+                // refreshing after the network issue or bug has been resolved.
+                let merge_uuid = pr.merge_uuid().clone(); // unborrow self
+                if let Err(e) = self.update_commit_ci_status(&merge_uuid, CiStatus::Cancelled) {
+                    eprintln!("{e}");
+                }
+
+                let new_uuid_s = new_uuid.to_string();
+                let uuid_s = pr_uuid.to_string();
+                cmd!(task_shell, "task {uuid_s} modify merge_uuid:{new_uuid_s} merge_change_id:{new_change_id} merge_status:unstarted")
+                    .quiet()
+                    .run()
+                    .map_err(TaskCollectionError::Shell)?;
                 ret.push(new_uuid);
             }
 
@@ -439,6 +445,17 @@ impl TaskCollection {
             &base_commit,
             head_commit,
         )? {
+            // Attempt to cancel the old merge commit. If this fails, no harm, it'll
+            // just get tested wastefully. If it succeeds and something down the line
+            // fails, little harm -- the PR will be stalled until the user retries
+            // refreshing after the network issue or bug has been resolved.
+            if let Some(existing) = existing_uuid {
+                let merge_uuid = *self.pulls[&existing].merge_uuid();
+                if let Err(e) = self.update_commit_ci_status(&merge_uuid, CiStatus::Cancelled) {
+                    eprintln!("{e}");
+                }
+            }
+
             task_cmd = task_cmd
                 .arg(format!("merge_uuid:{}", merge_commit_uuid))
                 .arg("merge_status:unstarted")
