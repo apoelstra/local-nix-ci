@@ -24,9 +24,9 @@ pub struct PrTask {
     github_acks: String,
     number: usize,
     pub(super) merge_status: MergeStatus,
-    base_commit: GitCommit,
+    pub(super) base_commit: GitCommit,
     base_ref: String,
-    merge_uuid: Uuid,
+    pub(super) merge_uuid: Uuid,
     merge_change_id: String,
 }
 

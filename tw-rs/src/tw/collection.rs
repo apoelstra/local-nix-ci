@@ -302,6 +302,17 @@ impl TaskCollection {
             let base_commit = git::fetch_resolve_ref(task_shell, &pr_data.base_ref)
                 .map_err(TaskCollectionError::Git)?;
 
+            // FIXME we need to handle this properly. If the head commit has changed, this means
+            // the PR has been updated and the user needs to refresh and re-review it. We need
+            // to signal that somehow. For now we just return an error and hope the user notices
+            // it.
+            let head_commit = self.commits[pr.dep_uuid()].commit_id();
+            if pr_data.head_commit != *head_commit {
+                return Err(TaskCollectionError::InvalidPrData {
+                    message: format!("{} PR {} changed its tip commit and needs to be rereviewed", pr.project(), pr.number()),
+                });
+            }
+
             if let Some((new_uuid, new_change_id)) = self.create_merge_commit(
                 task_shell,
                 pr.project(),
@@ -321,10 +332,15 @@ impl TaskCollection {
 
                 let new_uuid_s = new_uuid.to_string();
                 let uuid_s = pr_uuid.to_string();
-                cmd!(task_shell, "task {uuid_s} modify merge_uuid:{new_uuid_s} merge_change_id:{new_change_id} merge_status:unstarted")
+                cmd!(task_shell, "task {uuid_s} modify merge_uuid:{new_uuid_s} merge_change_id:{new_change_id} merge_status:unstarted base_commit:{base_commit}")
                     .quiet()
                     .run()
                     .map_err(TaskCollectionError::Shell)?;
+
+                // Redo the auto-ACK if one makes sense
+                self.pulls.get_mut(&pr_uuid).unwrap().merge_uuid = new_uuid;
+                self.pulls.get_mut(&pr_uuid).unwrap().base_commit = base_commit;
+                let _ = self.check_and_update_pr_merge_readiness(&pr_uuid);
                 ret.push(new_uuid);
             }
 
