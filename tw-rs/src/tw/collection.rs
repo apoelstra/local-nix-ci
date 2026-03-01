@@ -590,17 +590,19 @@ impl TaskCollection {
         };
         let pr_uuid_str = pr_uuid.to_string();
 
-        // Add dependency to the PR task for the tip commit
-        let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:")
+        // Add dependency to the PR task for the tip commit (only if tip commit changed)
+        if reset_review_status || existing_uuid.is_none() {
+            let _ = cmd!(task_shell, "task {pr_uuid_str} modify depends:")
+                .quiet()
+                .run(); // Clear dependencies
+            let tip_commit_uuid_str = commit_uuids.last().expect("checked above").to_string();
+            let _ = cmd!(
+                task_shell,
+                "task {pr_uuid_str} modify depends:{tip_commit_uuid_str}"
+            )
             .quiet()
-            .run(); // Clear dependencies
-        let tip_commit_uuid_str = commit_uuids.last().expect("checked above").to_string();
-        let _ = cmd!(
-            task_shell,
-            "task {pr_uuid_str} modify depends:{tip_commit_uuid_str}"
-        )
-        .quiet()
-        .run();
+            .run();
+        }
 
         // (Re-)insert the PR UUID into our PR number lookup table
         self.pull_numbers

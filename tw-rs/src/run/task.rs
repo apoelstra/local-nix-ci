@@ -199,7 +199,7 @@ impl RunQueue {
         }
 
         // Phase 2: If no merge commits available, do up to 4 PR commits; incrementing the counter
-        if self.pr_commits_since_merge < 4 {
+        if self.pr_commits_since_merge < 2 {
             if let Some(uuid) = self.pr_commit_queue.pop_front() {
                 self.pr_commits_since_merge += 1;
                 return self.map.remove(&uuid).map(|task| task.task);
@@ -207,7 +207,7 @@ impl RunQueue {
         }
 
         // Phase 3: After 4 PR commits, do any available merge commit (even if it would be ineligible by the conflict check); resetting the counter
-        if self.pr_commits_since_merge >= 4 || self.pr_commit_queue.is_empty() {
+        if self.pr_commits_since_merge >= 2 || self.pr_commit_queue.is_empty() {
             if let Some(merge_uuid) = self.get_best_eligible_merge_commit(collection, true) {
                 self.merge_commit_queue.remove(&merge_uuid);
                 self.pr_commits_since_merge = 0;
