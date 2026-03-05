@@ -1,5 +1,5 @@
 [workspace]
-members = ["tw-rs"]
+members = ["tw-rs", "forgejo-api"]
 resolver = "2"
 
 [workspace.lints.rust]
