@@ -57,7 +57,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
 
     // Create initial RunQueue
     logger.info(format_args!("Doing initial check-and-refresh."));
-    check_and_push_ready_prs(&logger, &mut tasks)?;
+    check_and_push_ready_prs(task_shell, &logger, &mut tasks)?;
     logger.info(format_args!("Constructing run queue."));
     let mut run_queue = task::RunQueue::new(&tasks);
     run_queue.status();
@@ -71,7 +71,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
         // Reload the task database at most every 5 minutes
         if need_gh_refresh || last_gh_reload.elapsed() >= GITHUB_RELOAD_INTERVAL {
             logger.info("Doing PR refresh and Github push...");
-            check_and_push_ready_prs(&logger, &mut tasks)?;
+            check_and_push_ready_prs(task_shell, &logger, &mut tasks)?;
             last_gh_reload = Instant::now();
         }
         if last_db_reload.elapsed() >= DATABASE_RELOAD_INTERVAL {
@@ -150,7 +150,7 @@ pub fn run(task_shell: &Shell) -> Result<(), anyhow::Error> {
                         }
                     }
 
-                    post_approvals(&logger, &mut tasks, &commit_uuid)?;
+                    post_approvals(task_shell, &logger, &mut tasks, &commit_uuid)?;
                     if commit_task.is_merge_commit() {
                         // Whenever we pass a merge commit, we probably pushed it (FIXME refactor
                         // the pushing and refreshing logic and pull it into RunQueue) so force
@@ -429,6 +429,7 @@ fn save_error_to_file(
 }
 
 fn post_approvals(
+    task_shell: &Shell,
     logger: &log::Logger,
     tasks: &mut TaskCollection,
     _commit_uuid: &uuid::Uuid,
@@ -448,14 +449,10 @@ fn post_approvals(
         // If all commits succeeded and PR approved, post approval
         if all_commits_approved_and_successful && *pr_task.review_status() == ReviewStatus::Approved
         {
-            let sh = Shell::new()?;
-            let repo_root = pr_task.repo_root();
-            let repo = crate::repo::Repository {
-                project_name: pr_task.project().to_string(),
-                repo_root: repo_root.to_owned(),
-            };
+            let _push_dir = task_shell.push_dir(pr_task.repo_root());
+            let repo = crate::repo::current_repo(task_shell)?;
 
-            if let Err(e) = crate::post_github_approval_if_ready(&sh, tasks, &repo, pr_task) {
+            if let Err(e) = crate::post_github_approval_if_ready(task_shell, tasks, &repo, pr_task) {
                 logger.error(
                     Some(e.as_ref()),
                     format_args!(
@@ -479,6 +476,7 @@ fn post_approvals(
 }
 
 fn check_and_push_ready_prs(
+    task_shell: &Shell,
     logger: &log::Logger,
     tasks: &mut TaskCollection,
 ) -> anyhow::Result<()> {
@@ -494,10 +492,8 @@ fn check_and_push_ready_prs(
     for (pr_uuid, pr_number, project) in needsig_prs {
         // Get repository info
         let pr_task = tasks.pulls().find(|(uuid, _)| **uuid == pr_uuid).unwrap().1;
-        let repo = crate::repo::Repository {
-            project_name: project.clone(),
-            repo_root: pr_task.repo_root().to_owned(),
-        };
+        let _push_dir = task_shell.push_dir(pr_task.repo_root());
+        let repo = crate::repo::current_repo(task_shell)?;
 
         // Refresh the PR to check if merge commit is still up to date
         let refreshed_pr = match tasks.insert_or_refresh_pr(&sh, &repo, pr_number) {

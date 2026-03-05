@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use core::marker::PhantomData;
 use std::path::PathBuf;
 use xshell::{Shell, cmd};
 
@@ -7,6 +8,7 @@ use xshell::{Shell, cmd};
 pub struct Repository {
     pub project_name: String,
     pub repo_root: PathBuf,
+    _marker: PhantomData<()>,
 }
 
 #[derive(Debug)]
@@ -79,5 +81,6 @@ pub fn current_repo(sh: &Shell) -> Result<Repository, RepoError> {
     Ok(Repository {
         project_name,
         repo_root,
+        _marker: PhantomData,
     })
 }
