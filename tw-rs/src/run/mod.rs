@@ -261,7 +261,19 @@ fn process_commit(
     let derivation_path = match instantiate_result {
         Ok(output) => {
             if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let stdout_str = String::from_utf8_lossy(&output.stdout);
+                let lines: Vec<&str> = stdout_str.lines().collect();
+                
+                let path = if lines.len() > 1 {
+                    logger.warn(format_args!(
+                        "nix-instantiate returned {} lines, taking only the first line",
+                        lines.len()
+                    ));
+                    lines[0].trim().to_string()
+                } else {
+                    stdout_str.trim().to_string()
+                };
+                
                 logger.info(format_args!("Instantiated derivation: {path}"));
 
                 tasks.update_commit_derivation(commit_task.uuid(), path.clone())?;
