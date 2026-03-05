@@ -129,6 +129,9 @@ uda.merge_change_id.label=JJ change ID of merge commit
 uda.base_ref.type=string
 uda.base_ref.label=Base branch name (e.g. master, main)
 
+uda.derivation.type=string
+uda.derivation.label=Nix derivation, if nix-instantiate has succeeded
+
 # Reports
 report.list.description=Default Task List
 report.list.filter=project:local-ci
