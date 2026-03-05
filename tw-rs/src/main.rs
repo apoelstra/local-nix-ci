@@ -157,7 +157,7 @@ fn real_main(
 
     // Orient ourselves. (In practice this is the slowest step but unfortunately
     // there is no real way to cache it.)
-    let repo = match repo::current_repo() {
+    let repo = match repo::current_repo(shell) {
         Err(e) => {
             eprintln!("Failed to locate repo: {e}");
             eprintln!("Are you in a Github-connected git repository (that 'gh' understands)?");

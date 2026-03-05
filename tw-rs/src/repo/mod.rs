@@ -11,7 +11,6 @@ pub struct Repository {
 
 #[derive(Debug)]
 pub enum RepoError {
-    ConstructingShell(xshell::Error),
     GitCommandFailed(xshell::Error),
     GhCommandFailed(xshell::Error),
 }
@@ -19,7 +18,6 @@ pub enum RepoError {
 impl std::fmt::Display for RepoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ConstructingShell(e) => write!(f, "Failed to construct shell: {e}"),
             Self::GitCommandFailed(e) => write!(f, "Failed to get repository root: {e}"),
             Self::GhCommandFailed(e) => write!(f, "Failed to get project name: {e}"),
         }
@@ -47,9 +45,7 @@ fn parse_github_url(url: &str) -> Option<String> {
     None
 }
 
-pub fn current_repo() -> Result<Repository, RepoError> {
-    let sh = Shell::new().map_err(RepoError::ConstructingShell)?;
-
+pub fn current_repo(sh: &Shell) -> Result<Repository, RepoError> {
     // Get repository root using git
     let repo_root_str = cmd!(sh, "git rev-parse --show-toplevel")
         .read()
