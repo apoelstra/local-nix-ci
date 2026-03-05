@@ -1,16 +1,9 @@
-[package]
-name = "local-ci"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["tw-rs"]
+resolver = "2"
 
-[dependencies]
-anyhow = "1.0"
-bitcoin_hashes = { version = "0.18", default-features = false, features = [ "hex", "serde", "std" ] }
-xshell = "0.2"
-serde = { version = "1.0.156", default-features = false, features = [ "derive" ] }
-serde_json = { version = "1.0.149", default-features = false, features = [ "std" ] }
-uuid = { version = "1.19", default-features = false, features = [ "serde", "std" ] }
-chrono = { version = "0.4", default-features = false, features = [ "clock", "std" ] }
+[workspace.lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzing)'] }
 
 [workspace.lints.clippy]
 # Exclude lints we don't think are valuable.
