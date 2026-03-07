@@ -236,54 +236,75 @@ fn process_commit(
         .update_commit_local_ci_commit_id(commit_task.uuid(), state.local_ci_commit_id().to_owned())
         .context("failed adding local CI commit ID to task")?;
 
-    // Instantiate derivation. Because we want to capture our streams even if they fail,
-    // we must use std::process::Command directly rather than xshell.
-    logger.info("Instantiating derivation.");
-    let instantiate_result = Command::new("nix-instantiate")
-        .arg("--show-trace")
-        .arg("--arg")
-        .arg("inlineJsonConfig")
-        .arg(format!(
-            "{{ gitDir = \"{}\"; projectName = \"{}\"; }}",
-            repo_root.display(),
-            project
-        ))
-        .arg("--arg")
-        .arg("inlineCommitList")
-        .arg(format!("[ {} ]", commit_str))
-        .arg("--arg")
-        .arg("prNum")
-        .arg("\"\"")
-        .arg(&nixfile_path)
-        .current_dir(repo_root)
-        .output();
+    // Check if derivation already exists
+    let derivation_path = if let Some(existing_derivation) = commit_task.derivation() {
+        logger.info(format_args!("Using existing derivation: {}", existing_derivation));
+        existing_derivation.to_string()
+    } else {
+        // Instantiate derivation. Because we want to capture our streams even if they fail,
+        // we must use std::process::Command directly rather than xshell.
+        logger.info("Instantiating derivation.");
+        let instantiate_result = Command::new("nix-instantiate")
+            .arg("--show-trace")
+            .arg("--arg")
+            .arg("inlineJsonConfig")
+            .arg(format!(
+                "{{ gitDir = \"{}\"; projectName = \"{}\"; }}",
+                repo_root.display(),
+                project
+            ))
+            .arg("--arg")
+            .arg("inlineCommitList")
+            .arg(format!("[ {} ]", commit_str))
+            .arg("--arg")
+            .arg("prNum")
+            .arg("\"\"")
+            .arg(&nixfile_path)
+            .current_dir(repo_root)
+            .output();
 
-    let derivation_path = match instantiate_result {
-        Ok(output) => {
-            if output.status.success() {
-                let stdout_str = String::from_utf8_lossy(&output.stdout);
-                let lines: Vec<&str> = stdout_str.lines().collect();
-                
-                let path = if lines.len() > 1 {
-                    logger.warn(format_args!(
-                        "nix-instantiate returned {} lines, taking only the first line",
-                        lines.len()
-                    ));
-                    lines[0].trim().to_string()
+        match instantiate_result {
+            Ok(output) => {
+                if output.status.success() {
+                    let stdout_str = String::from_utf8_lossy(&output.stdout);
+                    let lines: Vec<&str> = stdout_str.lines().collect();
+                    
+                    let path = if lines.len() > 1 {
+                        logger.warn(format_args!(
+                            "nix-instantiate returned {} lines, taking only the first line",
+                            lines.len()
+                        ));
+                        lines[0].trim().to_string()
+                    } else {
+                        stdout_str.trim().to_string()
+                    };
+                    
+                    logger.info(format_args!("Instantiated derivation: {path}"));
+
+                    tasks.update_commit_derivation(commit_task.uuid(), path.clone())?;
+                    path
                 } else {
-                    stdout_str.trim().to_string()
-                };
-                
-                logger.info(format_args!("Instantiated derivation: {path}"));
-
-                tasks.update_commit_derivation(commit_task.uuid(), path.clone())?;
-                path
-            } else {
+                    let error_content = format!(
+                        "nix-instantiate failed for commit {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+                        commit_task.commit_id(),
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    save_error_to_file(
+                        logger,
+                        repo_root,
+                        commit_task.commit_id(),
+                        "instantiate",
+                        &error_content,
+                    )?;
+                    return Ok(false);
+                }
+            }
+            Err(e) => {
                 let error_content = format!(
-                    "nix-instantiate failed for commit {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+                    "Failed to run nix-instantiate for commit {}: {}",
                     commit_task.commit_id(),
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
+                    e
                 );
                 save_error_to_file(
                     logger,
@@ -294,21 +315,6 @@ fn process_commit(
                 )?;
                 return Ok(false);
             }
-        }
-        Err(e) => {
-            let error_content = format!(
-                "Failed to run nix-instantiate for commit {}: {}",
-                commit_task.commit_id(),
-                e
-            );
-            save_error_to_file(
-                logger,
-                repo_root,
-                commit_task.commit_id(),
-                "instantiate",
-                &error_content,
-            )?;
-            return Ok(false);
         }
     };
 

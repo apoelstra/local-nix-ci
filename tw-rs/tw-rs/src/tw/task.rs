@@ -188,6 +188,10 @@ impl CommitTask {
         &self.review_notes
     }
 
+    pub fn derivation(&self) -> Option<&str> {
+        self.derivation.as_deref()
+    }
+
     pub fn ci_status(&self) -> &CiStatus {
         &self.ci_status
     }
