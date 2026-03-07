@@ -7,6 +7,15 @@ use crate::git::GitCommit;
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub enum Priority {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CiStatus {
     #[default]
     Unstarted,
@@ -103,6 +112,8 @@ pub struct Task {
     #[serde(default)]
     #[serde(rename = "claimedby")]
     pub claimed_by: Option<String>,
+    #[serde(default)]
+    pub priority: Priority,
 
     // PR data
     #[serde(default)]

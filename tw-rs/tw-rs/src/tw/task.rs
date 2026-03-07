@@ -5,7 +5,7 @@ use serde_json;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use super::serde_types::{self, CiStatus, MergeStatus, ReviewStatus};
+use super::serde_types::{self, CiStatus, Priority, MergeStatus, ReviewStatus};
 use crate::git::GitCommit;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +145,7 @@ pub struct CommitTask {
     pub(super) ci_status: CiStatus,
     pub(super) local_ci_commit_id: Option<String>,
     pub(super) derivation: Option<String>,
+    priority: Priority,
     claimed_by: Option<String>,
 }
 
@@ -197,6 +198,10 @@ impl CommitTask {
 
     pub fn is_tip(&self) -> bool {
         self.is_tip
+    }
+
+    pub fn priority(&self) -> Priority {
+        self.priority
     }
 
     pub fn is_merge_commit(&self) -> bool {
@@ -353,6 +358,7 @@ impl PrOrCommitTask {
                 description: task_json.description,
 
                 ci_status: task_json.ci_status,
+                priority: task_json.priority,
                 prs: vec![],
                 is_tip,
                 is_merge_commit,

@@ -96,6 +96,11 @@ uda.derivation.label=Top-level derivation for commit CI run
 uda.claimedby.type=string
 uda.claimedby.label=Local CI box which has claimed the job
 
+uda.priority.type=string
+uda.priority.label=Priority for local CI ordering
+uda.priority.values=normal,low,high
+uda.priority.default=normal
+
 uda.repo_root.type=string
 uda.repo_root.label=Local repo directory
 
