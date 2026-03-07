@@ -1,5 +1,5 @@
 [workspace]
-members = ["lcilib"]
+members = ["lcilib", "local-ci"]
 resolver = "2"
 
 [workspace.lints.rust]
