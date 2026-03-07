@@ -14,6 +14,25 @@ pub enum Priority {
     High,
 }
 
+impl PartialOrd for Priority {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Priority {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use Priority::*;
+        match (self, other) {
+            (High, High) | (Medium, Medium) | (Low, Low) => std::cmp::Ordering::Equal,
+            (High, _) => std::cmp::Ordering::Greater,
+            (_, High) => std::cmp::Ordering::Less,
+            (Medium, Low) => std::cmp::Ordering::Greater,
+            (Low, Medium) => std::cmp::Ordering::Less,
+        }
+    }
+}
+
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CiStatus {

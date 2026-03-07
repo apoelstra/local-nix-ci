@@ -4,7 +4,7 @@ use core::mem;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::tw::{CommitTask, TaskCollection};
-use crate::{CiStatus, MergeStatus, ReviewStatus};
+use crate::{CiStatus, MergeStatus, ReviewStatus, Priority};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum State {
@@ -49,8 +49,31 @@ pub struct RunQueue {
     pr_commits_since_merge: usize,
 }
 
+/// Helper function to pop the highest priority task from a queue
+fn pop_highest_priority_from_queue(map: &HashMap<uuid::Uuid, Task>, queue: &mut VecDeque<uuid::Uuid>) -> Option<uuid::Uuid> {
+    if queue.is_empty() {
+        return None;
+    }
+
+    // Find the index of the highest priority task
+    let mut best_index = 0;
+    let mut best_priority = Priority::Low;
+    
+    for (index, &uuid) in queue.iter().enumerate() {
+        if let Some(task) = map.get(&uuid) {
+            let priority = task.task.priority();
+            if priority > best_priority {
+                best_priority = priority;
+                best_index = index;
+            }
+        }
+    }
+
+    queue.remove(best_index)
+}
+
 impl RunQueue {
-    /// Get the best eligible merge commit, sorted by ACK count (highest first).
+    /// Get the best eligible merge commit, sorted by priority first, then ACK count (highest first).
     /// If ignore_conflicts is true, ignore the conflict check and return any ready merge commit.
     fn get_best_eligible_merge_commit(
         &self,
@@ -75,35 +98,40 @@ impl RunQueue {
                     });
                 
                 if all_commits_passed {
-                    if ignore_conflicts {
-                        // Add to eligible list regardless of conflicts
-                        eligible_merges.push((merge_uuid, pr_task.ack_count()));
-                    } else {
-                        // Check for conflicting merge commits with CiStatus::Success
-                        let has_conflicting_success = collection.pulls()
-                            .any(|(_, other_pr)| {
-                                // Same project and same base commit, but different PR
-                                other_pr.project() == pr_task.project() &&
-                                other_pr.base_ref() == pr_task.base_ref() &&
-                                *other_pr.merge_status() == MergeStatus::NeedSig &&
-                                other_pr.merge_uuid() != pr_task.merge_uuid() &&
-                                // Check if the other merge commit has CiStatus::Success
-                                self.map.get(other_pr.merge_uuid())
-                                    .map(|task| task.state == State::Success)
-                                    .unwrap_or(false)
-                            });
+                    // Get the merge commit to access its priority
+                    if let Some(merge_task) = self.map.get(&merge_uuid) {
+                        let priority = merge_task.task.priority();
                         
-                        if !has_conflicting_success {
-                            eligible_merges.push((merge_uuid, pr_task.ack_count()));
+                        if ignore_conflicts {
+                            // Add to eligible list regardless of conflicts
+                            eligible_merges.push((merge_uuid, priority, pr_task.ack_count()));
+                        } else {
+                            // Check for conflicting merge commits with CiStatus::Success
+                            let has_conflicting_success = collection.pulls()
+                                .any(|(_, other_pr)| {
+                                    // Same project and same base commit, but different PR
+                                    other_pr.project() == pr_task.project() &&
+                                    other_pr.base_ref() == pr_task.base_ref() &&
+                                    *other_pr.merge_status() == MergeStatus::NeedSig &&
+                                    other_pr.merge_uuid() != pr_task.merge_uuid() &&
+                                    // Check if the other merge commit has CiStatus::Success
+                                    self.map.get(other_pr.merge_uuid())
+                                        .map(|task| task.state == State::Success)
+                                        .unwrap_or(false)
+                                });
+                            
+                            if !has_conflicting_success {
+                                eligible_merges.push((merge_uuid, priority, pr_task.ack_count()));
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Sort by ACK count (highest first) and return the best one
-        eligible_merges.sort_by(|a, b| b.1.cmp(&a.1));
-        eligible_merges.first().map(|(uuid, _)| *uuid)
+        // Sort by priority first (High > Medium > Low), then by ACK count (highest first)
+        eligible_merges.sort_by_key(|&(_, priority, ack_count)| (std::cmp::Reverse(priority), std::cmp::Reverse(ack_count)));
+        eligible_merges.first().map(|(uuid, _, _)| *uuid)
     }
 
     pub fn status(&self) {
@@ -200,7 +228,7 @@ impl RunQueue {
 
         // Phase 2: If no merge commits available, do up to 4 PR commits; incrementing the counter
         if self.pr_commits_since_merge < 2 {
-            if let Some(uuid) = self.pr_commit_queue.pop_front() {
+            if let Some(uuid) = pop_highest_priority_from_queue(&self.map, &mut self.pr_commit_queue) {
                 self.pr_commits_since_merge += 1;
                 return self.map.remove(&uuid).map(|task| task.task);
             }
@@ -216,12 +244,12 @@ impl RunQueue {
         }
 
         // Phase 4: If there are no merge commits, just do PR commits. If there are no PR commits, try unapproved parent queue.
-        if let Some(uuid) = self.pr_commit_queue.pop_front() {
+        if let Some(uuid) = pop_highest_priority_from_queue(&self.map, &mut self.pr_commit_queue) {
             self.pr_commits_since_merge += 1;
             return self.map.remove(&uuid).map(|task| task.task);
         }
 
-        if let Some(uuid) = self.unapproved_parent_queue.pop_front() {
+        if let Some(uuid) = pop_highest_priority_from_queue(&self.map, &mut self.unapproved_parent_queue) {
             return self.map.remove(&uuid).map(|task| task.task);
         }
 
