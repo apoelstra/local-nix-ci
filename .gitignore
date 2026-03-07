@@ -1,4 +1,5 @@
 *.swp
 .aider*
 */__pycache__/
+postgres/target
 tw-rs/target
