@@ -174,7 +174,10 @@ for cargo_file in "${changed_cargo_files[@]}"; do
     current_info=""
 
     if extract_package_info "$cargo_file" "pull/$pr_num/base" >/dev/null 2>&1; then
-        base_info=$(extract_package_info "$cargo_file" "${parent_array[0]}")
+        if ! base_info=$(extract_package_info "$cargo_file" "${parent_array[0]}"); then
+            echo "Warning: Could not extract package info from $cargo_file in base committ ${parent_array[0]}"
+            continue
+        fi
     fi
 
     if extract_package_info "$cargo_file" "$jj_change_id" >/dev/null 2>&1; then
