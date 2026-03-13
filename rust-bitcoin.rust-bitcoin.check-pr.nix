@@ -7,6 +7,11 @@ in import ./rust.check-pr.nix {
     # Use MSRV as a proxy for "this is an old broken version"
     runClippy = { src, features, rustc, isMainWorkspace, isMainLockFile, msrv, ... } @ args: (prev.runClippy args) && msrv >= "1.63.0";
 
+    rustc = { src, msrv, isMainLockFile, ... } @ args:
+      if isMainLockFile
+      then prev.rustc args
+      else builtins.head (prev.rustc args); # MSRV only
+
     runFmt = false;
     releaseMode = false; # ungodly slow
 
