@@ -142,7 +142,7 @@ rec {
   rustcIsNightly = rustc: !builtins.isNull (builtins.match ".*nightly-([0-9]+-[0-9]+-[0-9]+).*" rustc.version);
 
   # Given a list of features
-  featuresForSrc = { include ? [], exclude ? [] }: { src, needsNoStd, cargoToml, ... }:
+  featuresForSrc = { include ? [], exclude ? [] }: { src, rustc, needsNoStd, cargoToml, ... }:
     let
       randBit = name:
         let
@@ -165,7 +165,16 @@ rec {
       allFeatureNames = builtins.attrNames allFeatures;
 
       result =
-        [
+      # With the nightly compiler we're basically testing the compiler rather than
+      # testing our own code (the stable compiler is for our code). So we don't need
+      # to redo the whole matrix. Sufficient to do just a couple easy cases and the
+      # explicitly-included cases.
+      if rustcIsNightly rustc
+      then [
+          []
+          allFeatureNames
+      ] ++ include
+      else [
           # Randoms
           (builtins.filter (name: randBit name) allFeatureNames)
           (builtins.filter (name: randBit ("0" + name)) allFeatureNames)

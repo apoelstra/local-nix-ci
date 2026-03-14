@@ -15,17 +15,17 @@ in import ./rust.check-pr.nix {
     runFmt = false;
     releaseMode = false; # ungodly slow
 
-    features = { src, cargoToml, workspace, needsNoStd, ... } @ args:
+    features = { src, cargoToml, workspace, needsNoStd, rustc, ... } @ args:
       if workspace == "bitcoin"
-      then utils.featuresForSrc { exclude = [ "actual-serde" ]; } { inherit src cargoToml needsNoStd; }
+      then utils.featuresForSrc { exclude = [ "actual-serde" ]; } { inherit src cargoToml needsNoStd rustc; }
       # schemars does not work with nostd, so exclude it from
       # the standard list and test it separately.
       else if workspace == "hashes"
       then utils.featuresForSrc {
         include = [ [ "std" "schemars" ] ];
         exclude = [ "actual-arbitrary" "actual-serde" "schemars" ];
-      } { inherit src cargoToml needsNoStd; }
-      else utils.featuresForSrc { } { inherit src cargoToml needsNoStd; };
+      } { inherit src cargoToml needsNoStd rustc; }
+      else utils.featuresForSrc { } { inherit src cargoToml needsNoStd rustc; };
 
     extraTestPostRunTopLevel = { workspace, needsNoStd, msrv, ... }:
     # FIXME remove the msrv requirement by fixing generate-files.sh on backport branches;
