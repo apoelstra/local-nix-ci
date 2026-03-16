@@ -334,15 +334,8 @@ def main():
         sys.exit(4)
 
     has_warnings = False
-    # Check diff between local merge and Github merge 
-    diff = subprocess.check_output([GIT, 'diff', f'{merge_commit}..{local_merge_commit}'])
-    if diff:
-        stderr.write("WARNING: merge differs from github!\n")
-        stderr.write(diff.decode('utf-8'))
-        stderr.write(f"\nGithub merge commit: {merge_commit}\n")
-        stderr.write(f"   Our merge commit: {local_merge_commit}\n")
-        stderr.write(f"Run git diff {merge_commit}..{local_merge_commit} to reproduce.\n\n")
-        has_warnings = True
+    # Check diff between local merge and Github merge
+    # Deleted by ASP since the Github merges got all fucked up around 2026 03
 
     # Compute description
     # Description: title
