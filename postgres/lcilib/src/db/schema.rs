@@ -7,15 +7,18 @@ const EXPECTED_SCHEMA_VERSION: u32 = 1;
 
 /// Ensure the database contains exactly the schema version this binary expects.
 pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
-    let tx = client.transaction().await?;
+    let tx = client.transaction().await
+        .map_err(SchemaError::Db)?;
 
     // Treat "the global metadata table exists" as indicating that the database has been initialized.
-    let meta_exists = table_exists(&tx, "local_ci", "global").await?;
+    let meta_exists = table_exists(&tx, "local_ci", "global").await
+        .map_err(SchemaError::Db)?;
 
     if meta_exists {
         let row = tx
             .query_opt("SELECT schema_version FROM local_ci.global LIMIT 1", &[])
-            .await?;
+            .await
+            .map_err(SchemaError::Db)?;
 
         let Some(row) = row else {
             return Err(SchemaError::MissingOrInvalidMetaRow);
@@ -29,12 +32,15 @@ pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
             });
         }
 
-        tx.commit().await?;
+        tx.commit().await
+            .map_err(SchemaError::Db)?;
         return Ok(());
     }
 
-    tx.batch_execute(include_str!("../../sql/schema_v1.sql")).await?;
-    tx.commit().await?;
+    tx.batch_execute(include_str!("../../sql/schema_v1.sql")).await
+        .map_err(SchemaError::Db)?;
+    tx.commit().await
+        .map_err(SchemaError::Db)?;
     Ok(())
 }
 
@@ -48,14 +54,14 @@ pub enum SchemaError {
 impl std::fmt::Display for SchemaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SchemaError::Db(e) => write!(f, "database error: {e}"),
-            SchemaError::IncompatibleVersion { found, expected } => {
+            Self::Db(e) => write!(f, "database error: {e}"),
+            Self::IncompatibleVersion { found, expected } => {
                 write!(
                     f,
                     "database schema version {found} is incompatible with expected version {expected}"
                 )
             }
-            SchemaError::MissingOrInvalidMetaRow => {
+            Self::MissingOrInvalidMetaRow => {
                 write!(f, "app_meta table is missing its schema version row or it is invalid")
             }
         }
@@ -63,9 +69,3 @@ impl std::fmt::Display for SchemaError {
 }
 
 impl std::error::Error for SchemaError {}
-
-impl From<tokio_postgres::Error> for SchemaError {
-    fn from(e: tokio_postgres::Error) -> Self {
-        SchemaError::Db(e)
-    }
-}

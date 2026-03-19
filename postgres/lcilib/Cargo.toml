@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = { version = "0.4.44", default-features = false, features = [ "now" ] }
 tokio = { version = "1.50.0", default-features = false, features = [ "rt" ] }
 # Tokio-postgres brings in 83 dependencies. But apparently that's the cost of using async Rust.
-tokio-postgres = { version = "0.7.16", default-features = false, features = [ "runtime" ] }
+tokio-postgres = { version = "0.7.16", default-features = false, features = [ "runtime", "with-chrono-0_4" ] }
 
 [lints]
 workspace = true
