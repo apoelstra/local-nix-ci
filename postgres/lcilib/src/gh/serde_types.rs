@@ -14,15 +14,45 @@ pub struct Author {
     pub login: String,
 }
 
+/// A comment on a PR as returned by Github.
+#[derive(serde::Deserialize)]
+pub struct Comment {
+    #[serde(default)]
+    pub author: Author,
+    #[serde(default)]
+    pub body: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+}
+
+/// A review on a PR as returned by Github.
+#[derive(serde::Deserialize)]
+pub struct Review {
+    #[serde(default)]
+    pub author: Author,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+}
+
 /// The output of `gh pr view --json`
 #[derive(serde::Deserialize)]
 pub struct PrInfo {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
+    pub body: String,
+    #[serde(default)]
     pub author: Author,
     #[serde(default)]
     pub commits: Vec<Commit>,
+    #[serde(default)]
+    pub comments: Vec<Comment>,
+    #[serde(default)]
+    pub reviews: Vec<Review>,
     #[serde(rename = "headRefOid")]
     pub head_commit: GitCommit,
     #[serde(rename = "baseRefName")]
