@@ -47,6 +47,8 @@ CREATE TABLE pull_requests (
     id SERIAL PRIMARY KEY,
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     pr_number INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
     tip_commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE,
     review_status review_status NOT NULL DEFAULT 'unreviewed',
     priority INTEGER NOT NULL DEFAULT 0,

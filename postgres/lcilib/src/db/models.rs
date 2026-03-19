@@ -263,6 +263,8 @@ pub struct PullRequest {
     pub id: i32,
     pub repository_id: i32,
     pub pr_number: i32,
+    pub title: String,
+    pub body: String,
     pub tip_commit_id: i32,
     pub review_status: ReviewStatus,
     pub priority: i32,
@@ -360,6 +362,8 @@ pub struct NewCommit {
 pub struct NewPullRequest {
     pub repository_id: i32,
     pub pr_number: i32,
+    pub title: String,
+    pub body: String,
     pub tip_commit_id: i32,
     pub review_status: ReviewStatus,
     pub priority: i32,
@@ -402,6 +406,8 @@ pub struct UpdateCommit {
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdatePullRequest {
+    pub title: Option<String>,
+    pub body: Option<String>,
     pub tip_commit_id: Option<i32>,
     pub review_status: Option<ReviewStatus>,
     pub priority: Option<i32>,

@@ -311,15 +311,17 @@ impl PullRequest {
         let row = tx
             .query_one(
                 r#"
-                INSERT INTO pull_requests (repository_id, pr_number, tip_commit_id, review_status,
-                                         priority, ok_to_merge, required_reviewers)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING id, repository_id, pr_number, tip_commit_id, review_status, priority,
-                         ok_to_merge, required_reviewers, created_at, updated_at, synced_at
+                INSERT INTO pull_requests (repository_id, pr_number, title, body, tip_commit_id, 
+                                         review_status, priority, ok_to_merge, required_reviewers)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                         priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 "#,
                 &[
                     &new_pr.repository_id,
                     &new_pr.pr_number,
+                    &new_pr.title,
+                    &new_pr.body,
                     &new_pr.tip_commit_id,
                     &new_pr.review_status.as_str(),
                     &new_pr.priority,
@@ -352,8 +354,8 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, tip_commit_id, review_status, priority,
-                       ok_to_merge, required_reviewers, created_at, updated_at, synced_at
+                SELECT id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                       priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests WHERE id = $1
                 "#,
                 &[&id],
@@ -372,8 +374,8 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, tip_commit_id, review_status, priority,
-                       ok_to_merge, required_reviewers, created_at, updated_at, synced_at
+                SELECT id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                       priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests WHERE repository_id = $1 AND pr_number = $2
                 "#,
                 &[&repository_id, &pr_number],
@@ -392,8 +394,8 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, tip_commit_id, review_status, priority,
-                       ok_to_merge, required_reviewers, created_at, updated_at, synced_at
+                SELECT id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                       priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests 
                 WHERE review_status = 'approved' AND ok_to_merge = true
                 ORDER BY priority DESC, created_at ASC
@@ -462,6 +464,18 @@ impl PullRequest {
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
         let mut param_count = 1;
 
+        if let Some(title) = &updates.title {
+            set_clauses.push(format!("title = ${}", param_count));
+            params.push(title);
+            param_count += 1;
+        }
+
+        if let Some(body) = &updates.body {
+            set_clauses.push(format!("body = ${}", param_count));
+            params.push(body);
+            param_count += 1;
+        }
+
         if let Some(tip_commit_id) = &updates.tip_commit_id {
             set_clauses.push(format!("tip_commit_id = ${}", param_count));
             params.push(tip_commit_id);
@@ -501,8 +515,8 @@ impl PullRequest {
             r#"
             UPDATE pull_requests SET {}
             WHERE id = ${}
-            RETURNING id, repository_id, pr_number, tip_commit_id, review_status, priority,
-                     ok_to_merge, required_reviewers, created_at, updated_at, synced_at
+            RETURNING id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                     priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
             "#,
             set_clauses.join(", "),
             param_count
@@ -528,6 +542,8 @@ impl PullRequest {
             id: row.get("id"),
             repository_id: row.get("repository_id"),
             pr_number: row.get("pr_number"),
+            title: row.get("title"),
+            body: row.get("body"),
             tip_commit_id: row.get("tip_commit_id"),
             review_status: row.get::<_, &str>("review_status").parse().unwrap(),
             priority: row.get("priority"),

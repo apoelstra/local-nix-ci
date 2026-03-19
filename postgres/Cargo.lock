@@ -342,6 +342,7 @@ dependencies = [
  "anyhow",
  "lcilib",
  "tokio",
+ "xshell",
 ]
 
 [[package]]
