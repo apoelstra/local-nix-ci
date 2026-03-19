@@ -8,17 +8,17 @@ const EXPECTED_SCHEMA_VERSION: u32 = 1;
 /// Ensure the database contains exactly the schema version this binary expects.
 pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
     let tx = client.transaction().await
-        .map_err(SchemaError::Db)?;
+        .map_err(|e| SchemaError::Db { e, action: "create transaction"})?;
 
     // Treat "the global metadata table exists" as indicating that the database has been initialized.
     let meta_exists = table_exists(&tx, "global").await
-        .map_err(SchemaError::Db)?;
+        .map_err(|e| SchemaError::Db { e, action: "check for 'global' table"})?;
 
     if meta_exists {
         let row = tx
             .query_opt("SELECT schema_version FROM global LIMIT 1", &[])
             .await
-            .map_err(SchemaError::Db)?;
+            .map_err(|e| SchemaError::Db { e, action: "select schema_version from 'global' table"})?;
 
         let Some(row) = row else {
             return Err(SchemaError::MissingOrInvalidMetaRow);
@@ -33,20 +33,23 @@ pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
         }
 
         tx.commit().await
-            .map_err(SchemaError::Db)?;
+            .map_err(|e| SchemaError::Db { e, action: "commit transaction (select version)"})?;
         return Ok(());
     }
 
     tx.batch_execute(include_str!("../../sql/schema_v1.sql")).await
-        .map_err(SchemaError::Db)?;
+        .map_err(|e| SchemaError::Db { e, action: "execute schema_v1.sql"})?;
     tx.commit().await
-        .map_err(SchemaError::Db)?;
+        .map_err(|e| SchemaError::Db { e, action: "commit transaction (execute schema_v1.sql)"})?;
     Ok(())
 }
 
 #[derive(Debug)]
 pub enum SchemaError {
-    Db(tokio_postgres::Error),
+    Db {
+        action: &'static str,
+        e: tokio_postgres::Error
+    },
     IncompatibleVersion { found: u32, expected: u32 },
     MissingOrInvalidMetaRow,
 }
@@ -54,7 +57,7 @@ pub enum SchemaError {
 impl std::fmt::Display for SchemaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Db(e) => write!(f, "database error: {e}"),
+            Self::Db { action, .. } => write!(f, "database error ({action})"),
             Self::IncompatibleVersion { found, expected } => {
                 write!(
                     f,
@@ -71,7 +74,7 @@ impl std::fmt::Display for SchemaError {
 impl std::error::Error for SchemaError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
-            Self::Db(ref e) => Some(e),
+            Self::Db { ref e, .. } => Some(e),
             Self::IncompatibleVersion { .. } => None,
             Self::MissingOrInvalidMetaRow => None,
         }

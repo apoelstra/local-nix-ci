@@ -110,13 +110,7 @@ pub async fn table_exists(
 ) -> Result<bool, Error> {
     let row = tx
         .query_one(
-            r#"
-            SELECT EXISTS (
-                SELECT 1
-                FROM information_schema.tables
-                WHERE table_name = $1
-            )
-            "#,
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
             &[&table],
         )
         .await?;

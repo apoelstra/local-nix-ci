@@ -26,7 +26,7 @@ impl Db {
         // This connect-and-spawn logic is directly from the `tokio_postgres` front-page docs,
         // except that I'm holding the joinhandle (for future proofing, e.g. to handle shutdown
         // more gracefully or something) rather than just dropping it.
-        let (mut client, connection) = tokio_postgres::connect("host=localhost user=postgres", NoTls)
+        let (mut client, connection) = tokio_postgres::connect("host=localhost user=postgres dbname=local-ci", NoTls)
             .await
             .map_err(Error::Connect)?;
         let driver = tokio::spawn(async move {
