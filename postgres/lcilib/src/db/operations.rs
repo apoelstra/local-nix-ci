@@ -2,12 +2,16 @@
 
 use tokio_postgres::{Error, Transaction, Row};
 
-use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, ReviewStatus, CiStatus, CommitType, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, MergeStatus, Ack, NewAck, UpdateAck, AckStatus, AllowedApprover, NewAllowedApprover, LogEntry};
+use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, Ack, NewAck, UpdateAck, AllowedApprover, NewAllowedApprover, LogEntry};
 use super::util::{self, EntityType};
 
 /// Repository operations
 impl Repository {
     /// Create a new repository
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_repo: NewRepository) -> Result<Self, Error> {
         let row = tx
             .query_one(
@@ -33,6 +37,10 @@ impl Repository {
     }
 
     /// Find repository by ID
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
         let rows = tx
             .query("SELECT id, name, path, nixfile_path, created_at FROM repositories WHERE id = $1", &[&id])
@@ -42,6 +50,10 @@ impl Repository {
     }
 
     /// Find repository by path
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_path(tx: &Transaction<'_>, path: &str) -> Result<Option<Self>, Error> {
         let rows = tx
             .query("SELECT id, name, path, nixfile_path, created_at FROM repositories WHERE path = $1", &[&path])
@@ -51,6 +63,10 @@ impl Repository {
     }
 
     /// List all repositories
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn list_all(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query("SELECT id, name, path, nixfile_path, created_at FROM repositories ORDER BY name", &[])
@@ -73,6 +89,10 @@ impl Repository {
 /// Commit operations
 impl Commit {
     /// Create a new commit
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_commit: NewCommit) -> Result<Self, Error> {
         let row = tx
             .query_one(
@@ -111,6 +131,10 @@ impl Commit {
     }
 
     /// Find commit by ID
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
         let rows = tx
             .query(
@@ -127,6 +151,10 @@ impl Commit {
     }
 
     /// Find commit by git commit ID
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_git_id(tx: &Transaction<'_>, repository_id: i32, git_commit_id: &str) -> Result<Option<Self>, Error> {
         let rows = tx
             .query(
@@ -143,6 +171,10 @@ impl Commit {
     }
 
     /// Find commits by repository
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_repository(tx: &Transaction<'_>, repository_id: i32) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(
@@ -159,6 +191,10 @@ impl Commit {
     }
 
     /// Find commits that need CI
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_needing_ci(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(
@@ -177,6 +213,10 @@ impl Commit {
     }
 
     /// Update commit
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateCommit) -> Result<Self, Error> {
         let mut set_clauses = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -249,10 +289,10 @@ impl Commit {
             repository_id: row.get("repository_id"),
             git_commit_id: row.get("git_commit_id"),
             jj_change_id: row.get("jj_change_id"),
-            review_status: ReviewStatus::from_str(row.get("review_status")).unwrap(),
+            review_status: row.get::<_, &str>("review_status").parse().unwrap(),
             should_run_ci: row.get("should_run_ci"),
-            ci_status: CiStatus::from_str(row.get("ci_status")).unwrap(),
-            commit_type: CommitType::from_str(row.get("commit_type")).unwrap(),
+            ci_status: row.get::<_, &str>("ci_status").parse().unwrap(),
+            commit_type: row.get::<_, &str>("commit_type").parse().unwrap(),
             nix_derivation: row.get("nix_derivation"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
@@ -263,6 +303,10 @@ impl Commit {
 /// Pull request operations
 impl PullRequest {
     /// Create a new pull request
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_pr: NewPullRequest) -> Result<Self, Error> {
         let row = tx
             .query_one(
@@ -300,6 +344,10 @@ impl PullRequest {
     }
 
     /// Find pull request by ID
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
         let rows = tx
             .query(
@@ -316,6 +364,10 @@ impl PullRequest {
     }
 
     /// Find pull request by PR number
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_number(tx: &Transaction<'_>, repository_id: i32, pr_number: i32) -> Result<Option<Self>, Error> {
         let rows = tx
             .query(
@@ -332,6 +384,10 @@ impl PullRequest {
     }
 
     /// Find pull requests ready for merge
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_ready_for_merge(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(
@@ -350,6 +406,10 @@ impl PullRequest {
     }
 
     /// Get commits for this pull request in order
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn get_commits(&self, tx: &Transaction<'_>) -> Result<Vec<Commit>, Error> {
         let rows = tx
             .query(
@@ -370,6 +430,10 @@ impl PullRequest {
     }
 
     /// Add commit to pull request
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn add_commit(&self, tx: &Transaction<'_>, commit_id: i32, sequence_order: i32) -> Result<(), Error> {
         tx.execute(
             "INSERT INTO pr_commits (pull_request_id, commit_id, sequence_order) VALUES ($1, $2, $3)",
@@ -389,6 +453,10 @@ impl PullRequest {
     }
 
     /// Update pull request
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn update(&self, tx: &Transaction<'_>, updates: UpdatePullRequest) -> Result<Self, Error> {
         let mut set_clauses = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -461,7 +529,7 @@ impl PullRequest {
             repository_id: row.get("repository_id"),
             pr_number: row.get("pr_number"),
             tip_commit_id: row.get("tip_commit_id"),
-            review_status: ReviewStatus::from_str(row.get("review_status")).unwrap(),
+            review_status: row.get::<_, &str>("review_status").parse().unwrap(),
             priority: row.get("priority"),
             ok_to_merge: row.get("ok_to_merge"),
             required_reviewers: row.get("required_reviewers"),
@@ -475,6 +543,10 @@ impl PullRequest {
 /// Stack operations
 impl Stack {
     /// Create a new stack
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_stack: NewStack) -> Result<Self, Error> {
         let row = tx
             .query_one(
@@ -502,6 +574,10 @@ impl Stack {
     }
 
     /// Find stack by ID
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
         let rows = tx
             .query(
@@ -514,6 +590,10 @@ impl Stack {
     }
 
     /// Find pending stacks
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(
@@ -529,6 +609,10 @@ impl Stack {
     }
 
     /// Get commits for this stack in order
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn get_commits(&self, tx: &Transaction<'_>) -> Result<Vec<Commit>, Error> {
         let rows = tx
             .query(
@@ -549,6 +633,10 @@ impl Stack {
     }
 
     /// Add commit to stack
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn add_commit(&self, tx: &Transaction<'_>, commit_id: i32, sequence_order: i32) -> Result<(), Error> {
         tx.execute(
             "INSERT INTO stack_commits (stack_id, commit_id, sequence_order) VALUES ($1, $2, $3)",
@@ -568,6 +656,10 @@ impl Stack {
     }
 
     /// Update stack
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateStack) -> Result<Self, Error> {
         let mut set_clauses = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -620,7 +712,7 @@ impl Stack {
             id: row.get("id"),
             repository_id: row.get("repository_id"),
             target_branch: row.get("target_branch"),
-            status: MergeStatus::from_str(row.get("status")).unwrap(),
+            status: row.get::<_, &str>("status").parse().unwrap(),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -630,6 +722,10 @@ impl Stack {
 /// ACK operations
 impl Ack {
     /// Create a new ACK
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_ack: NewAck) -> Result<Self, Error> {
         let row = tx
             .query_one(
@@ -663,6 +759,10 @@ impl Ack {
     }
 
     /// Find ACK by ID
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
         let rows = tx
             .query(
@@ -678,6 +778,10 @@ impl Ack {
     }
 
     /// Find ACKs for pull request
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_pull_request(tx: &Transaction<'_>, pull_request_id: i32) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(
@@ -693,6 +797,10 @@ impl Ack {
     }
 
     /// Find pending ACKs
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(
@@ -708,6 +816,10 @@ impl Ack {
     }
 
     /// Update ACK
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateAck) -> Result<Self, Error> {
         let mut set_clauses = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -768,7 +880,7 @@ impl Ack {
             commit_id: row.get("commit_id"),
             reviewer_name: row.get("reviewer_name"),
             message: row.get("message"),
-            status: AckStatus::from_str(row.get("status")).unwrap(),
+            status: row.get::<_, &str>("status").parse().unwrap(),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -778,6 +890,10 @@ impl Ack {
 /// Allowed approver operations
 impl AllowedApprover {
     /// Create a new allowed approver
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_approver: NewAllowedApprover) -> Result<Self, Error> {
         let row = tx
             .query_one(
@@ -805,6 +921,10 @@ impl AllowedApprover {
     }
 
     /// Find approvers for repository
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_repository(tx: &Transaction<'_>, repository_id: i32) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(
@@ -817,6 +937,10 @@ impl AllowedApprover {
     }
 
     /// Check if user is allowed approver
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn is_allowed_approver(tx: &Transaction<'_>, repository_id: i32, approver_name: &str) -> Result<bool, Error> {
         let row = tx
             .query_one(
@@ -846,6 +970,10 @@ impl AllowedApprover {
 /// Log entry operations
 impl LogEntry {
     /// Find logs for entity
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_by_entity(tx: &Transaction<'_>, entity_type: EntityType, entity_id: i32) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(
@@ -861,6 +989,10 @@ impl LogEntry {
     }
 
     /// Find recent logs
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
     pub async fn find_recent(tx: &Transaction<'_>, limit: i64) -> Result<Vec<Self>, Error> {
         let rows = tx
             .query(

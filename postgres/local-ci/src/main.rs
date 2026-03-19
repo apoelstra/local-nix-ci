@@ -1,9 +1,16 @@
 
+mod args;
+
+use anyhow::Context as _;
 use lcilib::Db;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let db = Db::connect().await?;
+    // Will abort on error
+    let _args = args::parse_cli();
+
+    let _db = Db::connect().await
+        .context("connecting to database")?;
 
     Ok(())
 }

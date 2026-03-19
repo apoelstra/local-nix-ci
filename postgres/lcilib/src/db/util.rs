@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use tokio_postgres::{Error, Transaction, Client};
+use std::str::FromStr;
 
 /// Entity types that can be logged, matching the database enum
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityType {
     Commit,
     PullRequest,
@@ -12,8 +13,23 @@ pub enum EntityType {
     System,
 }
 
+impl FromStr for EntityType {
+    type Err = crate::db::models::ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "commit" => Ok(Self::Commit),
+            "pull_request" | "pr" => Ok(Self::PullRequest),
+            "stack" => Ok(Self::Stack),
+            "ack" => Ok(Self::Ack),
+            "system" => Ok(Self::System),
+            _ => Err(crate::db::models::ParseEnumError::new("EntityType", s.to_string())),
+        }
+    }
+}
+
 impl EntityType {
-    /// Convert to string representation for database storage
+    /// Convert to string representation for database storage.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Commit => "commit",
@@ -23,6 +39,7 @@ impl EntityType {
             Self::System => "system",
         }
     }
+
 }
 
 /// Log an action to the polymorphic logs table

@@ -1,6 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use chrono::{DateTime, Utc};
+use std::str::FromStr;
+use std::fmt;
+
+/// Error type for parsing enum values from strings
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseEnumError {
+    enum_name: &'static str,
+    invalid_value: String,
+}
+
+impl ParseEnumError {
+    pub(super) fn new(enum_name: &'static str, invalid_value: String) -> Self {
+        Self {
+            enum_name,
+            invalid_value,
+        }
+    }
+}
+
+impl fmt::Display for ParseEnumError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Invalid {}: '{}'", self.enum_name, self.invalid_value)
+    }
+}
+
+impl std::error::Error for ParseEnumError {}
 
 /// Database enums matching the schema
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +35,75 @@ pub enum AckStatus {
     Failed,
     Posted,
     External,
+}
+
+impl FromStr for CommitType {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "normal" => Ok(Self::Normal),
+            "single" => Ok(Self::Single),
+            "tip" => Ok(Self::Tip),
+            "merge" => Ok(Self::Merge),
+            _ => Err(ParseEnumError::new("CommitType", s.to_string())),
+        }
+    }
+}
+
+impl FromStr for ReviewStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "unreviewed" => Ok(Self::Unreviewed),
+            "rejected" => Ok(Self::Rejected),
+            "approved" => Ok(Self::Approved),
+            _ => Err(ParseEnumError::new("ReviewStatus", s.to_string())),
+        }
+    }
+}
+
+impl FromStr for MergeStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "cancelled" => Ok(Self::Cancelled),
+            "failed" => Ok(Self::Failed),
+            "pushed" => Ok(Self::Pushed),
+            _ => Err(ParseEnumError::new("MergeStatus", s.to_string())),
+        }
+    }
+}
+
+impl FromStr for CiStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "unstarted" => Ok(Self::Unstarted),
+            "skipped" => Ok(Self::Skipped),
+            "failed" => Ok(Self::Failed),
+            "passed" => Ok(Self::Passed),
+            _ => Err(ParseEnumError::new("CiStatus", s.to_string())),
+        }
+    }
+}
+
+impl FromStr for AckStatus {
+    type Err = ParseEnumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "failed" => Ok(Self::Failed),
+            "posted" => Ok(Self::Posted),
+            "external" => Ok(Self::External),
+            _ => Err(ParseEnumError::new("AckStatus", s.to_string())),
+        }
+    }
 }
 
 impl AckStatus {
@@ -28,15 +123,6 @@ impl AckStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "pending" => Some(Self::Pending),
-            "failed" => Some(Self::Failed),
-            "posted" => Some(Self::Posted),
-            "external" => Some(Self::External),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,15 +150,6 @@ impl CiStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "unstarted" => Some(Self::Unstarted),
-            "skipped" => Some(Self::Skipped),
-            "failed" => Some(Self::Failed),
-            "passed" => Some(Self::Passed),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,15 +177,6 @@ impl MergeStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "pending" => Some(Self::Pending),
-            "cancelled" => Some(Self::Cancelled),
-            "failed" => Some(Self::Failed),
-            "pushed" => Some(Self::Pushed),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,14 +202,6 @@ impl ReviewStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "unreviewed" => Some(Self::Unreviewed),
-            "rejected" => Some(Self::Rejected),
-            "approved" => Some(Self::Approved),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,15 +229,6 @@ impl CommitType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "normal" => Some(Self::Normal),
-            "single" => Some(Self::Single),
-            "tip" => Some(Self::Tip),
-            "merge" => Some(Self::Merge),
-            _ => None,
-        }
-    }
 }
 
 /// Repository model
