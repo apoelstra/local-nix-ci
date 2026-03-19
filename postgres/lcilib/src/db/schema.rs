@@ -11,12 +11,12 @@ pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
         .map_err(SchemaError::Db)?;
 
     // Treat "the global metadata table exists" as indicating that the database has been initialized.
-    let meta_exists = table_exists(&tx, "local_ci", "global").await
+    let meta_exists = table_exists(&tx, "global").await
         .map_err(SchemaError::Db)?;
 
     if meta_exists {
         let row = tx
-            .query_opt("SELECT schema_version FROM local_ci.global LIMIT 1", &[])
+            .query_opt("SELECT schema_version FROM global LIMIT 1", &[])
             .await
             .map_err(SchemaError::Db)?;
 
@@ -68,4 +68,13 @@ impl std::fmt::Display for SchemaError {
     }
 }
 
-impl std::error::Error for SchemaError {}
+impl std::error::Error for SchemaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::Db(ref e) => Some(e),
+            Self::IncompatibleVersion { .. } => None,
+            Self::MissingOrInvalidMetaRow => None,
+        }
+        
+    }
+}

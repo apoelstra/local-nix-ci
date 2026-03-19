@@ -9,10 +9,10 @@ CREATE TYPE commit_type AS ENUM ('normal', 'single', 'tip', 'merge');
 CREATE TYPE entity_type AS ENUM ('commit', 'pull_request', 'stack', 'ack', 'system'); -- for logs
 
 -- Version
-CREATE TABLE local_ci.global (
+CREATE TABLE global (
     schema_version INTEGER NOT NULL
 );
-INSERT INTO local_ci.global (schema_version)
+INSERT INTO global (schema_version)
 VALUES (1);
 
 -- Repositories table to normalize repository information

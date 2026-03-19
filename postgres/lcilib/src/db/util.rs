@@ -96,7 +96,7 @@ pub async fn log_action_simple(
     Ok(())
 }
 
-/// Determines whether a given table exists in the given schema.
+/// Determines whether a given table exists.
 ///
 /// Takes a transaction rather than a client on the assumption that
 /// this information will be needed for subsequent operations.
@@ -106,7 +106,6 @@ pub async fn log_action_simple(
 /// Errors if the `SELECT` query fails.
 pub async fn table_exists(
     tx: &Transaction<'_>,
-    schema: &str,
     table: &str,
 ) -> Result<bool, Error> {
     let row = tx
@@ -115,11 +114,10 @@ pub async fn table_exists(
             SELECT EXISTS (
                 SELECT 1
                 FROM information_schema.tables
-                WHERE table_schema = $1
-                  AND table_name = $2
+                WHERE table_name = $1
             )
             "#,
-            &[&schema, &table],
+            &[&table],
         )
         .await?;
 
@@ -133,7 +131,7 @@ pub async fn table_exists(
 /// Errors if the SELECT query fails or if no version is found.
 pub async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, Error> {
     let row = tx
-        .query_one("SELECT schema_version FROM local_ci.global", &[])
+        .query_one("SELECT schema_version FROM global", &[])
         .await?;
 
     Ok(row.get::<_, i32>(0))
