@@ -5,6 +5,65 @@ use tokio_postgres::{Error, Transaction, Row};
 use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, Ack, NewAck, UpdateAck, AllowedApprover, NewAllowedApprover, LogEntry};
 use super::util::{self, EntityType};
 
+/// Error type for database operations with contextual information
+#[derive(Debug)]
+pub struct OperationError {
+    /// The underlying database error
+    pub db_error: Error,
+    /// The operation that failed (e.g., "create_repository", "find_commit_by_id")
+    pub operation: String,
+    /// The entity type being operated on (e.g., "Repository", "Commit")
+    pub entity_type: String,
+    /// Additional context about the operation
+    pub context: Option<String>,
+}
+
+impl OperationError {
+    /// Create a new operation error
+    pub fn new(db_error: Error, operation: &str, entity_type: &str, context: Option<String>) -> Self {
+        Self {
+            db_error,
+            operation: operation.to_string(),
+            entity_type: entity_type.to_string(),
+            context,
+        }
+    }
+
+    /// Create an operation error with context
+    pub fn with_context(db_error: Error, operation: &str, entity_type: &str, context: &str) -> Self {
+        Self::new(db_error, operation, entity_type, Some(context.to_string()))
+    }
+}
+
+impl std::fmt::Display for OperationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.context {
+            Some(context) => write!(
+                f,
+                "Database operation '{}' failed for {}: {} ({})",
+                self.operation, self.entity_type, context, self.db_error
+            ),
+            None => write!(
+                f,
+                "Database operation '{}' failed for {}: {}",
+                self.operation, self.entity_type, self.db_error
+            ),
+        }
+    }
+}
+
+impl std::error::Error for OperationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.db_error)
+    }
+}
+
+impl From<OperationError> for Error {
+    fn from(op_error: OperationError) -> Self {
+        op_error.db_error
+    }
+}
+
 /// Repository operations
 impl Repository {
     /// Create a new repository
@@ -12,7 +71,7 @@ impl Repository {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn create(tx: &Transaction<'_>, new_repo: NewRepository) -> Result<Self, Error> {
+    pub async fn create(tx: &Transaction<'_>, new_repo: NewRepository) -> Result<Self, OperationError> {
         let row = tx
             .query_one(
                 r#"
@@ -22,7 +81,8 @@ impl Repository {
                 "#,
                 &[&new_repo.name, &new_repo.path, &new_repo.nixfile_path],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "create", "Repository", &format!("name: {}", new_repo.name)))?;
 
         util::log_action(
             tx,
@@ -31,7 +91,8 @@ impl Repository {
             "repository_created",
             Some(&format!("Created repository: {}", new_repo.name)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "create", "Repository", "logging creation"))?;
 
         Ok(Self::from_row(&row))
     }
@@ -41,10 +102,11 @@ impl Repository {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
+    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query("SELECT id, name, path, nixfile_path, created_at FROM repositories WHERE id = $1", &[&id])
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_id", "Repository", &format!("id: {}", id)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -54,10 +116,11 @@ impl Repository {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_path(tx: &Transaction<'_>, path: &str) -> Result<Option<Self>, Error> {
+    pub async fn find_by_path(tx: &Transaction<'_>, path: &str) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query("SELECT id, name, path, nixfile_path, created_at FROM repositories WHERE path = $1", &[&path])
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_path", "Repository", &format!("path: {}", path)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -67,10 +130,11 @@ impl Repository {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn list_all(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
+    pub async fn list_all(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query("SELECT id, name, path, nixfile_path, created_at FROM repositories ORDER BY name", &[])
-            .await?;
+            .await
+            .map_err(|e| OperationError::new(e, "list_all", "Repository", None))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -93,7 +157,7 @@ impl Commit {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn create(tx: &Transaction<'_>, new_commit: NewCommit) -> Result<Self, Error> {
+    pub async fn create(tx: &Transaction<'_>, new_commit: NewCommit) -> Result<Self, OperationError> {
         let row = tx
             .query_one(
                 r#"
@@ -114,7 +178,8 @@ impl Commit {
                     &new_commit.nix_derivation,
                 ],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "create", "Commit", &format!("git_commit_id: {}", new_commit.git_commit_id)))?;
 
         let commit = Self::from_row(&row);
 
@@ -125,7 +190,8 @@ impl Commit {
             "commit_created",
             Some(&format!("Created commit: {}", commit.git_commit_id)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "create", "Commit", "logging creation"))?;
 
         Ok(commit)
     }
@@ -135,7 +201,7 @@ impl Commit {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
+    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -145,7 +211,8 @@ impl Commit {
                 "#,
                 &[&id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_id", "Commit", &format!("id: {}", id)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -155,7 +222,7 @@ impl Commit {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_git_id(tx: &Transaction<'_>, repository_id: i32, git_commit_id: &str) -> Result<Option<Self>, Error> {
+    pub async fn find_by_git_id(tx: &Transaction<'_>, repository_id: i32, git_commit_id: &str) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -165,7 +232,8 @@ impl Commit {
                 "#,
                 &[&repository_id, &git_commit_id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_git_id", "Commit", &format!("repository_id: {}, git_commit_id: {}", repository_id, git_commit_id)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -175,7 +243,7 @@ impl Commit {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_repository(tx: &Transaction<'_>, repository_id: i32) -> Result<Vec<Self>, Error> {
+    pub async fn find_by_repository(tx: &Transaction<'_>, repository_id: i32) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -185,7 +253,8 @@ impl Commit {
                 "#,
                 &[&repository_id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_repository", "Commit", &format!("repository_id: {}", repository_id)))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -195,7 +264,7 @@ impl Commit {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_needing_ci(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
+    pub async fn find_needing_ci(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -207,7 +276,8 @@ impl Commit {
                 "#,
                 &[],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::new(e, "find_needing_ci", "Commit", None))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -217,7 +287,7 @@ impl Commit {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateCommit) -> Result<Self, Error> {
+    pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateCommit) -> Result<Self, OperationError> {
         let mut set_clauses = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
         let mut param_count = 1;
@@ -268,7 +338,8 @@ impl Commit {
             param_count
         );
 
-        let row = tx.query_one(&query, &params).await?;
+        let row = tx.query_one(&query, &params).await
+            .map_err(|e| OperationError::with_context(e, "update", "Commit", &format!("id: {}, git_commit_id: {}", self.id, self.git_commit_id)))?;
         let updated_commit = Self::from_row(&row);
 
         util::log_action(
@@ -278,7 +349,8 @@ impl Commit {
             "commit_updated",
             Some(&format!("Updated commit: {}", self.git_commit_id)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "update", "Commit", "logging update"))?;
 
         Ok(updated_commit)
     }
@@ -307,7 +379,7 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn create(tx: &Transaction<'_>, new_pr: NewPullRequest) -> Result<Self, Error> {
+    pub async fn create(tx: &Transaction<'_>, new_pr: NewPullRequest) -> Result<Self, OperationError> {
         let row = tx
             .query_one(
                 r#"
@@ -329,7 +401,8 @@ impl PullRequest {
                     &new_pr.required_reviewers,
                 ],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "create", "PullRequest", &format!("pr_number: {}", new_pr.pr_number)))?;
 
         let pr = Self::from_row(&row);
 
@@ -340,7 +413,8 @@ impl PullRequest {
             "pr_created",
             Some(&format!("Created PR #{}", pr.pr_number)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "create", "PullRequest", "logging creation"))?;
 
         Ok(pr)
     }
@@ -350,7 +424,7 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
+    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -360,7 +434,8 @@ impl PullRequest {
                 "#,
                 &[&id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_id", "PullRequest", &format!("id: {}", id)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -370,7 +445,7 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_number(tx: &Transaction<'_>, repository_id: i32, pr_number: i32) -> Result<Option<Self>, Error> {
+    pub async fn find_by_number(tx: &Transaction<'_>, repository_id: i32, pr_number: i32) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -380,7 +455,8 @@ impl PullRequest {
                 "#,
                 &[&repository_id, &pr_number],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_number", "PullRequest", &format!("repository_id: {}, pr_number: {}", repository_id, pr_number)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -390,7 +466,7 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_ready_for_merge(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
+    pub async fn find_ready_for_merge(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -402,7 +478,8 @@ impl PullRequest {
                 "#,
                 &[],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::new(e, "find_ready_for_merge", "PullRequest", None))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -412,7 +489,7 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn get_commits(&self, tx: &Transaction<'_>) -> Result<Vec<Commit>, Error> {
+    pub async fn get_commits(&self, tx: &Transaction<'_>) -> Result<Vec<Commit>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -426,7 +503,8 @@ impl PullRequest {
                 "#,
                 &[&self.id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_commits", "PullRequest", &format!("pr_id: {}, pr_number: {}", self.id, self.pr_number)))?;
 
         Ok(rows.iter().map(Commit::from_row).collect())
     }
@@ -436,11 +514,12 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn add_commit(&self, tx: &Transaction<'_>, commit_id: i32, sequence_order: i32) -> Result<(), Error> {
+    pub async fn add_commit(&self, tx: &Transaction<'_>, commit_id: i32, sequence_order: i32) -> Result<(), OperationError> {
         tx.execute(
             "INSERT INTO pr_commits (pull_request_id, commit_id, sequence_order) VALUES ($1, $2, $3)",
             &[&self.id, &commit_id, &sequence_order],
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "add_commit", "PullRequest", &format!("pr_id: {}, commit_id: {}", self.id, commit_id)))?;
 
         util::log_action(
             tx,
@@ -449,7 +528,8 @@ impl PullRequest {
             "commit_added",
             Some(&format!("Added commit {} to PR #{}", commit_id, self.pr_number)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "add_commit", "PullRequest", "logging commit addition"))?;
 
         Ok(())
     }
@@ -459,7 +539,7 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn update(&self, tx: &Transaction<'_>, updates: UpdatePullRequest) -> Result<Self, Error> {
+    pub async fn update(&self, tx: &Transaction<'_>, updates: UpdatePullRequest) -> Result<Self, OperationError> {
         let mut set_clauses = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
         let mut param_count = 1;
@@ -522,7 +602,8 @@ impl PullRequest {
             param_count
         );
 
-        let row = tx.query_one(&query, &params).await?;
+        let row = tx.query_one(&query, &params).await
+            .map_err(|e| OperationError::with_context(e, "update", "PullRequest", &format!("id: {}, pr_number: {}", self.id, self.pr_number)))?;
         let updated_pr = Self::from_row(&row);
 
         util::log_action(
@@ -532,7 +613,8 @@ impl PullRequest {
             "pr_updated",
             Some(&format!("Updated PR #{}", self.pr_number)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "update", "PullRequest", "logging update"))?;
 
         Ok(updated_pr)
     }
@@ -563,7 +645,7 @@ impl Stack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn create(tx: &Transaction<'_>, new_stack: NewStack) -> Result<Self, Error> {
+    pub async fn create(tx: &Transaction<'_>, new_stack: NewStack) -> Result<Self, OperationError> {
         let row = tx
             .query_one(
                 r#"
@@ -573,7 +655,8 @@ impl Stack {
                 "#,
                 &[&new_stack.repository_id, &new_stack.target_branch, &new_stack.status.as_str()],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "create", "Stack", &format!("target_branch: {}", new_stack.target_branch)))?;
 
         let stack = Self::from_row(&row);
 
@@ -584,7 +667,8 @@ impl Stack {
             "stack_created",
             Some(&format!("Created stack for branch: {}", stack.target_branch)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "create", "Stack", "logging creation"))?;
 
         Ok(stack)
     }
@@ -594,13 +678,14 @@ impl Stack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
+    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query(
                 "SELECT id, repository_id, target_branch, status, created_at, updated_at FROM stacks WHERE id = $1",
                 &[&id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_id", "Stack", &format!("id: {}", id)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -610,7 +695,7 @@ impl Stack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
+    pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -619,7 +704,8 @@ impl Stack {
                 "#,
                 &[],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::new(e, "find_pending", "Stack", None))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -629,7 +715,7 @@ impl Stack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn get_commits(&self, tx: &Transaction<'_>) -> Result<Vec<Commit>, Error> {
+    pub async fn get_commits(&self, tx: &Transaction<'_>) -> Result<Vec<Commit>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -643,7 +729,8 @@ impl Stack {
                 "#,
                 &[&self.id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_commits", "Stack", &format!("stack_id: {}, target_branch: {}", self.id, self.target_branch)))?;
 
         Ok(rows.iter().map(Commit::from_row).collect())
     }
@@ -653,11 +740,12 @@ impl Stack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn add_commit(&self, tx: &Transaction<'_>, commit_id: i32, sequence_order: i32) -> Result<(), Error> {
+    pub async fn add_commit(&self, tx: &Transaction<'_>, commit_id: i32, sequence_order: i32) -> Result<(), OperationError> {
         tx.execute(
             "INSERT INTO stack_commits (stack_id, commit_id, sequence_order) VALUES ($1, $2, $3)",
             &[&self.id, &commit_id, &sequence_order],
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "add_commit", "Stack", &format!("stack_id: {}, commit_id: {}", self.id, commit_id)))?;
 
         util::log_action(
             tx,
@@ -666,7 +754,8 @@ impl Stack {
             "commit_added",
             Some(&format!("Added commit {} to stack", commit_id)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "add_commit", "Stack", "logging commit addition"))?;
 
         Ok(())
     }
@@ -676,7 +765,7 @@ impl Stack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateStack) -> Result<Self, Error> {
+    pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateStack) -> Result<Self, OperationError> {
         let mut set_clauses = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
         let mut param_count = 1;
@@ -708,7 +797,8 @@ impl Stack {
             param_count
         );
 
-        let row = tx.query_one(&query, &params).await?;
+        let row = tx.query_one(&query, &params).await
+            .map_err(|e| OperationError::with_context(e, "update", "Stack", &format!("id: {}, target_branch: {}", self.id, self.target_branch)))?;
         let updated_stack = Self::from_row(&row);
 
         util::log_action(
@@ -718,7 +808,8 @@ impl Stack {
             "stack_updated",
             Some(&format!("Updated stack for branch: {}", self.target_branch)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "update", "Stack", "logging update"))?;
 
         Ok(updated_stack)
     }
@@ -742,7 +833,7 @@ impl Ack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn create(tx: &Transaction<'_>, new_ack: NewAck) -> Result<Self, Error> {
+    pub async fn create(tx: &Transaction<'_>, new_ack: NewAck) -> Result<Self, OperationError> {
         let row = tx
             .query_one(
                 r#"
@@ -758,7 +849,8 @@ impl Ack {
                     &new_ack.status.as_str(),
                 ],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "create", "Ack", &format!("reviewer: {}", new_ack.reviewer_name)))?;
 
         let ack = Self::from_row(&row);
 
@@ -769,7 +861,8 @@ impl Ack {
             "ack_created",
             Some(&format!("Created ACK from {}", ack.reviewer_name)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "create", "Ack", "logging creation"))?;
 
         Ok(ack)
     }
@@ -779,7 +872,7 @@ impl Ack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, Error> {
+    pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -788,7 +881,8 @@ impl Ack {
                 "#,
                 &[&id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_id", "Ack", &format!("id: {}", id)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -798,7 +892,7 @@ impl Ack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_pull_request(tx: &Transaction<'_>, pull_request_id: i32) -> Result<Vec<Self>, Error> {
+    pub async fn find_by_pull_request(tx: &Transaction<'_>, pull_request_id: i32) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -807,7 +901,8 @@ impl Ack {
                 "#,
                 &[&pull_request_id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_pull_request", "Ack", &format!("pull_request_id: {}", pull_request_id)))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -817,7 +912,7 @@ impl Ack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, Error> {
+    pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -826,7 +921,8 @@ impl Ack {
                 "#,
                 &[],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::new(e, "find_pending", "Ack", None))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -836,7 +932,7 @@ impl Ack {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateAck) -> Result<Self, Error> {
+    pub async fn update(&self, tx: &Transaction<'_>, updates: UpdateAck) -> Result<Self, OperationError> {
         let mut set_clauses = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
         let mut param_count = 1;
@@ -874,7 +970,8 @@ impl Ack {
             param_count
         );
 
-        let row = tx.query_one(&query, &params).await?;
+        let row = tx.query_one(&query, &params).await
+            .map_err(|e| OperationError::with_context(e, "update", "Ack", &format!("id: {}, reviewer: {}", self.id, self.reviewer_name)))?;
         let updated_ack = Self::from_row(&row);
 
         util::log_action(
@@ -884,7 +981,8 @@ impl Ack {
             "ack_updated",
             Some(&format!("Updated ACK from {}", self.reviewer_name)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "update", "Ack", "logging update"))?;
 
         Ok(updated_ack)
     }
@@ -910,7 +1008,7 @@ impl AllowedApprover {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn create(tx: &Transaction<'_>, new_approver: NewAllowedApprover) -> Result<Self, Error> {
+    pub async fn create(tx: &Transaction<'_>, new_approver: NewAllowedApprover) -> Result<Self, OperationError> {
         let row = tx
             .query_one(
                 r#"
@@ -920,7 +1018,8 @@ impl AllowedApprover {
                 "#,
                 &[&new_approver.repository_id, &new_approver.approver_name],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "create", "AllowedApprover", &format!("approver_name: {}", new_approver.approver_name)))?;
 
         let approver = Self::from_row(&row);
 
@@ -931,7 +1030,8 @@ impl AllowedApprover {
             "approver_added",
             Some(&format!("Added approver: {}", approver.approver_name)),
             None,
-        ).await?;
+        ).await
+        .map_err(|e| OperationError::with_context(e, "create", "AllowedApprover", "logging creation"))?;
 
         Ok(approver)
     }
@@ -941,13 +1041,14 @@ impl AllowedApprover {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_repository(tx: &Transaction<'_>, repository_id: i32) -> Result<Vec<Self>, Error> {
+    pub async fn find_by_repository(tx: &Transaction<'_>, repository_id: i32) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 "SELECT id, repository_id, approver_name, created_at FROM allowed_approvers WHERE repository_id = $1",
                 &[&repository_id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_repository", "AllowedApprover", &format!("repository_id: {}", repository_id)))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -957,7 +1058,7 @@ impl AllowedApprover {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn is_allowed_approver(tx: &Transaction<'_>, repository_id: i32, approver_name: &str) -> Result<bool, Error> {
+    pub async fn is_allowed_approver(tx: &Transaction<'_>, repository_id: i32, approver_name: &str) -> Result<bool, OperationError> {
         let row = tx
             .query_one(
                 r#"
@@ -968,7 +1069,8 @@ impl AllowedApprover {
                 "#,
                 &[&repository_id, &approver_name],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "is_allowed_approver", "AllowedApprover", &format!("repository_id: {}, approver_name: {}", repository_id, approver_name)))?;
 
         Ok(row.get::<_, bool>(0))
     }
@@ -990,7 +1092,7 @@ impl LogEntry {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_entity(tx: &Transaction<'_>, entity_type: EntityType, entity_id: i32) -> Result<Vec<Self>, Error> {
+    pub async fn find_by_entity(tx: &Transaction<'_>, entity_type: EntityType, entity_id: i32) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -999,7 +1101,8 @@ impl LogEntry {
                 "#,
                 &[&entity_type.as_str(), &entity_id],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_entity", "LogEntry", &format!("entity_type: {:?}, entity_id: {}", entity_type, entity_id)))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -1009,7 +1112,7 @@ impl LogEntry {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_recent(tx: &Transaction<'_>, limit: i64) -> Result<Vec<Self>, Error> {
+    pub async fn find_recent(tx: &Transaction<'_>, limit: i64) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
@@ -1018,7 +1121,8 @@ impl LogEntry {
                 "#,
                 &[&limit],
             )
-            .await?;
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_recent", "LogEntry", &format!("limit: {}", limit)))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
