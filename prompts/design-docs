@@ -1,0 +1,22 @@
+
+Suggested Additional Design Documents:
+
+ 1 State Machine Diagrams: For commit status transitions, PR lifecycle, and stack lifecycle
+ 2 API Design Document: CLI commands and daemon endpoints
+ 3 Integration Specifications: How to interface with Forgejo/Github APIs and jj/git commands
+ 4 Concurrency Design: How the daemon handles multiple repos, PRs, and stacks simultaneously
+ 5 Error Handling & Recovery: What happens when CI fails, git operations fail, or external services are unavailable
+ 6 Security Model: Authentication, authorization, and signing workflows
+ 7 Configuration Schema: How users configure repos, CI systems, review requirements, etc.
+
+
+Components Needing Detailed Design:
+
+ 1 CI Integration Layer: How to trigger, monitor, and collect results from various CI systems
+ 2 Git/JJ Operation Manager: Safe concurrent git operations, conflict resolution, workspace management
+ 3 External API Clients: Robust integration with Forgejo/Github for PR data and posting ACKs
+ 4 Daemon Architecture: Event-driven vs polling, job queuing, error recovery
+ 5 CLI Command Structure: User workflows, configuration management, status reporting
+ 6 Signing Workflow: Integration with GPG/SSH signing, verification processes
+
+Would you like me to proceed with the schema design based on reasonable assumptions for the unclear points, or would you prefer to clarify these first?

@@ -1,0 +1,146 @@
+# Pull Request State Machine
+
+This document describes all possible state transitions for pull requests in the task tracker system.
+
+## State Dimensions
+
+A pull request has multiple independent state dimensions:
+1. **review_status**: unreviewed -> approved/rejected
+2. **ok_to_merge**: true/false (manual hold flag, defaults to true)
+3. **priority**: integer value (can change at any time)
+4. **required_reviewers**: integer threshold (can change at any time)
+5. **tip_commit_id**: references the tip commit (can change when PR is updated)
+
+## State Transitions
+
+### Review Status Transitions
+- **unreviewed -> approved**: User manually approves the PR after all commits approved
+  - Trigger consideration: Validate all commits in PR are approved
+  - Logging: Required with approval reason
+- **unreviewed -> rejected**: User manually rejects the PR
+  - Trigger consideration: None needed
+  - Logging: Required with rejection reason
+- **approved -> rejected**: User changes mind about PR approval
+  - Trigger consideration: None needed (ok_to_merge is manual)
+  - Logging: Required with reason for status change
+- **rejected -> approved**: User changes mind about rejection
+  - Trigger consideration: Validate all commits in PR are approved
+  - Logging: Required
+- **rejected -> unreviewed**: Reset to initial state
+  - Trigger consideration: None needed
+  - Logging: Required
+- **approved -> unreviewed**: Reset to initial state
+  - Trigger consideration: None needed (ok_to_merge is manual)
+  - Logging: Required
+
+### OK to Merge Transitions
+- **true -> false**: PR put on hold manually
+  - Trigger consideration: None needed (purely manual control)
+  - Logging: Required
+- **false -> true**: PR hold released manually
+  - Trigger consideration: None needed (purely manual control)
+  - Logging: Required
+
+### Tip Commit Changes
+- **Old tip -> New tip**: PR updated with new commits or commit order changed
+  - Trigger consideration: Reset review_status = 'unreviewed', cancel related merge commits
+  - Logging: Required with old/new tip commit info
+
+### Priority Changes
+- **Any priority -> New priority**: User adjusts merge priority
+  - Trigger consideration: None needed
+  - Logging: Required
+
+### Required Reviewers Changes
+- **Any count -> New count**: User adjusts reviewer threshold
+  - Trigger consideration: Re-evaluate ready_for_merge if currently approved
+  - Logging: Required
+
+## Business Rules
+
+### PR Approval Prerequisites
+1. **All commits approved**: PR can only be approved if all its commits have review_status = 'approved'
+2. **All commits passed CI**: PR should only trigger ACK posting if all commits have ci_status = 'passed'
+3. **Sufficient ACKs**: Merge commit creation requires enough 'posted' or 'external' ACKs from allowed approvers >= required_reviewers
+
+### Tip Commit Consistency
+1. **ACK tracking**: ACKs now explicitly track which commit they reference via commit_id
+2. **Review reset**: When tip_commit_id changes, PR review_status should reset to 'unreviewed'
+3. **Merge commit cancellation**: When tip_commit_id changes, related merge commits should be cancelled
+
+### Key Lifecycle Events
+1. **ACK Posting**: When PR is 'approved' AND all commits have CI passing, post ACK
+2. **Merge Commit Creation**: When ACK posted AND ok_to_merge = true AND sufficient allowed approver ACKs, create merge commit
+3. **Inherit approval**: Merge commit should have review_status = 'approved' automatically
+4. **Stack assignment**: Merge commit should be added to appropriate stack for target branch
+
+## Cross-Entity Dependencies
+
+### Commit Dependencies
+- PR approval depends on all constituent commits being approved
+- PR merge readiness depends on all constituent commits passing CI
+- Tip commit changes invalidate PR approval status
+
+### ACK Dependencies  
+- Merge commit creation depends on sufficient ACKs from allowed approvers
+- ACKs now explicitly track which commit they reference
+- ACK count from allowed approvers must meet or exceed required_reviewers threshold
+
+### Stack Dependencies
+- Approved PRs generate merge commits that go into stacks
+- PR target branch determines which stack receives the merge commit
+- Stack conflicts may prevent PR merge even when ready
+
+## Trigger Implementation
+
+### Database Triggers (Implemented)
+1. **Validate PR approval**: Prevent review_status = 'approved' unless all commits approved
+2. **Reset on tip change**: When tip_commit_id changes, set review_status = 'unreviewed', cancel merge commits
+
+### Application Logic (Not in triggers)
+1. **ACK posting**: Post ACK when PR approved and all commits pass CI
+2. **ACK counting**: Count sufficient ACKs from allowed approvers for merge commit creation
+3. **Merge commit creation**: Create and assign merge commits to stacks when conditions met
+4. **Tip commit detection**: Determine which commit is the tip when PR structure changes
+5. **Allowed approver management**: Populate from .gitconfig and manage approver list
+6. **Logging**: All state changes logged with context
+
+## Invalid State Combinations
+
+### Prevented by Database Triggers (Implemented)
+- review_status = 'approved' AND any commit in PR has review_status != 'approved' - **ENFORCED**
+- Tip commit change without review status reset and merge commit cancellation - **ENFORCED**
+
+### Application-Level Validation
+- Merge commit creation AND insufficient allowed approver ACKs (complex query, not trigger-friendly)
+- ACK posting AND any commit has ci_status != 'passed' (application logic)
+- Multiple PRs with same tip commit (unusual but valid scenario)
+
+### Valid Operational States
+- review_status = 'approved', ok_to_merge = true (approved and ready for merge commit creation)
+- review_status = 'approved', ok_to_merge = false (approved but on hold)
+- review_status = 'unreviewed', ok_to_merge = true (normal initial state)
+- review_status = 'rejected', ok_to_merge = true/false (rejected PR, ok_to_merge irrelevant)
+
+## Complex Scenarios
+
+### PR Structure Changes
+When a PR's commit structure changes (commits added/removed/reordered):
+1. Tip commit may change -> triggers review reset
+2. Commit order in pr_commits table must be updated
+3. All ACKs become invalid (reference old tip)
+4. PR approval status must be re-evaluated
+
+### Concurrent PR Updates
+Multiple PRs may reference overlapping commits:
+1. Commit approval in one PR may affect others
+2. Tip commit changes may cascade across PRs
+3. Stack conflicts may arise from multiple ready PRs
+
+### Reviewer Threshold Changes
+When required_reviewers changes on an approved PR:
+1. May need to re-evaluate ready_for_merge status
+2. May need to solicit additional ACKs
+3. May automatically become ready if threshold lowered
+
+This complexity suggests most business logic should remain in application code, with triggers only enforcing basic consistency constraints.

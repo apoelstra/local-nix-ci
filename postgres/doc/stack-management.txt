@@ -1,0 +1,79 @@
+# Stack Management
+
+## Overview
+
+Stacks are sequences of merges which can all be pushed together. Despite the name, these actually function as queues. The name comes from the concept of "stacked PRs" but is unrelated to the data structure behavior.
+
+Stacks are distinguished by their repo/target branch combination and their set of commits. For user display, stacks should be given an ID based on their database key.
+
+## Stack Lifecycle
+
+### 1. Stack Creation and Maintenance
+
+Rather than creating stacks only "when a PR becomes mergeable", the system should continuously check:
+
+- For each PR which is mergeable, for each stack it might fit on, attempt to add it
+- If there is no stack where the PR is at the bottom, make a new stack starting with that PR
+- Cache in-memory the set of conflicts so we don't waste time repeatedly trying to make merge commits
+- When a PR becomes mergeable, create a merge commit on each stack that has the correct repo/target branch
+- If it is impossible to create merge commits due to conflict, this should be logged
+
+### 2. Commit Identification
+
+Commits in a stack should be identified by their jj change ID, not commit hash. Their description or GPG status may change but this should not invalidate any tests.
+
+### 3. Handling Skipped/Deleted Commits
+
+If a commit's ci_status is changed to 'skipped' or the commit is deleted:
+- Every commit which depends on it should be changed to 'skipped'
+- It and all dependents should be removed from its stack(s)
+
+### 4. Testing Process
+
+The daemon should run its tests on each commit in a stack, starting from the bottom (the commit closest to the target branch).
+
+### 5. Pushing Commits
+
+If tests have passed on a commit AND it is GPG signed:
+- That commit should be pushed
+- The next commit becomes the bottom of the stack
+- Any conflicting stacks (stacks targeting the same repo/branch) should be invalidated (their commits all set to 'skipped' and the stacks deleted)
+- This may happen iteratively, so multiple commits from a stack can be pushed in sequence
+
+### 6. Parallel Testing
+
+The system should test multiple non-conflicting stacks in parallel. When doing this, prioritize testing stacks with the fewest already-tested commits to minimize wasted effort caused by later conflicts.
+
+## Priority System
+
+### Individual Commit Priority
+
+For each commit, calculate priority as:
+- Start with: 10 × PR priority (from 'priority' field)
+- Add: +1 for every ACK
+- Add: +0.5 if GPG-signed already
+- Add: +0.1 per day based on creation time of its PR (if multiple PRs, use oldest)
+
+### Stack Priority
+
+To get the priority of a stack:
+- Take each commit's individual priority
+- Multiply by (1/2)^position, where position 0 is the bottom commit
+- Sum all weighted commit priorities
+
+Formula: `stack_priority = Σ(commit_priority × (1/2)^i)` where i is the commit's position from bottom
+
+### Testing Priority Order
+
+1. **Highest priority**: Non-conflicting stacks with positive calculated priority
+2. **Medium priority**: Individual PR commits
+3. **Lowest priority**: Stacks with negative priority (conflicting with higher-priority stacks)
+
+Stacks get negative priority when they conflict with a higher-priority stack, but will still be tested when resources are available.
+
+## Implementation Notes
+
+- Stacks targeting the same repo/branch are considered conflicting
+- The system should maintain in-memory caches of conflict information to avoid repeated merge attempts
+- Database keys should be used for stack IDs in user-facing displays
+- Age-based priority bonuses help prevent older PRs from getting stuck indefinitely

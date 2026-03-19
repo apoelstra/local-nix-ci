@@ -1,0 +1,116 @@
+# Commit State Machine
+
+This document describes all possible state transitions for commits in the task tracker system.
+
+## State Dimensions
+
+A commit has multiple independent state dimensions:
+1. **review_status**: unreviewed -> approved/rejected
+2. **ci_status**: unstarted -> skipped/failed/passed
+3. **commit_type**: normal/single/tip/merge (can change based on PR structure)
+4. **should_run_ci**: false -> true (when approved)
+
+## State Transitions
+
+### Review Status Transitions
+- **unreviewed -> approved**: User manually approves the commit
+  - Trigger consideration: Set should_run_ci = true automatically
+  - Logging: Required
+- **unreviewed -> rejected**: User manually rejects the commit
+  - Trigger consideration: Set should_run_ci = false, ci_status = 'skipped'
+  - Logging: Required
+- **approved -> rejected**: User changes mind about approval
+  - Trigger consideration: Set should_run_ci = false, ci_status = 'skipped'
+  - Logging: Required
+- **rejected -> approved**: User changes mind about rejection
+  - Trigger consideration: Set should_run_ci = true, reset ci_status = 'unstarted'
+  - Logging: Required
+- **rejected -> unreviewed**: Reset to initial state
+  - Trigger consideration: Set should_run_ci = false, ci_status = 'unstarted'
+  - Logging: Required
+- **approved -> unreviewed**: Reset to initial state
+  - Trigger consideration: Set should_run_ci = false, ci_status = 'unstarted'
+  - Logging: Required
+
+### CI Status Transitions
+- **unstarted -> failed**: CI job fails
+  - Trigger consideration: None needed
+  - Logging: Required
+- **unstarted -> passed**: CI job passes
+  - Trigger consideration: None needed
+  - Logging: Required
+- **unstarted -> skipped**: CI job skipped (e.g., commit rejected)
+  - Trigger consideration: None needed
+  - Logging: Required
+- **failed -> unstarted**: Retry CI (manual or automatic)
+  - Trigger consideration: None needed
+  - Logging: Required
+- **passed -> unstarted**: Force re-run CI (e.g., after code change)
+  - Trigger consideration: None needed
+  - Logging: Required
+- **skipped -> unstarted**: Resume CI after being skipped
+  - Trigger consideration: None needed
+  - Logging: Required
+
+### Commit Type Transitions
+- **normal -> tip**: Commit becomes the tip of its PR
+  - Trigger consideration: Reset ci_status = 'unstarted' (different CI requirements)
+  - Logging: Required
+- **tip -> normal**: Another commit becomes the tip
+  - Trigger consideration: Reset ci_status = 'unstarted'
+  - Logging: Required
+- **single -> tip**: PR extended with more commits
+  - Trigger consideration: Reset ci_status = 'unstarted'
+  - Logging: Required
+- **tip -> single**: PR reduced to single commit
+  - Trigger consideration: Reset ci_status = 'unstarted'
+  - Logging: Required
+- **normal -> single**: PR reduced to just this commit
+  - Trigger consideration: Reset ci_status = 'unstarted'
+  - Logging: Required
+- **single -> normal**: PR extended with more commits
+  - Trigger consideration: Reset ci_status = 'unstarted'
+  - Logging: Required
+- **Any type -> merge**: Commit becomes a merge commit for stack
+  - Trigger consideration: Inherit review_status = 'approved' from source PR
+  - Logging: Required
+
+### Should Run CI Transitions
+- **false -> true**: Commit approved and ready for CI
+  - Trigger consideration: Automatically happens when review_status -> 'approved'
+  - Logging: Required
+- **true -> false**: Commit no longer needs CI (rejected or reset)
+  - Trigger consideration: Automatically happens when review_status -> 'rejected'/'unreviewed'
+  - Logging: Required
+
+## Cross-Dimensional Constraints
+
+1. **CI can only run on approved commits**: ci_status can only transition from 'unstarted' if should_run_ci = true
+2. **Rejected commits skip CI**: review_status = 'rejected' implies should_run_ci = false and ci_status = 'skipped'
+3. **Merge commits start approved**: commit_type = 'merge' should have review_status = 'approved' initially
+4. **Type changes reset CI**: Any commit_type change should reset ci_status = 'unstarted'
+
+## Trigger Implementation
+
+### Database Triggers (Implemented)
+1. **Reset CI on type change**: When commit_type changes, set ci_status = 'unstarted'
+2. **Prevent invalid CI state**: Prevent should_run_ci = false AND ci_status IN ('failed', 'passed')
+3. **Enforce merge commit approval**: Prevent commit_type = 'merge' AND review_status != 'approved'
+
+### Application Logic (Not in triggers)
+1. **Review status transitions**: Application decides whether to reset CI or should_run_ci flags
+2. **CI status management**: Application controls when CI starts/stops/retries
+3. **Logging**: All state changes logged at application level with context and reasons
+
+## Invalid State Combinations
+
+### Prevented by Database Triggers
+- should_run_ci = false AND ci_status IN ('failed', 'passed') - **ENFORCED**
+- commit_type = 'merge' AND review_status != 'approved' - **ENFORCED**
+
+### Valid but Unusual (User Override Scenarios)
+- review_status = 'rejected' AND should_run_ci = true (user may want to test rejected code)
+- review_status = 'rejected' AND ci_status IN ('failed', 'passed') (CI ran before rejection)
+
+### Automatically Corrected
+- Any commit_type change resets ci_status = 'unstarted' - **ENFORCED**

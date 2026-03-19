@@ -1,0 +1,161 @@
+# Stack State Machine
+
+This document describes all possible state transitions for stacks in the task tracker system.
+
+## State Dimensions
+
+A stack has these state dimensions:
+1. **status**: pending -> pushed/cancelled/failed
+2. **repository_id**: Immutable reference to repository
+3. **target_branch**: Immutable target branch for the stack
+4. **commit sequence**: Ordered list of merge commits (mutable via stack_commits table)
+
+## State Transitions
+
+### Status Transitions
+
+- **pending -> pushed**: All commits in stack successfully pushed to target branch
+  - Trigger consideration: None needed (application handles git operations)
+  - Logging: Required with push details and commit hashes
+
+- **pending -> failed**: Push operation failed (conflicts, network issues, etc.)
+  - Trigger consideration: None needed (application handles failures)
+  - Logging: Required with failure reason
+
+- **pending -> cancelled**: Stack cancelled due to conflicts or user action
+  - Trigger consideration: None needed (application logic decides cancellation)
+  - Logging: Required with cancellation reason
+
+- **failed -> pending**: Retry after fixing issues
+  - Trigger consideration: None needed (manual retry)
+  - Logging: Required
+
+- **cancelled -> pending**: Stack recreated after resolving conflicts
+  - Trigger consideration: None needed (new stack creation)
+  - Logging: Required
+
+### Commit Sequence Changes
+
+- **Add merge commit**: New approved PR creates merge commit for this stack
+  - Trigger consideration: None needed (application manages stack assignment)
+  - Logging: Required
+
+- **Remove merge commit**: Commit pushed individually or moved to different stack
+  - Trigger consideration: None needed (application manages stack membership)
+  - Logging: Required
+
+- **Reorder commits**: Stack order changed due to dependencies or user preference
+  - Trigger consideration: None needed (application manages ordering)
+  - Logging: Required
+
+## Business Rules
+
+### Stack Creation
+1. **Repository + branch uniqueness**: Multiple stacks can exist for same repo/branch (conflicts)
+2. **Merge commit assignment**: Approved PRs generate merge commits assigned to appropriate stack
+3. **Empty stack creation**: Stacks can be created empty and populated later
+4. **Automatic creation**: Application creates stacks as needed when merge commits are ready
+
+### Stack Conflicts
+1. **Multiple pending stacks**: Multiple stacks for same repo/branch create conflicts
+2. **First wins**: Whichever stack gets signed and pushed first wins
+3. **Conflict resolution**: Losing stacks get cancelled and their commits reassigned
+4. **Partial push handling**: If stack partially pushes, remaining commits stay in stack
+
+### Stack Lifecycle
+1. **Commit accumulation**: Stack collects merge commits from approved PRs
+2. **CI testing**: All commits in stack must pass CI before push
+3. **Signing requirement**: Commits must be signed out-of-band before push
+4. **Atomic push**: Entire stack pushed as unit, or fails as unit
+5. **Target branch tracking**: If target branch changes, stack may need cancellation/recreation
+
+### Commit Dependencies
+1. **Sequential building**: Each commit in stack builds on the previous one
+2. **CI inheritance**: Later commits may inherit CI status from earlier ones
+3. **Failure propagation**: If early commit fails CI, later commits may be affected
+4. **Signing order**: Commits typically signed in sequence order
+
+## Cross-Entity Dependencies
+
+### Pull Request Dependencies
+- Stack commits originate from approved PRs
+- PR approval triggers merge commit creation and stack assignment
+- PR changes may invalidate existing merge commits in stacks
+
+### Commit Dependencies
+- Stack contains only merge commits with commit_type = 'merge'
+- All stack commits must have review_status = 'approved'
+- All stack commits should have ci_status = 'passed' before push
+- Commits must be signed externally before push
+
+### Repository Dependencies
+- Stack target branch must exist in repository
+- Target branch changes may invalidate entire stack
+- Repository access required for push operations
+
+## Trigger Implementation
+
+### Database Triggers (None Proposed)
+- Stack state transitions are complex and depend on external git operations
+- All business logic should remain in application code
+- Database only enforces basic referential integrity
+
+### Application Logic (All in application)
+1. **Stack creation**: Create stacks when merge commits need assignment
+2. **Conflict detection**: Identify conflicting stacks for same repo/branch
+3. **CI coordination**: Ensure all commits pass CI before allowing push
+4. **Signing verification**: Verify commits are signed before push
+5. **Push orchestration**: Execute git push operations and handle results
+6. **Conflict resolution**: Cancel losing stacks and reassign commits
+7. **Target branch tracking**: Monitor target branch changes and react accordingly
+8. **Logging**: All state changes and operations logged with context
+
+## Invalid State Combinations
+
+### Application-Level Validation (All)
+- Stack with non-merge commits (prevented by application logic)
+- Stack with unapproved merge commits (application ensures approval inheritance)
+- Push attempt with unsigned commits (application checks signatures)
+- Push attempt with failed CI (application checks CI status)
+- Multiple active stacks for same repo/branch (application manages conflicts)
+
+### Valid Operational States
+- status = 'pending' with empty commit list (newly created stack)
+- status = 'pending' with commits awaiting CI/signing
+- status = 'pushed' with immutable commit list (historical record)
+- status = 'cancelled' with commit list (for audit trail)
+- status = 'failed' with commit list (for retry analysis)
+
+## Complex Scenarios
+
+### Stack Conflicts
+When multiple stacks exist for the same repository and target branch:
+1. Application must detect conflicts
+2. Determine priority/ordering (by creation time, priority, user preference)
+3. Allow first stack to proceed with push
+4. Cancel remaining stacks
+5. Reassign cancelled commits to new stacks as appropriate
+
+### Partial Push Recovery
+When a stack partially pushes (some commits succeed, others fail):
+1. Update stack status based on partial success
+2. Remove successfully pushed commits from stack
+3. Keep remaining commits in stack for retry
+4. Handle any new conflicts created by partial push
+
+### Target Branch Changes
+When the target branch of a repository changes (due to external pushes):
+1. Detect that stack base is no longer current
+2. Cancel affected stacks
+3. Recreate merge commits with new base
+4. Reassign to new stacks
+5. Restart CI/signing process for new commits
+
+### Dependency Chains
+When stacks have implicit dependencies (commit A must be pushed before commit B):
+1. Application must detect dependency relationships
+2. Ensure proper ordering across multiple stacks
+3. Handle failures that break dependency chains
+4. Coordinate pushes to maintain consistency
+
+This complexity reinforces that stack management should be entirely application-driven, with the database serving only as a state store and audit trail.

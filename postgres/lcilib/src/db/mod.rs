@@ -45,7 +45,38 @@ impl Db {
     }
 }
 
+#[derive(Debug)]
 pub enum Error {
     Connect(tokio_postgres::Error),
     Schema(SchemaError),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Connect(..) => f.write_str("database connection error"),
+            Error::Schema(..) => f.write_str("database schema error"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Connect(e) => Some(e),
+            Error::Schema(e) => Some(e),
+        }
+    }
+}
+
+impl From<tokio_postgres::Error> for Error {
+    fn from(e: tokio_postgres::Error) -> Self {
+        Error::Connect(e)
+    }
+}
+
+impl From<SchemaError> for Error {
+    fn from(e: SchemaError) -> Self {
+        Error::Schema(e)
+    }
 }
