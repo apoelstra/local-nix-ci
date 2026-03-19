@@ -4,5 +4,6 @@ pub mod db;
 pub mod jj;
 pub mod gh;
 pub mod git;
+pub mod repo;
 
 pub use self::db::Db;
