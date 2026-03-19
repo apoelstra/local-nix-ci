@@ -95,9 +95,9 @@ CREATE TABLE stack_commits (
 CREATE TABLE acks (
     id SERIAL PRIMARY KEY,
     pull_request_id INTEGER NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
-    commit_id INTEGER REFERENCES commits(id) ON DELETE CASCADE, -- which commit this ACK is for
+    commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE, -- which commit this ACK is for
     reviewer_name VARCHAR(255) NOT NULL,
-    message TEXT,
+    message TEXT NOT NULL,
     status ack_status NOT NULL DEFAULT 'pending',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

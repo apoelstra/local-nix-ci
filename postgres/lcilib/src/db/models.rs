@@ -256,9 +256,9 @@ pub struct StackCommit {
 pub struct Ack {
     pub id: i32,
     pub pull_request_id: i32,
-    pub commit_id: Option<i32>,
+    pub commit_id: i32,
     pub reviewer_name: String,
-    pub message: Option<String>,
+    pub message: String,
     pub status: AckStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -326,9 +326,9 @@ pub struct NewStack {
 #[derive(Debug, Clone)]
 pub struct NewAck {
     pub pull_request_id: i32,
-    pub commit_id: Option<i32>,
+    pub commit_id: i32,
     pub reviewer_name: String,
-    pub message: Option<String>,
+    pub message: String,
     pub status: AckStatus,
 }
 
@@ -339,6 +339,7 @@ pub struct NewAllowedApprover {
 }
 
 /// Update structs for modifying existing records
+#[allow(clippy::option_option)] // optional update of an Option type
 #[derive(Debug, Clone, Default)]
 pub struct UpdateCommit {
     pub review_status: Option<ReviewStatus>,
@@ -365,7 +366,7 @@ pub struct UpdateStack {
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdateAck {
-    pub commit_id: Option<Option<i32>>,
-    pub message: Option<Option<String>>,
+    pub commit_id: Option<i32>,
+    pub message: Option<String>,
     pub status: Option<AckStatus>,
 }

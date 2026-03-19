@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use tokio_postgres::{Error, Transaction, Client};
-use chrono::{DateTime, Utc};
 
 /// Entity types that can be logged, matching the database enum
 #[derive(Debug, Clone, Copy)]
@@ -123,21 +122,6 @@ pub async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, Error> {
     Ok(row.get::<_, i32>(0))
 }
 
-/// Update the schema version in the global table
-///
-/// # Errors
-///
-/// Errors if the UPDATE query fails.
-pub async fn set_schema_version(tx: &Transaction<'_>, version: i32) -> Result<(), Error> {
-    tx.execute(
-        "UPDATE local_ci.global SET schema_version = $1",
-        &[&version],
-    )
-    .await?;
-
-    Ok(())
-}
-
 /// Check if a repository exists by path
 ///
 /// # Errors
@@ -221,21 +205,4 @@ pub async fn pull_request_exists(
         .await?;
 
     Ok(row.get::<_, bool>(0))
-}
-
-/// Get the current timestamp for database operations
-///
-/// Returns the current UTC timestamp that can be used for database fields.
-pub fn current_timestamp() -> DateTime<Utc> {
-    chrono::Utc::now()
-}
-
-/// Escape a string for use in SQL LIKE patterns
-///
-/// Escapes `%`, `_`, and `\` characters by prefixing them with backslashes.
-pub fn escape_like_pattern(input: &str) -> String {
-    input
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
 }

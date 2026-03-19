@@ -2,7 +2,7 @@
 
 use tokio_postgres::{Error, Transaction, Row};
 
-use super::models::*;
+use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, ReviewStatus, CiStatus, CommitType, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, MergeStatus, Ack, NewAck, UpdateAck, AckStatus, AllowedApprover, NewAllowedApprover, LogEntry};
 use super::util::{self, EntityType};
 
 /// Repository operations

@@ -2,8 +2,8 @@
 
 mod schema;
 mod util;
-mod models;
-mod operations;
+pub mod models;
+pub mod operations;
 
 use tokio_postgres::{Client, NoTls, Transaction};
 
