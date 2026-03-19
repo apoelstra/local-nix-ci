@@ -3,7 +3,10 @@
 use tokio_postgres::Client;
 use super::util::table_exists;
 
-const EXPECTED_SCHEMA_VERSION: u32 = 1;
+// WARNING: you must decode integers from Postgres as i32s. If you try to use u32, it will
+// fail (expecting an OID, will give an opaque "failed to decode" error).
+// See https://docs.rs/tokio-postgres/latest/tokio_postgres/types/trait.FromSql.html
+const EXPECTED_SCHEMA_VERSION: i32 = 1;
 
 /// Ensure the database contains exactly the schema version this binary expects.
 pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
@@ -24,7 +27,7 @@ pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
             return Err(SchemaError::MissingOrInvalidMetaRow);
         };
 
-        let version = row.get::<_, u32>(0);
+        let version = row.get::<_, i32>(0);
         if version != EXPECTED_SCHEMA_VERSION {
             return Err(SchemaError::IncompatibleVersion {
                 found: version,
@@ -50,7 +53,7 @@ pub enum SchemaError {
         action: &'static str,
         e: tokio_postgres::Error
     },
-    IncompatibleVersion { found: u32, expected: u32 },
+    IncompatibleVersion { found: i32, expected: i32 },
     MissingOrInvalidMetaRow,
 }
 

@@ -83,6 +83,7 @@ enum ParseError {
     MultipleSince(String, String),
     MultipleUntil(String, String),
     LogOptionOnNonLogAction(&'static str),
+    MissingAction,
 }
 
 impl std::fmt::Display for ParseError {
@@ -160,6 +161,9 @@ impl std::fmt::Display for ParseError {
                     "'{}' is only valid with the 'log' action.",
                     opt
                 )
+            }
+            Self::MissingAction => {
+                write!(f, "No action specified. Please provide an action (info, log, next, refresh, review, or run).")
             }
         }
     }
@@ -326,7 +330,7 @@ fn parse_args() -> Result<CliArguments, ParseError> {
         }
     }
 
-    let action = action.unwrap_or(Action::Info);
+    let action = action.ok_or(ParseError::MissingAction)?;
 
     // Validate that log-specific options are only used with the log action.
     if action != Action::Log && let Some(opt) = saw_log_option {
@@ -375,7 +379,7 @@ pub fn usage() {
     eprintln!("Usage: {} [ACTION] [TARGET_TYPE] [TARGET] [LOG_OPTIONS]", name);
     eprintln!();
     eprintln!("Actions:");
-    eprintln!("  info       Show information (default)");
+    eprintln!("  info       Show information");
     eprintln!("  log        Show recent logs");
     eprintln!("  next       Show next item to action");
     eprintln!("  refresh    Refresh data");
