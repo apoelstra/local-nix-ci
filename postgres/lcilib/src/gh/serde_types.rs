@@ -34,8 +34,8 @@ pub struct Review {
     pub body: String,
     #[serde(default)]
     pub state: String,
-    #[serde(rename = "createdAt")]
-    pub created_at: String,
+    #[serde(rename = "submittedAt")]
+    pub submitted_at: String,
 }
 
 /// The output of `gh pr view --json`
