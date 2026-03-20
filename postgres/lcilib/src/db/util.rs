@@ -4,13 +4,31 @@ use tokio_postgres::{Error, Transaction, Client};
 use std::str::FromStr;
 
 /// Entity types that can be logged, matching the database enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, postgres_types::FromSql, postgres_types::ToSql)]
+#[postgres(name = "entity_type")]
 pub enum EntityType {
+    #[postgres(name = "commit")]
     Commit,
+    #[postgres(name = "pull_request")]
     PullRequest,
+    #[postgres(name = "stack")]
     Stack,
+    #[postgres(name = "ack")]
     Ack,
+    #[postgres(name = "system")]
     System,
+}
+
+impl std::fmt::Display for EntityType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Commit => write!(f, "commit"),
+            Self::PullRequest => write!(f, "pull_request"),
+            Self::Stack => write!(f, "stack"),
+            Self::Ack => write!(f, "ack"),
+            Self::System => write!(f, "system"),
+        }
+    }
 }
 
 impl FromStr for EntityType {
@@ -28,19 +46,6 @@ impl FromStr for EntityType {
     }
 }
 
-impl EntityType {
-    /// Convert to string representation for database storage.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Commit => "commit",
-            Self::PullRequest => "pull_request",
-            Self::Stack => "stack",
-            Self::Ack => "ack",
-            Self::System => "system",
-        }
-    }
-
-}
 
 /// Log an action to the polymorphic logs table
 ///
@@ -68,7 +73,7 @@ pub async fn log_action(
         INSERT INTO logs (entity_type, entity_id, action, description, reason)
         VALUES ($1, $2, $3, $4, $5)
         "#,
-        &[&entity_type.as_str(), &entity_id, &action, &description, &reason],
+        &[&entity_type, &entity_id, &action, &description, &reason],
     )
     .await?;
 

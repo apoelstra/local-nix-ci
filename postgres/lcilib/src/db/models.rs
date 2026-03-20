@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use chrono::{DateTime, Utc};
-use std::str::FromStr;
 use std::fmt;
+use postgres_types::{FromSql, ToSql};
 
 /// Error type for parsing enum values from strings
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,206 +29,122 @@ impl fmt::Display for ParseEnumError {
 impl std::error::Error for ParseEnumError {}
 
 /// Database enums matching the schema
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromSql, ToSql)]
+#[postgres(name = "ack_status")]
 pub enum AckStatus {
+    #[postgres(name = "pending")]
     Pending,
+    #[postgres(name = "failed")]
     Failed,
+    #[postgres(name = "posted")]
     Posted,
+    #[postgres(name = "external")]
     External,
 }
 
-impl FromStr for CommitType {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "normal" => Ok(Self::Normal),
-            "single" => Ok(Self::Single),
-            "tip" => Ok(Self::Tip),
-            "merge" => Ok(Self::Merge),
-            _ => Err(ParseEnumError::new("CommitType", s.to_string())),
-        }
-    }
-}
-
-impl FromStr for ReviewStatus {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "unreviewed" => Ok(Self::Unreviewed),
-            "rejected" => Ok(Self::Rejected),
-            "approved" => Ok(Self::Approved),
-            _ => Err(ParseEnumError::new("ReviewStatus", s.to_string())),
-        }
-    }
-}
-
-impl FromStr for MergeStatus {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "pending" => Ok(Self::Pending),
-            "cancelled" => Ok(Self::Cancelled),
-            "failed" => Ok(Self::Failed),
-            "pushed" => Ok(Self::Pushed),
-            _ => Err(ParseEnumError::new("MergeStatus", s.to_string())),
-        }
-    }
-}
-
-impl FromStr for CiStatus {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "unstarted" => Ok(Self::Unstarted),
-            "skipped" => Ok(Self::Skipped),
-            "failed" => Ok(Self::Failed),
-            "passed" => Ok(Self::Passed),
-            _ => Err(ParseEnumError::new("CiStatus", s.to_string())),
-        }
-    }
-}
-
-impl FromStr for AckStatus {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "pending" => Ok(Self::Pending),
-            "failed" => Ok(Self::Failed),
-            "posted" => Ok(Self::Posted),
-            "external" => Ok(Self::External),
-            _ => Err(ParseEnumError::new("AckStatus", s.to_string())),
-        }
-    }
-}
-
-impl AckStatus {
-    pub fn as_str(self) -> &'static str {
-        self.as_str2()
-    }
-
-    /// This goofy method is needed in order to obtain an `&dyn ToSql`
-    /// which you cannot get from a `&'static str`, since `ToSql` is
-    /// not implemented for `str`, just for `&str`.
-    pub fn as_str2(self) -> &'static &'static str {
+impl fmt::Display for AckStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Pending => &"pending",
-            Self::Failed => &"failed",
-            Self::Posted => &"posted",
-            Self::External => &"external",
+            Self::Pending => write!(f, "pending"),
+            Self::Failed => write!(f, "failed"),
+            Self::Posted => write!(f, "posted"),
+            Self::External => write!(f, "external"),
         }
     }
-
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromSql, ToSql)]
+#[postgres(name = "ci_status")]
 pub enum CiStatus {
+    #[postgres(name = "unstarted")]
     Unstarted,
+    #[postgres(name = "skipped")]
     Skipped,
+    #[postgres(name = "failed")]
     Failed,
+    #[postgres(name = "passed")]
     Passed,
 }
 
-impl CiStatus {
-    pub fn as_str(self) -> &'static str {
-        self.as_str2()
-    }
-
-    /// This goofy method is needed in order to obtain an `&dyn ToSql`
-    /// which you cannot get from a `&'static str`, since `ToSql` is
-    /// not implemented for `str`, just for `&str`.
-    pub fn as_str2(self) -> &'static &'static str {
+impl fmt::Display for CiStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unstarted => &"unstarted",
-            Self::Skipped => &"skipped",
-            Self::Failed => &"failed",
-            Self::Passed => &"passed",
+            Self::Unstarted => write!(f, "unstarted"),
+            Self::Skipped => write!(f, "skipped"),
+            Self::Failed => write!(f, "failed"),
+            Self::Passed => write!(f, "passed"),
         }
     }
-
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromSql, ToSql)]
+#[postgres(name = "merge_status")]
 pub enum MergeStatus {
+    #[postgres(name = "pending")]
     Pending,
+    #[postgres(name = "cancelled")]
     Cancelled,
+    #[postgres(name = "failed")]
     Failed,
+    #[postgres(name = "pushed")]
     Pushed,
 }
 
-impl MergeStatus {
-    pub fn as_str(self) -> &'static str {
-        self.as_str2()
-    }
-
-    /// This goofy method is needed in order to obtain an `&dyn ToSql`
-    /// which you cannot get from a `&'static str`, since `ToSql` is
-    /// not implemented for `str`, just for `&str`.
-    pub fn as_str2(self) -> &'static &'static str {
+impl fmt::Display for MergeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Pending => &"pending",
-            Self::Cancelled => &"cancelled",
-            Self::Failed => &"failed",
-            Self::Pushed => &"pushed",
+            Self::Pending => write!(f, "pending"),
+            Self::Cancelled => write!(f, "cancelled"),
+            Self::Failed => write!(f, "failed"),
+            Self::Pushed => write!(f, "pushed"),
         }
     }
-
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromSql, ToSql)]
+#[postgres(name = "review_status")]
 pub enum ReviewStatus {
+    #[postgres(name = "unreviewed")]
     Unreviewed,
+    #[postgres(name = "rejected")]
     Rejected,
+    #[postgres(name = "approved")]
     Approved,
 }
 
-impl ReviewStatus {
-    pub fn as_str(self) -> &'static str {
-        self.as_str2()
-    }
-
-    /// This goofy method is needed in order to obtain an `&dyn ToSql`
-    /// which you cannot get from a `&'static str`, since `ToSql` is
-    /// not implemented for `str`, just for `&str`.
-    pub fn as_str2(self) -> &'static &'static str {
+impl fmt::Display for ReviewStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unreviewed => &"unreviewed",
-            Self::Rejected => &"rejected",
-            Self::Approved => &"approved",
+            Self::Unreviewed => write!(f, "unreviewed"),
+            Self::Rejected => write!(f, "rejected"),
+            Self::Approved => write!(f, "approved"),
         }
     }
-
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromSql, ToSql)]
+#[postgres(name = "commit_type")]
 pub enum CommitType {
+    #[postgres(name = "normal")]
     Normal,
+    #[postgres(name = "single")]
     Single,
+    #[postgres(name = "tip")]
     Tip,
+    #[postgres(name = "merge")]
     Merge,
 }
 
-impl CommitType {
-    pub fn as_str(self) -> &'static str {
-        self.as_str2()
-    }
-
-    /// This goofy method is needed in order to obtain an `&dyn ToSql`
-    /// which you cannot get from a `&'static str`, since `ToSql` is
-    /// not implemented for `str`, just for `&str`.
-    pub fn as_str2(self) -> &'static &'static str {
+impl fmt::Display for CommitType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Normal => &"normal",
-            Self::Single => &"single",
-            Self::Tip => &"tip",
-            Self::Merge => &"merge",
+            Self::Normal => write!(f, "normal"),
+            Self::Single => write!(f, "single"),
+            Self::Tip => write!(f, "tip"),
+            Self::Merge => write!(f, "merge"),
         }
     }
-
 }
 
 /// Repository model

@@ -56,7 +56,7 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         if !commits.is_empty() {
             println!("\nCommits:");
             for (i, commit) in commits.iter().enumerate() {
-                println!("  {}. {} ({})", i + 1, commit.git_commit_id, commit.commit_type.as_str());
+                println!("  {}. {} ({})", i + 1, commit.git_commit_id, commit.commit_type);
             }
         }
     } else {

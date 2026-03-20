@@ -171,10 +171,10 @@ impl Commit {
                     &new_commit.repository_id,
                     &new_commit.git_commit_id,
                     &new_commit.jj_change_id,
-                    &new_commit.review_status.as_str(),
+                    &new_commit.review_status,
                     &new_commit.should_run_ci,
-                    &new_commit.ci_status.as_str(),
-                    &new_commit.commit_type.as_str(),
+                    &new_commit.ci_status,
+                    &new_commit.commit_type,
                     &new_commit.nix_derivation,
                 ],
             )
@@ -294,7 +294,7 @@ impl Commit {
 
         if let Some(review_status) = &updates.review_status {
             set_clauses.push(format!("review_status = ${}", param_count));
-            params.push(review_status.as_str2());
+            params.push(review_status);
             param_count += 1;
         }
 
@@ -306,13 +306,13 @@ impl Commit {
 
         if let Some(ci_status) = &updates.ci_status {
             set_clauses.push(format!("ci_status = ${}", param_count));
-            params.push(ci_status.as_str2());
+            params.push(ci_status);
             param_count += 1;
         }
 
         if let Some(commit_type) = &updates.commit_type {
             set_clauses.push(format!("commit_type = ${}", param_count));
-            params.push(commit_type.as_str2());
+            params.push(commit_type);
             param_count += 1;
         }
 
@@ -361,10 +361,10 @@ impl Commit {
             repository_id: row.get("repository_id"),
             git_commit_id: row.get("git_commit_id"),
             jj_change_id: row.get("jj_change_id"),
-            review_status: row.get::<_, &str>("review_status").parse().unwrap(),
+            review_status: row.get("review_status"),
             should_run_ci: row.get("should_run_ci"),
-            ci_status: row.get::<_, &str>("ci_status").parse().unwrap(),
-            commit_type: row.get::<_, &str>("commit_type").parse().unwrap(),
+            ci_status: row.get("ci_status"),
+            commit_type: row.get("commit_type"),
             nix_derivation: row.get("nix_derivation"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
@@ -395,7 +395,7 @@ impl PullRequest {
                     &new_pr.title,
                     &new_pr.body,
                     &new_pr.tip_commit_id,
-                    &new_pr.review_status.as_str(),
+                    &new_pr.review_status,
                     &new_pr.priority,
                     &new_pr.ok_to_merge,
                     &new_pr.required_reviewers,
@@ -564,7 +564,7 @@ impl PullRequest {
 
         if let Some(review_status) = &updates.review_status {
             set_clauses.push(format!("review_status = ${}", param_count));
-            params.push(review_status.as_str2());
+            params.push(review_status);
             param_count += 1;
         }
 
@@ -627,7 +627,7 @@ impl PullRequest {
             title: row.get("title"),
             body: row.get("body"),
             tip_commit_id: row.get("tip_commit_id"),
-            review_status: row.get::<_, &str>("review_status").parse().unwrap(),
+            review_status: row.get("review_status"),
             priority: row.get("priority"),
             ok_to_merge: row.get("ok_to_merge"),
             required_reviewers: row.get("required_reviewers"),
@@ -653,7 +653,7 @@ impl Stack {
                 VALUES ($1, $2, $3)
                 RETURNING id, repository_id, target_branch, status, created_at, updated_at
                 "#,
-                &[&new_stack.repository_id, &new_stack.target_branch, &new_stack.status.as_str()],
+                &[&new_stack.repository_id, &new_stack.target_branch, &new_stack.status],
             )
             .await
             .map_err(|e| OperationError::with_context(e, "create", "Stack", &format!("target_branch: {}", new_stack.target_branch)))?;
@@ -778,7 +778,7 @@ impl Stack {
 
         if let Some(status) = &updates.status {
             set_clauses.push(format!("status = ${}", param_count));
-            params.push(status.as_str2());
+            params.push(status);
             param_count += 1;
         }
 
@@ -819,7 +819,7 @@ impl Stack {
             id: row.get("id"),
             repository_id: row.get("repository_id"),
             target_branch: row.get("target_branch"),
-            status: row.get::<_, &str>("status").parse().unwrap(),
+            status: row.get("status"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -846,7 +846,7 @@ impl Ack {
                     &new_ack.commit_id,
                     &new_ack.reviewer_name,
                     &new_ack.message,
-                    &new_ack.status.as_str(),
+                    &new_ack.status,
                 ],
             )
             .await
@@ -951,7 +951,7 @@ impl Ack {
 
         if let Some(status) = &updates.status {
             set_clauses.push(format!("status = ${}", param_count));
-            params.push(status.as_str2());
+            params.push(status);
             param_count += 1;
         }
 
@@ -994,7 +994,7 @@ impl Ack {
             commit_id: row.get("commit_id"),
             reviewer_name: row.get("reviewer_name"),
             message: row.get("message"),
-            status: row.get::<_, &str>("status").parse().unwrap(),
+            status: row.get("status"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -1099,7 +1099,7 @@ impl LogEntry {
                 SELECT id, entity_type, entity_id, action, description, reason, timestamp
                 FROM logs WHERE entity_type = $1 AND entity_id = $2 ORDER BY timestamp DESC
                 "#,
-                &[&entity_type.as_str(), &entity_id],
+                &[&entity_type, &entity_id],
             )
             .await
             .map_err(|e| OperationError::with_context(e, "find_by_entity", "LogEntry", &format!("entity_type: {:?}, entity_id: {}", entity_type, entity_id)))?;

@@ -213,8 +213,8 @@ fn parse_args() -> Result<CliArguments, ParseError> {
 
     fn multiple_log_entries_error(existing: Option<EntityType>, new: Option<EntityType>) -> ParseError {
         ParseError::MultipleLogEntityTypes(
-            existing.map_or("all", EntityType::as_str).to_owned(),
-            new.map_or("all", EntityType::as_str).to_owned(),
+            existing.as_ref().map_or("all".to_owned(), EntityType::to_string),
+            new.as_ref().map_or("all".to_owned(), EntityType::to_string),
         )
     }
 
