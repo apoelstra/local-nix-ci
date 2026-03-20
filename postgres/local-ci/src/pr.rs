@@ -38,9 +38,10 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     if let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
         .context("failed to query pull request")?
     {
-        println!("PR #{}", pr.pr_number);
-        println!("Title: {}", pr.title);
-        println!("Body: {}", if pr.body.is_empty() { "(empty)" } else { &pr.body });
+        println!("{} PR #{}: {}", current_repo.project_name, pr.pr_number, pr.title);
+        println!();
+        println!("{}", if pr.body.is_empty() { "(empty)" } else { &pr.body });
+        println!();
         println!("Review Status: {:?}", pr.review_status);
         println!("Priority: {}", pr.priority);
         println!("OK to Merge: {}", pr.ok_to_merge);
