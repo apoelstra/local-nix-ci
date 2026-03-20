@@ -1,6 +1,7 @@
 
 mod args;
 mod commit;
+mod daemon;
 mod pr;
 mod repo_info;
 
@@ -60,6 +61,14 @@ async fn main() -> anyhow::Result<()> {
         (Action::Next, Target::Commit(commit_ref)) => {
             commit::next(&commit_ref, &mut db).await
                 .context("finding next action for commit")?;
+        }
+        (Action::Run, Target::None) => {
+            daemon::run(&mut db).await
+                .context("running daemon")?;
+        }
+        (Action::Run, _) => {
+            eprintln!("The 'run' action does not accept any target. Use 'local-ci run' with no arguments.");
+            std::process::exit(1);
         }
         (Action::Next, Target::None) => {
             println!("Use 'local-ci info' to see a list of work that needs to be done.");
