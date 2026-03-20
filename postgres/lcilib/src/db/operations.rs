@@ -467,6 +467,116 @@ impl Commit {
 
 /// Pull request operations
 impl PullRequest {
+    /// Get the number of valid ACKs for this pull request
+    /// Only counts 'posted' and 'external' ACKs for the tip commit
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn get_ack_count(&self, tx: &Transaction<'_>) -> Result<i64, OperationError> {
+        let row = tx
+            .query_one(
+                r#"
+                SELECT COUNT(*) 
+                FROM acks 
+                WHERE pull_request_id = $1 
+                AND commit_id = $2 
+                AND status IN ('posted', 'external')
+                "#,
+                &[&self.id, &self.tip_commit_id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_ack_count", "PullRequest", &format!("pr_id: {}, pr_number: {}", self.id, self.pr_number)))?;
+
+        Ok(row.get::<_, i64>(0))
+    }
+
+    /// Find all PRs that need testing, ordered by priority
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn find_needing_testing_prioritized(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, 
+                       pr.tip_commit_id, pr.review_status, pr.priority, pr.ok_to_merge, 
+                       pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
+                FROM pull_requests pr
+                JOIN pr_commits pc ON pr.id = pc.pull_request_id AND pc.is_current = true
+                JOIN commits c ON pc.commit_id = c.id
+                WHERE c.review_status = 'approved' 
+                AND c.ci_status = 'unstarted' 
+                AND c.should_run_ci = true
+                ORDER BY pr.priority DESC, pr.created_at ASC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|e| OperationError::new(e, "find_needing_testing_prioritized", "PullRequest", None))?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Get the next untested approved commit for this PR
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn get_next_untested_commit(&self, tx: &Transaction<'_>) -> Result<Option<Commit>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
+                FROM commits c
+                JOIN pr_commits pc ON c.id = pc.commit_id
+                WHERE pc.pull_request_id = $1 
+                AND pc.is_current = true
+                AND c.review_status = 'approved'
+                AND c.ci_status = 'unstarted'
+                AND c.should_run_ci = true
+                ORDER BY pc.sequence_order ASC
+                LIMIT 1
+                "#,
+                &[&self.id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_next_untested_commit", "PullRequest", &format!("pr_id: {}, pr_number: {}", self.id, self.pr_number)))?;
+
+        Ok(rows.first().map(Commit::from_row))
+    }
+
+    /// Count commits in various states for this PR
+    /// Returns (total_commits, approved_commits, untested_commits)
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn get_commit_counts(&self, tx: &Transaction<'_>) -> Result<(i64, i64, i64), OperationError> {
+        let row = tx
+            .query_one(
+                r#"
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN c.review_status = 'approved' THEN 1 END) as approved,
+                    COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'unstarted' AND c.should_run_ci = true THEN 1 END) as untested
+                FROM commits c
+                JOIN pr_commits pc ON c.id = pc.commit_id
+                WHERE pc.pull_request_id = $1 AND pc.is_current = true
+                "#,
+                &[&self.id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_commit_counts", "PullRequest", &format!("pr_id: {}, pr_number: {}", self.id, self.pr_number)))?;
+
+        Ok((
+            row.get::<_, i64>("total"),
+            row.get::<_, i64>("approved"),
+            row.get::<_, i64>("untested"),
+        ))
+    }
     /// Create a new pull request
     /// 
     /// # Errors
@@ -761,6 +871,173 @@ impl PullRequest {
 
 /// Stack operations
 impl Stack {
+    /// Find all stacks with their commits, grouped by repository and target branch
+    /// Returns the highest priority stack for each repo/branch combination
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn find_highest_priority_by_repo_branch(tx: &Transaction<'_>) -> Result<Vec<(Self, Vec<Commit>)>, OperationError> {
+        // First get all stacks with their basic info
+        let stack_rows = tx
+            .query(
+                r#"
+                SELECT s.id, s.repository_id, s.target_branch, s.status, s.created_at, s.updated_at
+                FROM stacks s
+                WHERE s.status = 'pending'
+                ORDER BY s.repository_id, s.target_branch, s.created_at ASC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|e| OperationError::new(e, "find_highest_priority_by_repo_branch", "Stack", None))?;
+
+        let mut result = Vec::new();
+        let mut current_repo_branch: Option<(i32, String)> = None;
+
+        for row in stack_rows {
+            let stack = Self::from_row(&row);
+            let repo_branch = (stack.repository_id, stack.target_branch.clone());
+
+            // Only take the first (highest priority) stack for each repo/branch combination
+            if current_repo_branch.as_ref() != Some(&repo_branch) {
+                current_repo_branch = Some(repo_branch);
+                
+                // Get commits for this stack
+                let commits = stack.get_commits(tx).await?;
+                result.push((stack, commits));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Find all low-priority stacks (those that conflict with higher-priority ones)
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn find_low_priority_stacks(tx: &Transaction<'_>) -> Result<Vec<(Self, Vec<Commit>)>, OperationError> {
+        // Get the highest priority stacks first
+        let high_priority = Self::find_highest_priority_by_repo_branch(tx).await?;
+        let high_priority_keys: std::collections::HashSet<(i32, String)> = high_priority
+            .iter()
+            .map(|(stack, _)| (stack.repository_id, stack.target_branch.clone()))
+            .collect();
+
+        // Find all other pending stacks
+        let stack_rows = tx
+            .query(
+                r#"
+                SELECT s.id, s.repository_id, s.target_branch, s.status, s.created_at, s.updated_at
+                FROM stacks s
+                WHERE s.status = 'pending'
+                ORDER BY s.created_at ASC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|e| OperationError::new(e, "find_low_priority_stacks", "Stack", None))?;
+
+        let mut result = Vec::new();
+        for row in stack_rows {
+            let stack = Self::from_row(&row);
+            let repo_branch = (stack.repository_id, stack.target_branch.clone());
+
+            // Skip if this is a high-priority stack
+            if !high_priority_keys.contains(&repo_branch) {
+                let commits = stack.get_commits(tx).await?;
+                result.push((stack, commits));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Get the next untested approved commit from this stack
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn get_next_untested_commit(&self, tx: &Transaction<'_>) -> Result<Option<Commit>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
+                FROM commits c
+                JOIN stack_commits sc ON c.id = sc.commit_id
+                WHERE sc.stack_id = $1
+                AND c.review_status = 'approved'
+                AND c.ci_status = 'unstarted'
+                AND c.should_run_ci = true
+                ORDER BY sc.sequence_order ASC
+                LIMIT 1
+                "#,
+                &[&self.id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_next_untested_commit", "Stack", &format!("stack_id: {}, target_branch: {}", self.id, self.target_branch)))?;
+
+        Ok(rows.first().map(Commit::from_row))
+    }
+
+    /// Get PRs associated with this stack
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn get_associated_prs(&self, tx: &Transaction<'_>) -> Result<Vec<PullRequest>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, 
+                       pr.tip_commit_id, pr.review_status, pr.priority, pr.ok_to_merge, 
+                       pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
+                FROM pull_requests pr
+                JOIN pr_commits pc ON pr.id = pc.pull_request_id AND pc.is_current = true
+                JOIN stack_commits sc ON pc.commit_id = sc.commit_id
+                WHERE sc.stack_id = $1
+                ORDER BY pr.pr_number ASC
+                "#,
+                &[&self.id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_associated_prs", "Stack", &format!("stack_id: {}, target_branch: {}", self.id, self.target_branch)))?;
+
+        Ok(rows.iter().map(PullRequest::from_row).collect())
+    }
+
+    /// Count commits in various states for this stack
+    /// Returns (total_commits, signed_commits, untested_commits)
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn get_commit_counts(&self, tx: &Transaction<'_>) -> Result<(i64, i64, i64), OperationError> {
+        let row = tx
+            .query_one(
+                r#"
+                SELECT 
+                    COUNT(*) as total,
+                    -- We'll need to implement GPG signature checking separately
+                    0 as signed,
+                    COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'unstarted' AND c.should_run_ci = true THEN 1 END) as untested
+                FROM commits c
+                JOIN stack_commits sc ON c.id = sc.commit_id
+                WHERE sc.stack_id = $1
+                "#,
+                &[&self.id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_commit_counts", "Stack", &format!("stack_id: {}, target_branch: {}", self.id, self.target_branch)))?;
+
+        Ok((
+            row.get::<_, i64>("total"),
+            row.get::<_, i64>("signed"),
+            row.get::<_, i64>("untested"),
+        ))
+    }
     /// Create a new stack
     /// 
     /// # Errors

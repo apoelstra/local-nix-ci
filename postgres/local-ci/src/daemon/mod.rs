@@ -1,3 +1,5 @@
+mod stacks;
+
 use anyhow::Context as _;
 use lcilib::Db;
 use std::time::Duration;
@@ -123,10 +125,17 @@ async fn check_signed_merges(_db: &mut Db) -> anyhow::Result<bool> {
     Ok(false)
 }
 
-async fn run_ci_cycle(_db: &mut Db) -> anyhow::Result<bool> {
-    // TODO: Take next commit(s) from highest-priority stack
-    // TODO: Take approved non-merge commits from PRs
-    // TODO: Process low-priority stacks
-    // Return true if work was done, false if nothing to do
-    Ok(false)
+async fn run_ci_cycle(db: &mut Db) -> anyhow::Result<bool> {
+    match stacks::find_next_commit_to_test(db).await
+        .context("finding next commit to test")? {
+        Some(commit) => {
+            // TODO: Actually start CI for this commit
+            println!("Would start CI for commit: {} ({})", commit.git_commit_id, commit.jj_change_id);
+            Ok(true)
+        }
+        None => {
+            // No work to do
+            Ok(false)
+        }
+    }
 }
