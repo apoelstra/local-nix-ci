@@ -245,6 +245,10 @@ fn parse_args() -> Result<CliArguments, ParseError> {
             ArgToken::Review => set_once(&mut action, Action::Review, PE::MultipleActions)?,
             ArgToken::Run => set_once(&mut action, Action::Run, PE::MultipleActions)?,
             ArgToken::Log => set_once(&mut action, Action::Log, PE::MultipleActions)?,
+            ArgToken::Help => {
+                usage();
+                process::exit(0);
+            }
 
             // Target types
             ArgToken::Pr => {
@@ -330,7 +334,17 @@ fn parse_args() -> Result<CliArguments, ParseError> {
         }
     }
 
-    let action = action.ok_or(ParseError::MissingAction)?;
+    let action = match action {
+        Some(action) => action,
+        None => {
+            // If no action was specified but we have a valid target, default to Info
+            if target_type.is_some() && target.is_some() {
+                Action::Info
+            } else {
+                return Err(ParseError::MissingAction);
+            }
+        }
+    };
 
     // Validate that log-specific options are only used with the log action.
     if action != Action::Log && let Some(opt) = saw_log_option {
@@ -379,6 +393,7 @@ pub fn usage() {
     eprintln!("Usage: {} [ACTION] [TARGET_TYPE] [TARGET] [LOG_OPTIONS]", name);
     eprintln!();
     eprintln!("Actions:");
+    eprintln!("  help       Show this help message");
     eprintln!("  info       Show information");
     eprintln!("  log        Show recent logs");
     eprintln!("  next       Show next item to action");

@@ -28,6 +28,8 @@ pub enum ArgToken {
     Run,
     /// The literal `log`. (Never interpreted as a number or ref.)
     Log,
+    /// The literal `help`. (Never interpreted as a number or ref.)
+    Help,
     /// The literal `commit`. (Never interpreted as a number or ref.)
     Commit,
     /// The literal `pr`. (Never interpreted as a number or ref.)
@@ -99,6 +101,7 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
             "review" => Some(ArgToken::Review),
             "run" => Some(ArgToken::Run),
             "log" => Some(ArgToken::Log),
+            "help" => Some(ArgToken::Help),
             "commit" => Some(ArgToken::Commit),
             "pr" => Some(ArgToken::Pr),
             "stack" => Some(ArgToken::Stack),
