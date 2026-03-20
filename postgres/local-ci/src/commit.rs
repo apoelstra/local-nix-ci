@@ -3,11 +3,12 @@
 use anyhow::Context as _;
 use lcilib::{
     Db,
-    db::{models::{Repository, Commit, NewCommit, NewRepository, ReviewStatus, CiStatus, PrCommit, PullRequest, CommitType}, EntityType, Log},
+    db::{models::{Repository, Commit, NewCommit, NewRepository, ReviewStatus, CiStatus, PrCommit, PullRequest, CommitType, UpdateCommit}, EntityType, Log},
     git,
     repo,
 };
-use xshell::Shell;
+use std::{env, fs, io::{self, Write}};
+use xshell::{Shell, cmd};
 
 /// Show information about a commit
 /// 
@@ -104,6 +105,274 @@ pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
 
     tx.commit().await
         .context("failed to commit transaction")?;
+
+    Ok(())
+}
+
+/// Interactive review of a commit
+/// 
+/// # Errors
+/// 
+/// Returns an error if:
+/// - Failed to get current repository information
+/// - Git reference resolution fails
+/// - Database transaction fails
+/// - Repository or commit lookup fails
+/// - Editor invocation fails
+pub async fn review(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
+    let shell = Shell::new()?;
+    let current_repo = repo::current_repo(&shell)
+        .context("failed to get current repository")?;
+
+    // Resolve the reference to a commit hash
+    let commit_hash = git::resolve_ref(&shell, commit_ref)
+        .with_context(|| format!("failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.", commit_ref))?;
+
+    let tx = db.transaction().await
+        .context("failed to start database transaction")?;
+
+    // Find the repository in the database
+    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
+        .context("failed to query repository")?
+    else {
+        anyhow::bail!("Repository not found in database. Please run 'refresh' first to initialize it.");
+    };
+
+    // Look up the commit in the database
+    let Some(mut commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_hash).await
+        .context("failed to query commit")?
+    else {
+        anyhow::bail!("Commit {} not found in database. Use 'local-ci refresh commit {}' to add it to the database.", commit_hash, commit_ref);
+    };
+
+    // Show commit info first
+    show_commit_info(&shell, &tx, &current_repo, &commit_hash, &commit).await?;
+
+    loop {
+        // Show menu
+        println!("\nWhat would you like to do?");
+        println!("1a) Review and Approve");
+        println!("1b) Review and Reject");
+        println!();
+        println!("2a) View existing review");
+        println!("2b) Erase review (mark unreviewed)");
+        println!();
+        println!("3a) View diff (50-line context)");
+        println!("3b) View diff (3-line context)");
+        println!("3c) View diff (5000-line context)");
+        println!("3d) View diff (stat)");
+        println!();
+        println!("4) Cancel");
+        print!("Choice (1a-4): ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice = input.trim();
+
+        match choice {
+            "1a" => {
+                if let Some(update) = handle_review_with_editor(&commit, ReviewStatus::Approved).await? {
+                    Commit::apply_update_by_id(&tx, commit.id, update).await
+                        .context("failed to update commit with review")?;
+                    println!("Commit review updated and approved.");
+                    break;
+                }
+            }
+            "1b" => {
+                if let Some(update) = handle_review_with_editor(&commit, ReviewStatus::Rejected).await? {
+                    Commit::apply_update_by_id(&tx, commit.id, update).await
+                        .context("failed to update commit with review")?;
+                    println!("Commit review updated and rejected.");
+                    break;
+                }
+            }
+            "2a" => {
+                if let Some(ref review_text) = commit.review_text {
+                    println!("\nExisting review:");
+                    println!("{}", review_text);
+                } else {
+                    println!("No existing review.");
+                }
+            }
+            "2b" => {
+                let update = UpdateCommit {
+                    review_text: Some(None),
+                    review_status: Some(ReviewStatus::Unreviewed),
+                    ..Default::default()
+                };
+                commit = Commit::apply_update_by_id(&tx, commit.id, update).await
+                    .context("failed to erase review")?;
+                println!("Review erased and commit marked as unreviewed.");
+            }
+            "3a" => {
+                show_diff(&shell, &commit_hash, Some(50))?;
+            }
+            "3b" => {
+                show_diff(&shell, &commit_hash, Some(3))?;
+            }
+            "3c" => {
+                show_diff(&shell, &commit_hash, Some(5000))?;
+            }
+            "3d" => {
+                show_diff_stat(&shell, &commit_hash)?;
+            }
+            "4" => {
+                println!("Cancelled.");
+                break;
+            }
+            _ => {
+                println!("Invalid choice. Please enter 1a, 1b, 2a, 2b, 3a, 3b, 3c, 3d, or 3.");
+                continue;
+            }
+        }
+    }
+
+    tx.commit().await
+        .context("failed to commit transaction")?;
+
+    Ok(())
+}
+
+/// Show commit information (extracted from info function for reuse)
+async fn show_commit_info(
+    shell: &Shell,
+    tx: &lcilib::Transaction<'_>,
+    current_repo: &repo::Repository,
+    commit_hash: &git::GitCommit,
+    commit: &Commit,
+) -> anyhow::Result<()> {
+    // Get commit details from git
+    let commit_info = git::get_commit_info(shell, commit_hash)
+        .context("failed to get commit info from git")?;
+
+    println!("{} {}", current_repo.project_name, commit_hash);
+    println!("Author: {}", commit_info.author);
+    println!("Date: {}", commit_info.date);
+    println!();
+    println!("{}", commit_info.message);
+    println!();
+    println!("Diffstat: {}", commit_info.diffstat);
+    println!();
+    println!("Review Status: {:?}", commit.review_status);
+    println!("Should Run CI: {}", commit.should_run_ci);
+    println!("CI Status: {:?}", commit.ci_status);
+    if let Some(ref derivation) = commit.nix_derivation {
+        println!("Nix Derivation: {}", derivation);
+    }
+    if commit.jj_change_id != format!("unknown-{}", commit_hash) {
+        println!("JJ Change ID: {}", commit.jj_change_id);
+    }
+    println!("Created: {}", commit.created_at);
+
+    // Find PRs containing this commit
+    let pr_commits = PrCommit::find_by_commit(tx, commit.id).await
+        .context("failed to find PRs containing this commit")?;
+
+    if !pr_commits.is_empty() {
+        println!("\nPull Requests:");
+        for pr_commit in pr_commits {
+            let pr = PullRequest::find_by_id(tx, pr_commit.pull_request_id).await
+                .context("failed to get PR details")?
+                .context("PR not found")?;
+
+            let status = match (pr_commit.is_current, pr_commit.commit_type) {
+                (true, CommitType::Normal) => "current".to_string(),
+                (true, commit_type) => format!("{:?}", commit_type).to_lowercase(),
+                (false, CommitType::Normal) => "old".to_string(),
+                (false, commit_type) => format!("old {:?}", commit_type).to_lowercase(),
+            };
+
+            println!("  PR #{}: {} ({})", pr.pr_number, pr.title, status);
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle review with text editor
+async fn handle_review_with_editor(
+    commit: &Commit,
+    new_status: ReviewStatus,
+) -> anyhow::Result<Option<UpdateCommit>> {
+    // Create temporary directory and file
+    let shell = Shell::new()?;
+    let temp_dir = shell.create_temp_dir()
+        .context("failed to create temporary directory")?;
+    
+    let temp_file_path = temp_dir.path().join("review.txt");
+
+    let status_text = match new_status {
+        ReviewStatus::Approved => "approved",
+        ReviewStatus::Rejected => "rejected",
+        ReviewStatus::Unreviewed => "unreviewed",
+    };
+
+    let prefill_content = format!(
+        "# Enter your review here. Updated commit {} review status: {}\n# Edit the review message above. Lines starting with # will be removed.\n{}",
+        commit.git_commit_id,
+        status_text,
+        commit.review_text.as_deref().unwrap_or("")
+    );
+
+    fs::write(&temp_file_path, prefill_content.as_bytes())
+        .context("failed to write to temporary file")?;
+
+    // Get editor from environment or default to vim
+    let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+
+    // Launch editor
+    let result = cmd!(shell, "{editor} {temp_file_path}")
+        .run()
+        .with_context(|| format!("failed to launch editor: {}", editor));
+
+    if result.is_err() {
+        println!("Editor exited with error, review update cancelled.");
+        return Ok(None);
+    }
+
+    // Read the edited content
+    let content = fs::read_to_string(&temp_file_path)
+        .context("failed to read edited file")?;
+
+    // Remove lines starting with #
+    let review_text: String = content
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Create update struct
+    let update = UpdateCommit {
+        review_text: Some(Some(review_text)),
+        review_status: Some(new_status),
+        ..Default::default()
+    };
+
+    Ok(Some(update))
+}
+
+/// Show git diff with specified context
+fn show_diff(shell: &Shell, commit_hash: &git::GitCommit, context: Option<u32>) -> anyhow::Result<()> {
+    if let Some(lines) = context {
+        let lines = lines.to_string();
+        cmd!(shell, "git show --unified={lines} {commit_hash}")
+            .run()
+            .context("failed to run git show")?;
+    } else {
+        cmd!(shell, "git show {commit_hash}")
+            .run()
+            .context("failed to run git show")?;
+    }
+
+    Ok(())
+}
+
+/// Show git diff stat
+fn show_diff_stat(shell: &Shell, commit_hash: &git::GitCommit) -> anyhow::Result<()> {
+    cmd!(shell, "git show --stat {commit_hash}")
+        .run()
+        .context("failed to run git show --stat")?;
 
     Ok(())
 }

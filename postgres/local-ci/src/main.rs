@@ -40,6 +40,10 @@ async fn main() -> anyhow::Result<()> {
             commit::log(&commit_ref, log_options.since.as_deref(), log_options.until.as_deref(), &mut db).await
                 .context("getting commit logs")?;
         }
+        (Action::Review, Target::Commit(commit_ref)) => {
+            commit::review(&commit_ref, &mut db).await
+                .context("reviewing commit")?;
+        }
         _ => {
             eprintln!("Action not yet implemented");
             std::process::exit(1);

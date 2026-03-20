@@ -7,21 +7,44 @@ use super::util::{self, EntityType};
 
 /// Error type for database operations with contextual information
 #[derive(Debug)]
-pub struct OperationError {
-    /// The underlying database error
-    pub db_error: Error,
-    /// The operation that failed (e.g., "create_repository", "find_commit_by_id")
-    pub operation: String,
-    /// The entity type being operated on (e.g., "Repository", "Commit")
-    pub entity_type: String,
-    /// Additional context about the operation
-    pub context: Option<String>,
+pub enum OperationError {
+    /// Database error with context
+    Database {
+        /// The underlying database error
+        db_error: Error,
+        /// The operation that failed (e.g., "create_repository", "find_commit_by_id")
+        operation: String,
+        /// The entity type being operated on (e.g., "Repository", "Commit")
+        entity_type: String,
+        /// Additional context about the operation
+        context: Option<String>,
+    },
+    /// Entity not found error
+    NotFound {
+        /// The operation that failed
+        operation: String,
+        /// The entity type that was not found
+        entity_type: String,
+        /// Context about what was being searched for
+        context: String,
+    },
+    /// Wrapped operation error with additional context
+    Wrapped {
+        /// The underlying operation error
+        inner: Box<OperationError>,
+        /// The operation that failed
+        operation: String,
+        /// The entity type being operated on
+        entity_type: String,
+        /// Additional context about the operation
+        context: String,
+    },
 }
 
 impl OperationError {
-    /// Create a new operation error
+    /// Create a new database operation error
     pub fn new(db_error: Error, operation: &str, entity_type: &str, context: Option<String>) -> Self {
-        Self {
+        Self::Database {
             db_error,
             operation: operation.to_string(),
             entity_type: entity_type.to_string(),
@@ -29,38 +52,73 @@ impl OperationError {
         }
     }
 
-    /// Create an operation error with context
+    /// Create a database operation error with context
     pub fn with_context(db_error: Error, operation: &str, entity_type: &str, context: &str) -> Self {
         Self::new(db_error, operation, entity_type, Some(context.to_string()))
+    }
+
+    /// Create a not found error
+    pub fn not_found(operation: &str, entity_type: &str, context: &str) -> Self {
+        Self::NotFound {
+            operation: operation.to_string(),
+            entity_type: entity_type.to_string(),
+            context: context.to_string(),
+        }
+    }
+
+    /// Wrap an existing operation error with additional context
+    pub fn wrap(inner: OperationError, operation: &str, entity_type: &str, context: &str) -> Self {
+        Self::Wrapped {
+            inner: Box::new(inner),
+            operation: operation.to_string(),
+            entity_type: entity_type.to_string(),
+            context: context.to_string(),
+        }
     }
 }
 
 impl std::fmt::Display for OperationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.context {
-            Some(context) => write!(
-                f,
-                "Database operation '{}' failed for {}: {} ({})",
-                self.operation, self.entity_type, context, self.db_error
-            ),
-            None => write!(
-                f,
-                "Database operation '{}' failed for {}: {}",
-                self.operation, self.entity_type, self.db_error
-            ),
+        match self {
+            Self::Database { operation, entity_type, context, db_error } => {
+                match context {
+                    Some(ctx) => write!(
+                        f,
+                        "Database operation '{}' failed for {}: {} ({})",
+                        operation, entity_type, ctx, db_error
+                    ),
+                    None => write!(
+                        f,
+                        "Database operation '{}' failed for {}: {}",
+                        operation, entity_type, db_error
+                    ),
+                }
+            }
+            Self::NotFound { operation, entity_type, context } => {
+                write!(
+                    f,
+                    "Operation '{}' failed: {} not found ({})",
+                    operation, entity_type, context
+                )
+            }
+            Self::Wrapped { inner, operation, entity_type, context } => {
+                write!(
+                    f,
+                    "Operation '{}' failed for {}: {} (caused by: {})",
+                    operation, entity_type, context, inner
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for OperationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.db_error)
-    }
-}
-
-impl From<OperationError> for Error {
-    fn from(op_error: OperationError) -> Self {
-        op_error.db_error
+        match self {
+            Self::Database { db_error, .. } => Some(db_error),
+            Self::NotFound { .. } => None,
+            Self::Wrapped { inner, .. } => Some(inner.as_ref()),
+        }
     }
 }
 
@@ -371,6 +429,25 @@ impl Commit {
         Ok(updated_commit)
     }
 
+    /// Apply updates to a commit by ID with transaction management
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn apply_update_by_id(tx: &Transaction<'_>, commit_id: i32, updates: UpdateCommit) -> Result<Self, OperationError> {
+        // First find the commit
+        let Some(commit) = Self::find_by_id(tx, commit_id).await? else {
+            return Err(OperationError::not_found(
+                "apply_update_by_id",
+                "Commit",
+                &format!("commit_id: {}", commit_id)
+            ));
+        };
+
+        // Apply the update
+        commit.update(tx, updates).await
+    }
+
     fn from_row(row: &Row) -> Self {
         Self {
             id: row.get("id"),
@@ -423,7 +500,7 @@ impl PullRequest {
 
         // Create initial pr_commit record for the tip commit
         PrCommit::create(tx, pr.id, new_pr.tip_commit_id, 1, CommitType::Single).await
-            .map_err(|e| OperationError::with_context(e.db_error, "create", "PullRequest", "creating initial pr_commit record"))?;
+            .map_err(|e| OperationError::wrap(e, "create", "PullRequest", "creating initial pr_commit record"))?;
 
         util::log_action(
             tx,
