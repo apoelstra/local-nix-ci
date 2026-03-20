@@ -2,6 +2,7 @@
 mod args;
 mod commit;
 mod pr;
+mod repo_info;
 
 use anyhow::Context as _;
 use args::{Action, Target};
@@ -14,6 +15,10 @@ async fn main() -> anyhow::Result<()> {
         .context("connecting to database")?;
 
     match (args.action, args.target) {
+        (Action::Info, Target::None) => {
+            repo_info::overview(&mut db).await
+                .context("getting repository overview")?;
+        }
         (Action::Info, Target::Pr(pr_number)) => {
             pr::info(pr_number, &mut db).await
                 .context("getting PR info")?;
