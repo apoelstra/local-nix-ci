@@ -97,6 +97,11 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         } else {
             println!("\nACKs: None");
         }
+
+        // Show next action
+        let next_action = determine_next_action_for_pr(&tx, &pr).await
+            .context("failed to determine next action")?;
+        println!("\nNext action: {}", next_action);
     } else {
         println!("PR #{} not found in database.", pr_number);
         println!("Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number);
@@ -105,6 +110,98 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     tx.commit().await
         .context("failed to commit transaction")?;
 
+    Ok(())
+}
+
+/// Determine the next action for a PR
+async fn determine_next_action_for_pr(
+    tx: &lcilib::Transaction<'_>,
+    pr: &PullRequest,
+) -> anyhow::Result<String> {
+    // Get current commits for this PR in sequence order
+    let commits = pr.get_commits(tx).await
+        .context("failed to get PR commits")?;
+
+    // Find the first unreviewed commit
+    for (commit, _) in &commits {
+        if commit.review_status == ReviewStatus::Unreviewed {
+            return Ok(format!("local-ci review commit {}", commit.git_commit_id));
+        }
+    }
+
+    // All commits are reviewed, check if PR itself needs review
+    if pr.review_status == ReviewStatus::Unreviewed {
+        return Ok(format!("local-ci review pr {}", pr.pr_number));
+    }
+
+    // Nothing to do
+    Ok("none".to_string())
+}
+
+/// Execute the next action for a PR
+/// 
+/// # Errors
+/// 
+/// Returns an error if:
+/// - Failed to get current repository information
+/// - Database transaction fails
+/// - Repository or PR lookup fails
+/// - No next action available
+pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
+    let shell = Shell::new()?;
+    let current_repo = repo::current_repo(&shell)
+        .context("failed to get current repository")?;
+
+    let tx = db.transaction().await
+        .context("failed to start database transaction")?;
+
+    // Find the repository in the database
+    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
+        .context("failed to query repository")?
+    else {
+        anyhow::bail!("Repository not found in database. Please run 'refresh' first to initialize it.");
+    };
+
+    // Look up the PR in the database
+    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
+        .context("failed to query pull request")?
+    else {
+        anyhow::bail!("PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number, pr_number);
+    };
+
+    // Get current commits for this PR in sequence order
+    let commits = pr.get_commits(&tx).await
+        .context("failed to get PR commits")?;
+
+    // Find the first unreviewed commit
+    for (commit, _) in &commits {
+        if commit.review_status == ReviewStatus::Unreviewed {
+            // Drop the transaction since we're going to call review which will start its own
+            tx.commit().await
+                .context("failed to commit transaction")?;
+            
+            // Review this commit
+            return crate::commit::review(&commit.git_commit_id, db).await
+                .context("failed to review commit");
+        }
+    }
+
+    // All commits are reviewed, check if PR itself needs review
+    if pr.review_status == ReviewStatus::Unreviewed {
+        // Drop the transaction since we're going to call review which will start its own
+        tx.commit().await
+            .context("failed to commit transaction")?;
+        
+        // Review the PR
+        return review(pr_number, db).await
+            .context("failed to review PR");
+    }
+
+    // Nothing to do
+    tx.commit().await
+        .context("failed to commit transaction")?;
+    
+    println!("Nothing to do");
     Ok(())
 }
 

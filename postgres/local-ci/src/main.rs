@@ -53,6 +53,17 @@ async fn main() -> anyhow::Result<()> {
             pr::review(pr_number, &mut db).await
                 .context("reviewing PR")?;
         }
+        (Action::Next, Target::Pr(pr_number)) => {
+            pr::next(pr_number, &mut db).await
+                .context("finding next action for PR")?;
+        }
+        (Action::Next, Target::Commit(commit_ref)) => {
+            commit::next(&commit_ref, &mut db).await
+                .context("finding next action for commit")?;
+        }
+        (Action::Next, Target::None) => {
+            println!("Use 'local-ci info' to see a list of work that needs to be done.");
+        }
         _ => {
             eprintln!("Action not yet implemented");
             std::process::exit(1);

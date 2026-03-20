@@ -98,6 +98,10 @@ pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
                 println!("  {}", log.format_for_display());
             }
         }
+
+        // Show next action
+        let next_action = determine_next_action_for_commit(&commit);
+        println!("\nNext action: {}", next_action);
     } else {
         println!("Commit {} not found in database.", commit_hash);
         println!("Use 'local-ci refresh commit {}' to add it to the database.", commit_ref);
@@ -106,6 +110,70 @@ pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     tx.commit().await
         .context("failed to commit transaction")?;
 
+    Ok(())
+}
+
+/// Determine the next action for a commit
+fn determine_next_action_for_commit(commit: &Commit) -> String {
+    if commit.review_status == ReviewStatus::Unreviewed {
+        format!("local-ci review commit {}", commit.git_commit_id)
+    } else {
+        "none".to_string()
+    }
+}
+
+/// Execute the next action for a commit
+/// 
+/// # Errors
+/// 
+/// Returns an error if:
+/// - Failed to get current repository information
+/// - Git reference resolution fails
+/// - Database transaction fails
+/// - Repository or commit lookup fails
+/// - No next action available
+pub async fn next(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
+    let shell = Shell::new()?;
+    let current_repo = repo::current_repo(&shell)
+        .context("failed to get current repository")?;
+
+    // Resolve the reference to a commit hash
+    let commit_hash = git::resolve_ref(&shell, commit_ref)
+        .with_context(|| format!("failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.", commit_ref))?;
+
+    let tx = db.transaction().await
+        .context("failed to start database transaction")?;
+
+    // Find the repository in the database
+    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
+        .context("failed to query repository")?
+    else {
+        anyhow::bail!("Repository not found in database. Please run 'refresh' first to initialize it.");
+    };
+
+    // Look up the commit in the database
+    let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_hash).await
+        .context("failed to query commit")?
+    else {
+        anyhow::bail!("Commit {} not found in database. Use 'local-ci refresh commit {}' to add it to the database.", commit_hash, commit_ref);
+    };
+
+    // Check if commit needs review
+    if commit.review_status == ReviewStatus::Unreviewed {
+        // Drop the transaction since we're going to call review which will start its own
+        tx.commit().await
+            .context("failed to commit transaction")?;
+        
+        // Review this commit
+        return review(commit_ref, db).await
+            .context("failed to review commit");
+    }
+
+    // Nothing to do
+    tx.commit().await
+        .context("failed to commit transaction")?;
+    
+    println!("Nothing to do");
     Ok(())
 }
 
