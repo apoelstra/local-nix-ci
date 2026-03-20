@@ -21,6 +21,11 @@ async fn main() -> anyhow::Result<()> {
             pr::refresh(pr_number, &mut db).await
                 .context("refreshing PR")?;
         }
+        (Action::Log, Target::Pr(pr_number)) => {
+            let log_options = args.log_options.as_ref().unwrap();
+            pr::log(pr_number, log_options.since.as_deref(), log_options.until.as_deref(), &mut db).await
+                .context("getting PR logs")?;
+        }
         _ => {
             eprintln!("Action not yet implemented");
             std::process::exit(1);

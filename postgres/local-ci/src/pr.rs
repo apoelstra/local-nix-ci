@@ -3,7 +3,7 @@
 use anyhow::Context as _;
 use lcilib::{
     Db,
-    db::models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest},
+    db::{models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest}, EntityType, Log},
     gh,
     git,
     repo,
@@ -63,6 +63,62 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     } else {
         println!("PR #{} not found in database.", pr_number);
         println!("Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number);
+    }
+
+    tx.commit().await
+        .context("failed to commit transaction")?;
+
+    Ok(())
+}
+
+/// Show logs for a PR and its commits
+/// 
+/// # Errors
+/// 
+/// Returns an error if:
+/// - Failed to get current repository information
+/// - Database transaction fails
+/// - Repository or PR lookup fails
+/// - Date parsing fails
+pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db: &mut Db) -> anyhow::Result<()> {
+    let shell = Shell::new()?;
+    let current_repo = repo::current_repo(&shell)
+        .context("failed to get current repository")?;
+
+    let tx = db.transaction().await
+        .context("failed to start database transaction")?;
+
+    // Find the repository in the database
+    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
+        .context("failed to query repository")?
+    else {
+        anyhow::bail!("Repository not found in database. Please run 'refresh' first to initialize it.");
+    };
+
+    // Look up the PR in the database
+    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
+        .context("failed to query pull request")?
+    else {
+        anyhow::bail!("PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number, pr_number);
+    };
+
+    // Get all commits associated with this PR
+    let commits = pr.get_commits(&tx).await
+        .context("failed to get PR commits")?;
+
+    // Build list of entities to query logs for (PR + all its commits)
+    let mut entities = vec![(EntityType::PullRequest, pr.id)];
+    for commit in &commits {
+        entities.push((EntityType::Commit, commit.id));
+    }
+
+    // Query logs for all entities
+    let logs = Log::query_for_entities(&tx, &entities, since, until).await
+        .context("failed to query logs")?;
+
+    // Display the logs
+    for log in logs {
+        println!("{}", log.format_for_display());
     }
 
     tx.commit().await

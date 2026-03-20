@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+pub mod log;
+
 use chrono::{DateTime, Utc};
 use std::fmt;
 use postgres_types::{FromSql, ToSql};
+
+pub use log::Log;
 
 /// Error type for parsing enum values from strings
 #[derive(Debug, Clone, PartialEq, Eq)]
