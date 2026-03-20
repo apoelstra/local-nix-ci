@@ -184,7 +184,7 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     // Create or find commits for all commits in the PR
     let mut commit_records = Vec::new();
     for commit_oid in pr_info.commit_ids() {
-        let commit_record = if let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_oid.to_string()).await
+        let commit_record = if let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, commit_oid).await
             .context("failed to query commit")? 
         {
             commit
@@ -192,7 +192,7 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             // Create new commit record
             let new_commit = NewCommit {
                 repository_id: repo_record.id,
-                git_commit_id: commit_oid.to_string(),
+                git_commit_id: commit_oid.clone(),
                 jj_change_id: format!("unknown-{}", commit_oid), // Will be updated later when we have jj integration
                 review_status: ReviewStatus::Unreviewed,
                 should_run_ci: false,

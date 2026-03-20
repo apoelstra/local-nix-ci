@@ -272,7 +272,7 @@ pub struct NewRepository {
 #[derive(Debug, Clone)]
 pub struct NewCommit {
     pub repository_id: i32,
-    pub git_commit_id: String,
+    pub git_commit_id: crate::git::GitCommit,
     pub jj_change_id: String,
     pub review_status: ReviewStatus,
     pub should_run_ci: bool,

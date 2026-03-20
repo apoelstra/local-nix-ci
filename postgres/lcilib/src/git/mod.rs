@@ -4,6 +4,15 @@ use core::{fmt, str::FromStr};
 use std::ffi::OsStr;
 use xshell::{Shell, cmd};
 
+/// Information about a git commit
+#[derive(Debug, Clone)]
+pub struct CommitInfo {
+    pub author: String,
+    pub date: String,
+    pub message: String,
+    pub diffstat: String,
+}
+
 /// A representation of a git commit.
 ///
 /// When deserialized, validated to be 20 hex digits, but stored
@@ -190,4 +199,40 @@ pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<GitCommit, E
             }
             Err(e)
         })
+}
+
+/// Get detailed information about a commit
+///
+/// # Errors
+///
+/// Returns an error if the git command fails to execute.
+pub fn get_commit_info<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<CommitInfo, Error> {
+    // Get author and date
+    let author_date = cmd!(shell, "git show --no-patch '--format=%an <%ae>%n%ai' {commit}")
+        .read()
+        .map_err(Error::Shell)?;
+    let mut lines = author_date.lines();
+    let author = lines.next().unwrap_or("Unknown").to_string();
+    let date = lines.next().unwrap_or("Unknown").to_string();
+
+    // Get commit message
+    let message = cmd!(shell, "git show --no-patch --format=%B {commit}")
+        .read()
+        .map_err(Error::Shell)?
+        .trim()
+        .to_string();
+
+    // Get diffstat
+    let diffstat = cmd!(shell, "git show --stat --format= {commit}")
+        .read()
+        .map_err(Error::Shell)?
+        .trim()
+        .to_string();
+
+    Ok(CommitInfo {
+        author,
+        date,
+        message,
+        diffstat,
+    })
 }

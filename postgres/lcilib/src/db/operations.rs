@@ -158,6 +158,7 @@ impl Commit {
     /// 
     /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_commit: NewCommit) -> Result<Self, OperationError> {
+        let git_commit_str = new_commit.git_commit_id.to_string();
         let row = tx
             .query_one(
                 r#"
@@ -169,7 +170,7 @@ impl Commit {
                 "#,
                 &[
                     &new_commit.repository_id,
-                    &new_commit.git_commit_id,
+                    &git_commit_str,
                     &new_commit.jj_change_id,
                     &new_commit.review_status,
                     &new_commit.should_run_ci,
@@ -178,7 +179,7 @@ impl Commit {
                 ],
             )
             .await
-            .map_err(|e| OperationError::with_context(e, "create", "Commit", &format!("git_commit_id: {}", new_commit.git_commit_id)))?;
+            .map_err(|e| OperationError::with_context(e, "create", "Commit", &format!("git_commit_id: {}", git_commit_str)))?;
 
         let commit = Self::from_row(&row);
 
@@ -221,7 +222,8 @@ impl Commit {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_git_id(tx: &Transaction<'_>, repository_id: i32, git_commit_id: &str) -> Result<Option<Self>, OperationError> {
+    pub async fn find_by_git_id(tx: &Transaction<'_>, repository_id: i32, git_commit_id: &crate::git::GitCommit) -> Result<Option<Self>, OperationError> {
+        let git_commit_str = git_commit_id.to_string();
         let rows = tx
             .query(
                 r#"
@@ -229,10 +231,10 @@ impl Commit {
                        should_run_ci, ci_status, nix_derivation, created_at
                 FROM commits WHERE repository_id = $1 AND git_commit_id = $2
                 "#,
-                &[&repository_id, &git_commit_id],
+                &[&repository_id, &git_commit_str],
             )
             .await
-            .map_err(|e| OperationError::with_context(e, "find_by_git_id", "Commit", &format!("repository_id: {}, git_commit_id: {}", repository_id, git_commit_id)))?;
+            .map_err(|e| OperationError::with_context(e, "find_by_git_id", "Commit", &format!("repository_id: {}, git_commit_id: {}", repository_id, git_commit_str)))?;
 
         Ok(rows.first().map(Self::from_row))
     }
@@ -1259,6 +1261,31 @@ impl PrCommit {
             )
             .await
             .map_err(|e| OperationError::with_context(e, "find_previous_tips_by_pr", "PrCommit", &format!("pull_request_id: {}", pull_request_id)))?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Find all PR-commit relationships for a specific commit
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn find_by_commit(
+        tx: &Transaction<'_>,
+        commit_id: i32,
+    ) -> Result<Vec<Self>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
+                FROM pr_commits 
+                WHERE commit_id = $1
+                ORDER BY updated_at DESC
+                "#,
+                &[&commit_id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_commit", "PrCommit", &format!("commit_id: {}", commit_id)))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }

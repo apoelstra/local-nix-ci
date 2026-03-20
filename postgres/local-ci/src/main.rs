@@ -1,5 +1,6 @@
 
 mod args;
+mod commit;
 mod pr;
 
 use anyhow::Context as _;
@@ -25,6 +26,19 @@ async fn main() -> anyhow::Result<()> {
             let log_options = args.log_options.as_ref().unwrap();
             pr::log(pr_number, log_options.since.as_deref(), log_options.until.as_deref(), &mut db).await
                 .context("getting PR logs")?;
+        }
+        (Action::Info, Target::Commit(commit_ref)) => {
+            commit::info(&commit_ref, &mut db).await
+                .context("getting commit info")?;
+        }
+        (Action::Refresh, Target::Commit(commit_ref)) => {
+            commit::refresh(&commit_ref, &mut db).await
+                .context("refreshing commit")?;
+        }
+        (Action::Log, Target::Commit(commit_ref)) => {
+            let log_options = args.log_options.as_ref().unwrap();
+            commit::log(&commit_ref, log_options.since.as_deref(), log_options.until.as_deref(), &mut db).await
+                .context("getting commit logs")?;
         }
         _ => {
             eprintln!("Action not yet implemented");
