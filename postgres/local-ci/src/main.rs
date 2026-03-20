@@ -44,6 +44,10 @@ async fn main() -> anyhow::Result<()> {
             commit::review(&commit_ref, &mut db).await
                 .context("reviewing commit")?;
         }
+        (Action::Review, Target::Pr(pr_number)) => {
+            pr::review(pr_number, &mut db).await
+                .context("reviewing PR")?;
+        }
         _ => {
             eprintln!("Action not yet implemented");
             std::process::exit(1);
