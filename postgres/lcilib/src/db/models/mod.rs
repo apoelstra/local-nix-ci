@@ -172,6 +172,7 @@ pub struct Commit {
     pub should_run_ci: bool,
     pub ci_status: CiStatus,
     pub nix_derivation: Option<String>,
+    pub review_text: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -278,6 +279,7 @@ pub struct NewCommit {
     pub should_run_ci: bool,
     pub ci_status: CiStatus,
     pub nix_derivation: Option<String>,
+    pub review_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -323,6 +325,7 @@ pub struct UpdateCommit {
     pub should_run_ci: Option<bool>,
     pub ci_status: Option<CiStatus>,
     pub nix_derivation: Option<Option<String>>,
+    pub review_text: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Default)]

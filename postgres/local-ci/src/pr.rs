@@ -198,6 +198,7 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                 should_run_ci: false,
                 ci_status: CiStatus::Unstarted,
                 nix_derivation: None,
+                review_text: None,
             };
 
             Commit::create(&tx, new_commit).await

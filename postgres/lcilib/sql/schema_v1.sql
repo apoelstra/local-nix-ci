@@ -34,6 +34,7 @@ CREATE TABLE commits (
     should_run_ci BOOLEAN NOT NULL DEFAULT FALSE,
     ci_status ci_status NOT NULL DEFAULT 'unstarted',
     nix_derivation TEXT, -- CI job derivation
+    review_text TEXT, -- Freeform review text
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
     UNIQUE(repository_id, git_commit_id),

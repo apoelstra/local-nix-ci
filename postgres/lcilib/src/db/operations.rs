@@ -163,10 +163,10 @@ impl Commit {
             .query_one(
                 r#"
                 INSERT INTO commits (repository_id, git_commit_id, jj_change_id, review_status, 
-                                   should_run_ci, ci_status, nix_derivation)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                   should_run_ci, ci_status, nix_derivation, review_text)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING id, repository_id, git_commit_id, jj_change_id, review_status,
-                         should_run_ci, ci_status, nix_derivation, created_at
+                         should_run_ci, ci_status, nix_derivation, review_text, created_at
                 "#,
                 &[
                     &new_commit.repository_id,
@@ -176,6 +176,7 @@ impl Commit {
                     &new_commit.should_run_ci,
                     &new_commit.ci_status,
                     &new_commit.nix_derivation,
+                    &new_commit.review_text,
                 ],
             )
             .await
@@ -206,7 +207,7 @@ impl Commit {
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
-                       should_run_ci, ci_status, nix_derivation, created_at
+                       should_run_ci, ci_status, nix_derivation, review_text, created_at
                 FROM commits WHERE id = $1
                 "#,
                 &[&id],
@@ -228,7 +229,7 @@ impl Commit {
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
-                       should_run_ci, ci_status, nix_derivation, created_at
+                       should_run_ci, ci_status, nix_derivation, review_text, created_at
                 FROM commits WHERE repository_id = $1 AND git_commit_id = $2
                 "#,
                 &[&repository_id, &git_commit_str],
@@ -249,7 +250,7 @@ impl Commit {
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
-                       should_run_ci, ci_status, nix_derivation, created_at
+                       should_run_ci, ci_status, nix_derivation, review_text, created_at
                 FROM commits WHERE repository_id = $1 ORDER BY created_at DESC
                 "#,
                 &[&repository_id],
@@ -270,7 +271,7 @@ impl Commit {
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
-                       should_run_ci, ci_status, nix_derivation, created_at
+                       should_run_ci, ci_status, nix_derivation, review_text, created_at
                 FROM commits 
                 WHERE should_run_ci = true AND ci_status = 'unstarted'
                 ORDER BY created_at ASC
@@ -318,6 +319,12 @@ impl Commit {
             param_count += 1;
         }
 
+        if let Some(review_text) = &updates.review_text {
+            set_clauses.push(format!("review_text = ${}", param_count));
+            params.push(review_text);
+            param_count += 1;
+        }
+
         if set_clauses.is_empty() {
             return Ok(self.clone());
         }
@@ -328,7 +335,7 @@ impl Commit {
             UPDATE commits SET {}
             WHERE id = ${}
             RETURNING id, repository_id, git_commit_id, jj_change_id, review_status,
-                     should_run_ci, ci_status, nix_derivation, created_at
+                     should_run_ci, ci_status, nix_derivation, review_text, created_at
             "#,
             set_clauses.join(", "),
             param_count
@@ -338,15 +345,28 @@ impl Commit {
             .map_err(|e| OperationError::with_context(e, "update", "Commit", &format!("id: {}, git_commit_id: {}", self.id, self.git_commit_id)))?;
         let updated_commit = Self::from_row(&row);
 
-        util::log_action(
-            tx,
-            EntityType::Commit,
-            self.id,
-            "commit_updated",
-            Some(&format!("Updated commit: {}", self.git_commit_id)),
-            None,
-        ).await
-        .map_err(|e| OperationError::with_context(e, "update", "Commit", "logging update"))?;
+        // Log review text changes with the full new text
+        if let Some(Some(new_review_text)) = &updates.review_text {
+            util::log_action(
+                tx,
+                EntityType::Commit,
+                self.id,
+                "review_text_updated",
+                Some(&format!("Updated review text for commit: {}", self.git_commit_id)),
+                Some(new_review_text),
+            ).await
+            .map_err(|e| OperationError::with_context(e, "update", "Commit", "logging review text update"))?;
+        } else {
+            util::log_action(
+                tx,
+                EntityType::Commit,
+                self.id,
+                "commit_updated",
+                Some(&format!("Updated commit: {}", self.git_commit_id)),
+                None,
+            ).await
+            .map_err(|e| OperationError::with_context(e, "update", "Commit", "logging update"))?;
+        }
 
         Ok(updated_commit)
     }
@@ -361,6 +381,7 @@ impl Commit {
             should_run_ci: row.get("should_run_ci"),
             ci_status: row.get("ci_status"),
             nix_derivation: row.get("nix_derivation"),
+            review_text: row.get("review_text"),
             created_at: row.get("created_at"),
         }
     }
@@ -492,7 +513,7 @@ impl PullRequest {
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                       c.should_run_ci, c.ci_status, c.nix_derivation, c.created_at,
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
                        pc.commit_type
                 FROM commits c
                 JOIN pr_commits pc ON c.id = pc.commit_id
@@ -517,7 +538,7 @@ impl PullRequest {
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                       c.should_run_ci, c.ci_status, c.nix_derivation, c.created_at
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
                 FROM commits c
                 JOIN pr_commits pc ON c.id = pc.commit_id
                 WHERE pc.pull_request_id = $1 AND pc.is_current = false AND pc.commit_type = 'tip'
@@ -742,7 +763,7 @@ impl Stack {
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                       c.should_run_ci, c.ci_status, c.nix_derivation, c.created_at
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
                 FROM commits c
                 JOIN stack_commits sc ON c.id = sc.commit_id
                 WHERE sc.stack_id = $1

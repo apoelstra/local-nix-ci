@@ -218,6 +218,7 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
             should_run_ci: true,
             ci_status: CiStatus::Unstarted,
             nix_derivation: None,
+            review_text: None,
         };
 
         let commit_record = Commit::create(&tx, new_commit).await
