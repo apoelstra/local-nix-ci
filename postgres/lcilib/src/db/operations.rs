@@ -2,7 +2,7 @@
 
 use tokio_postgres::{Error, Transaction, Row};
 
-use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, Ack, NewAck, UpdateAck, AllowedApprover, NewAllowedApprover, LogEntry};
+use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, Ack, NewAck, UpdateAck, AllowedApprover, NewAllowedApprover, LogEntry, PrCommit, CommitType};
 use super::util::{self, EntityType};
 
 /// Error type for database operations with contextual information
@@ -162,10 +162,10 @@ impl Commit {
             .query_one(
                 r#"
                 INSERT INTO commits (repository_id, git_commit_id, jj_change_id, review_status, 
-                                   should_run_ci, ci_status, commit_type, nix_derivation)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                                   should_run_ci, ci_status, nix_derivation)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING id, repository_id, git_commit_id, jj_change_id, review_status,
-                         should_run_ci, ci_status, commit_type, nix_derivation, created_at, updated_at
+                         should_run_ci, ci_status, nix_derivation, created_at
                 "#,
                 &[
                     &new_commit.repository_id,
@@ -174,7 +174,6 @@ impl Commit {
                     &new_commit.review_status,
                     &new_commit.should_run_ci,
                     &new_commit.ci_status,
-                    &new_commit.commit_type,
                     &new_commit.nix_derivation,
                 ],
             )
@@ -206,7 +205,7 @@ impl Commit {
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
-                       should_run_ci, ci_status, commit_type, nix_derivation, created_at, updated_at
+                       should_run_ci, ci_status, nix_derivation, created_at
                 FROM commits WHERE id = $1
                 "#,
                 &[&id],
@@ -227,7 +226,7 @@ impl Commit {
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
-                       should_run_ci, ci_status, commit_type, nix_derivation, created_at, updated_at
+                       should_run_ci, ci_status, nix_derivation, created_at
                 FROM commits WHERE repository_id = $1 AND git_commit_id = $2
                 "#,
                 &[&repository_id, &git_commit_id],
@@ -248,7 +247,7 @@ impl Commit {
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
-                       should_run_ci, ci_status, commit_type, nix_derivation, created_at, updated_at
+                       should_run_ci, ci_status, nix_derivation, created_at
                 FROM commits WHERE repository_id = $1 ORDER BY created_at DESC
                 "#,
                 &[&repository_id],
@@ -269,7 +268,7 @@ impl Commit {
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
-                       should_run_ci, ci_status, commit_type, nix_derivation, created_at, updated_at
+                       should_run_ci, ci_status, nix_derivation, created_at
                 FROM commits 
                 WHERE should_run_ci = true AND ci_status = 'unstarted'
                 ORDER BY created_at ASC
@@ -310,11 +309,6 @@ impl Commit {
             param_count += 1;
         }
 
-        if let Some(commit_type) = &updates.commit_type {
-            set_clauses.push(format!("commit_type = ${}", param_count));
-            params.push(commit_type);
-            param_count += 1;
-        }
 
         if let Some(nix_derivation) = &updates.nix_derivation {
             set_clauses.push(format!("nix_derivation = ${}", param_count));
@@ -332,7 +326,7 @@ impl Commit {
             UPDATE commits SET {}
             WHERE id = ${}
             RETURNING id, repository_id, git_commit_id, jj_change_id, review_status,
-                     should_run_ci, ci_status, commit_type, nix_derivation, created_at, updated_at
+                     should_run_ci, ci_status, nix_derivation, created_at
             "#,
             set_clauses.join(", "),
             param_count
@@ -364,10 +358,8 @@ impl Commit {
             review_status: row.get("review_status"),
             should_run_ci: row.get("should_run_ci"),
             ci_status: row.get("ci_status"),
-            commit_type: row.get("commit_type"),
             nix_derivation: row.get("nix_derivation"),
             created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
         }
     }
 }
@@ -405,6 +397,10 @@ impl PullRequest {
             .map_err(|e| OperationError::with_context(e, "create", "PullRequest", &format!("pr_number: {}", new_pr.pr_number)))?;
 
         let pr = Self::from_row(&row);
+
+        // Create initial pr_commit record for the tip commit
+        PrCommit::create(tx, pr.id, new_pr.tip_commit_id, 1, CommitType::Single).await
+            .map_err(|e| OperationError::with_context(e.db_error, "create", "PullRequest", "creating initial pr_commit record"))?;
 
         util::log_action(
             tx,
@@ -489,22 +485,46 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn get_commits(&self, tx: &Transaction<'_>) -> Result<Vec<Commit>, OperationError> {
+    pub async fn get_commits(&self, tx: &Transaction<'_>) -> Result<Vec<(Commit, CommitType)>, OperationError> {
         let rows = tx
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                       c.should_run_ci, c.ci_status, c.commit_type, c.nix_derivation, 
-                       c.created_at, c.updated_at
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.created_at,
+                       pc.commit_type
                 FROM commits c
                 JOIN pr_commits pc ON c.id = pc.commit_id
-                WHERE pc.pull_request_id = $1
+                WHERE pc.pull_request_id = $1 AND pc.is_current = true
                 ORDER BY pc.sequence_order ASC
                 "#,
                 &[&self.id],
             )
             .await
             .map_err(|e| OperationError::with_context(e, "get_commits", "PullRequest", &format!("pr_id: {}, pr_number: {}", self.id, self.pr_number)))?;
+
+        Ok(rows.iter().map(|row| (Commit::from_row(row), row.get("commit_type"))).collect())
+    }
+
+    /// Get previous tip commits for this pull request
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn get_previous_tips(&self, tx: &Transaction<'_>) -> Result<Vec<Commit>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.created_at
+                FROM commits c
+                JOIN pr_commits pc ON c.id = pc.commit_id
+                WHERE pc.pull_request_id = $1 AND pc.is_current = false AND pc.commit_type = 'tip'
+                ORDER BY pc.updated_at DESC
+                "#,
+                &[&self.id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "get_previous_tips", "PullRequest", &format!("pr_id: {}, pr_number: {}", self.id, self.pr_number)))?;
 
         Ok(rows.iter().map(Commit::from_row).collect())
     }
@@ -514,10 +534,10 @@ impl PullRequest {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn add_commit(&self, tx: &Transaction<'_>, commit_id: i32, sequence_order: i32) -> Result<(), OperationError> {
+    pub async fn add_commit(&self, tx: &Transaction<'_>, commit_id: i32, sequence_order: i32, commit_type: CommitType) -> Result<(), OperationError> {
         tx.execute(
-            "INSERT INTO pr_commits (pull_request_id, commit_id, sequence_order) VALUES ($1, $2, $3)",
-            &[&self.id, &commit_id, &sequence_order],
+            "INSERT INTO pr_commits (pull_request_id, commit_id, sequence_order, commit_type) VALUES ($1, $2, $3, $4)",
+            &[&self.id, &commit_id, &sequence_order, &commit_type],
         ).await
         .map_err(|e| OperationError::with_context(e, "add_commit", "PullRequest", &format!("pr_id: {}, commit_id: {}", self.id, commit_id)))?;
 
@@ -720,8 +740,7 @@ impl Stack {
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                       c.should_run_ci, c.ci_status, c.commit_type, c.nix_derivation, 
-                       c.created_at, c.updated_at
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.created_at
                 FROM commits c
                 JOIN stack_commits sc ON c.id = sc.commit_id
                 WHERE sc.stack_id = $1
@@ -1136,6 +1155,175 @@ impl LogEntry {
             description: row.get("description"),
             reason: row.get("reason"),
             timestamp: row.get("timestamp"),
+        }
+    }
+}
+
+/// PrCommit operations
+impl PrCommit {
+    /// Create a new PR-commit relationship
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn create(
+        tx: &Transaction<'_>,
+        pull_request_id: i32,
+        commit_id: i32,
+        sequence_order: i32,
+        commit_type: CommitType,
+    ) -> Result<Self, OperationError> {
+        let row = tx
+            .query_one(
+                r#"
+                INSERT INTO pr_commits (pull_request_id, commit_id, sequence_order, commit_type) 
+                VALUES ($1, $2, $3, $4) 
+                RETURNING id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
+                "#,
+                &[&pull_request_id, &commit_id, &sequence_order, &commit_type],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "create", "PrCommit", &format!("pr_id: {}, commit_id: {}", pull_request_id, commit_id)))?;
+
+        Ok(Self::from_row(&row))
+    }
+
+    /// Find all PR-commit relationships for a pull request
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn find_by_pr(
+        tx: &Transaction<'_>,
+        pull_request_id: i32,
+    ) -> Result<Vec<Self>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
+                FROM pr_commits 
+                WHERE pull_request_id = $1 
+                ORDER BY sequence_order
+                "#,
+                &[&pull_request_id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_by_pr", "PrCommit", &format!("pull_request_id: {}", pull_request_id)))?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Find current PR-commit relationships for a pull request
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn find_current_by_pr(
+        tx: &Transaction<'_>,
+        pull_request_id: i32,
+    ) -> Result<Vec<Self>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
+                FROM pr_commits 
+                WHERE pull_request_id = $1 AND is_current = true
+                ORDER BY sequence_order
+                "#,
+                &[&pull_request_id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_current_by_pr", "PrCommit", &format!("pull_request_id: {}", pull_request_id)))?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Find previous tip commits for a pull request
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn find_previous_tips_by_pr(
+        tx: &Transaction<'_>,
+        pull_request_id: i32,
+    ) -> Result<Vec<Self>, OperationError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
+                FROM pr_commits 
+                WHERE pull_request_id = $1 AND is_current = false AND commit_type = 'tip'
+                ORDER BY updated_at DESC
+                "#,
+                &[&pull_request_id],
+            )
+            .await
+            .map_err(|e| OperationError::with_context(e, "find_previous_tips_by_pr", "PrCommit", &format!("pull_request_id: {}", pull_request_id)))?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Update PR-commit relationship status
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn update_status(
+        tx: &Transaction<'_>,
+        id: i32,
+        sequence_order: Option<i32>,
+        commit_type: Option<CommitType>,
+        is_current: Option<bool>,
+    ) -> Result<(), OperationError> {
+        let mut set_clauses = Vec::new();
+        let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
+        let mut param_count = 1;
+
+        if let Some(seq) = &sequence_order {
+            set_clauses.push(format!("sequence_order = ${}", param_count));
+            params.push(seq);
+            param_count += 1;
+        }
+
+        if let Some(ct) = &commit_type {
+            set_clauses.push(format!("commit_type = ${}", param_count));
+            params.push(ct);
+            param_count += 1;
+        }
+
+        if let Some(current) = &is_current {
+            set_clauses.push(format!("is_current = ${}", param_count));
+            params.push(current);
+            param_count += 1;
+        }
+
+        if set_clauses.is_empty() {
+            return Ok(());
+        }
+
+        params.push(&id);
+        let query = format!(
+            "UPDATE pr_commits SET {} WHERE id = ${}",
+            set_clauses.join(", "),
+            param_count
+        );
+
+        tx.execute(&query, &params).await
+            .map_err(|e| OperationError::with_context(e, "update_status", "PrCommit", &format!("id: {}", id)))?;
+
+        Ok(())
+    }
+
+    fn from_row(row: &Row) -> Self {
+        Self {
+            id: row.get("id"),
+            pull_request_id: row.get("pull_request_id"),
+            commit_id: row.get("commit_id"),
+            sequence_order: row.get("sequence_order"),
+            commit_type: row.get("commit_type"),
+            is_current: row.get("is_current"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
         }
     }
 }

@@ -33,10 +33,8 @@ CREATE TABLE commits (
     review_status review_status NOT NULL DEFAULT 'unreviewed',
     should_run_ci BOOLEAN NOT NULL DEFAULT FALSE,
     ci_status ci_status NOT NULL DEFAULT 'unstarted',
-    commit_type commit_type NOT NULL,
     nix_derivation TEXT, -- CI job derivation
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
     UNIQUE(repository_id, git_commit_id),
     UNIQUE(repository_id, jj_change_id)
@@ -67,9 +65,12 @@ CREATE TABLE pr_commits (
     pull_request_id INTEGER NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
     commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE,
     sequence_order INTEGER NOT NULL,
+    commit_type commit_type NOT NULL,
+    is_current BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
-    UNIQUE(pull_request_id, commit_id),
-    UNIQUE(pull_request_id, sequence_order)
+    UNIQUE(pull_request_id, commit_id)
 );
 
 -- Stacks table for merge commits ready to be pushed
@@ -133,7 +134,6 @@ CREATE INDEX idx_commits_repository_id ON commits(repository_id);
 CREATE INDEX idx_commits_review_status ON commits(review_status);
 CREATE INDEX idx_commits_ci_status ON commits(ci_status);
 CREATE INDEX idx_commits_should_run_ci ON commits(should_run_ci);
-CREATE INDEX idx_commits_commit_type ON commits(commit_type);
 
 CREATE INDEX idx_pull_requests_repository_id ON pull_requests(repository_id);
 CREATE INDEX idx_pull_requests_review_status ON pull_requests(review_status);
@@ -141,6 +141,8 @@ CREATE INDEX idx_pull_requests_ok_to_merge ON pull_requests(ok_to_merge);
 
 CREATE INDEX idx_pr_commits_pull_request_id ON pr_commits(pull_request_id);
 CREATE INDEX idx_pr_commits_commit_id ON pr_commits(commit_id);
+CREATE INDEX idx_pr_commits_is_current ON pr_commits(is_current);
+CREATE INDEX idx_pr_commits_commit_type ON pr_commits(commit_type);
 
 CREATE INDEX idx_stacks_repository_id ON stacks(repository_id);
 CREATE INDEX idx_stacks_status ON stacks(status);
@@ -169,10 +171,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER update_commits_updated_at BEFORE UPDATE ON commits
+CREATE TRIGGER update_pull_requests_updated_at BEFORE UPDATE ON pull_requests
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_pull_requests_updated_at BEFORE UPDATE ON pull_requests
+CREATE TRIGGER update_pr_commits_updated_at BEFORE UPDATE ON pr_commits
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_stacks_updated_at BEFORE UPDATE ON stacks
@@ -185,19 +187,9 @@ CREATE TRIGGER update_acks_updated_at BEFORE UPDATE ON acks
 CREATE OR REPLACE FUNCTION enforce_commit_constraints()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Reset CI status when commit type changes
-    IF OLD.commit_type IS DISTINCT FROM NEW.commit_type THEN
-        NEW.ci_status = 'unstarted';
-    END IF;
-    
     -- Prevent should_run_ci = false with ci_status = failed/passed
     IF NEW.should_run_ci = false AND NEW.ci_status IN ('failed', 'passed') THEN
         RAISE EXCEPTION 'Cannot have should_run_ci = false with ci_status = failed or passed';
-    END IF;
-    
-    -- Ensure merge commits are approved
-    IF NEW.commit_type = 'merge' AND NEW.review_status != 'approved' THEN
-        RAISE EXCEPTION 'Merge commits must have review_status = approved';
     END IF;
     
     RETURN NEW;
@@ -236,6 +228,7 @@ BEGIN
             SELECT 1 FROM pr_commits pc 
             JOIN commits c ON pc.commit_id = c.id 
             WHERE pc.pull_request_id = NEW.id 
+            AND pc.is_current = true
             AND c.review_status != 'approved'
         ) THEN
             RAISE EXCEPTION 'Cannot approve PR: not all commits are approved';
@@ -248,12 +241,13 @@ BEGIN
         
         -- Cancel related merge commits that aren't already failed/passed
         UPDATE commits SET ci_status = 'skipped' 
-        WHERE commit_type = 'merge' 
-        AND ci_status NOT IN ('failed', 'passed')
+        WHERE ci_status NOT IN ('failed', 'passed')
         AND id IN (
             SELECT sc.commit_id FROM stack_commits sc
             JOIN stacks s ON sc.stack_id = s.id
+            JOIN pr_commits pc ON sc.commit_id = pc.commit_id
             WHERE s.repository_id = NEW.repository_id
+            AND pc.commit_type = 'merge'
         );
     END IF;
     

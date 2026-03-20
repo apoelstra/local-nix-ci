@@ -3,7 +3,7 @@
 use anyhow::Context as _;
 use lcilib::{
     Db,
-    db::{models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest}, EntityType, Log},
+    db::{models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest, PrCommit}, EntityType, Log},
     gh,
     git,
     repo,
@@ -56,8 +56,19 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         
         if !commits.is_empty() {
             println!("\nCommits:");
-            for (i, commit) in commits.iter().enumerate() {
-                println!("  {}. {} ({})", i + 1, commit.git_commit_id, commit.commit_type);
+            for (i, (commit, commit_type)) in commits.iter().enumerate() {
+                println!("  {}. {} ({:?})", i + 1, commit.git_commit_id, commit_type);
+            }
+        }
+
+        // Show previous tips
+        let previous_tips = pr.get_previous_tips(&tx).await
+            .context("failed to get previous tip commits")?;
+        
+        if !previous_tips.is_empty() {
+            println!("\nPrevious tip commits:");
+            for tip in previous_tips.iter() {
+                println!("  {}", tip.git_commit_id);
             }
         }
     } else {
@@ -108,7 +119,7 @@ pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db:
 
     // Build list of entities to query logs for (PR + all its commits)
     let mut entities = vec![(EntityType::PullRequest, pr.id)];
-    for commit in &commits {
+    for (commit, _) in &commits {
         entities.push((EntityType::Commit, commit.id));
     }
 
@@ -172,19 +183,13 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
 
     // Create or find commits for all commits in the PR
     let mut commit_records = Vec::new();
-    for (i, commit_oid) in pr_info.commit_ids().enumerate() {
+    for commit_oid in pr_info.commit_ids() {
         let commit_record = if let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_oid.to_string()).await
             .context("failed to query commit")? 
         {
             commit
         } else {
             // Create new commit record
-            let commit_type = if i == pr_info.commits.len() - 1 {
-                CommitType::Tip
-            } else {
-                CommitType::Normal
-            };
-
             let new_commit = NewCommit {
                 repository_id: repo_record.id,
                 git_commit_id: commit_oid.to_string(),
@@ -192,7 +197,6 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                 review_status: ReviewStatus::Unreviewed,
                 should_run_ci: false,
                 ci_status: CiStatus::Unstarted,
-                commit_type,
                 nix_derivation: None,
             };
 
@@ -236,17 +240,65 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             .context("failed to create pull request")?
     };
 
-    // Clear existing PR-commit relationships and recreate them
-    tx.execute(
-        "DELETE FROM pr_commits WHERE pull_request_id = $1",
-        &[&pr_record.id],
-    ).await
-        .context("failed to clear existing PR commits")?;
+    // Implement the new refresh logic
+    use std::collections::{HashMap, HashSet};
 
-    // Add all commits to the PR in order
+    // Get existing pr_commits for this PR
+    let existing_pr_commits = PrCommit::find_by_pr(&tx, pr_record.id).await
+        .context("failed to get existing PR commits")?;
+
+    // Build maps for efficient lookup
+    let mut existing_by_commit_id: HashMap<i32, PrCommit> = HashMap::new();
+    for pr_commit in existing_pr_commits {
+        existing_by_commit_id.insert(pr_commit.commit_id, pr_commit);
+    }
+
+    // Build the new state we want
+    let mut new_commit_ids = HashSet::new();
+    let mut updates_needed = Vec::new();
+    
     for (i, commit) in commit_records.iter().enumerate() {
-        pr_record.add_commit(&tx, commit.id, i.try_into()?).await
-            .context("failed to add commit to PR")?;
+        new_commit_ids.insert(commit.id);
+        
+        let new_sequence = (i + 1) as i32;
+        let new_commit_type = if i == commit_records.len() - 1 {
+            CommitType::Tip
+        } else {
+            CommitType::Normal
+        };
+        
+        if let Some(existing) = existing_by_commit_id.get(&commit.id) {
+            // Check if we need to update this record
+            let needs_update = existing.sequence_order != new_sequence
+                || existing.commit_type != new_commit_type
+                || !existing.is_current;
+                
+            if needs_update {
+                updates_needed.push((
+                    existing.id,
+                    Some(new_sequence),
+                    Some(new_commit_type),
+                    Some(true),
+                ));
+            }
+        } else {
+            // This is a new commit, insert it
+            PrCommit::create(&tx, pr_record.id, commit.id, new_sequence, new_commit_type).await
+                .context("failed to create new pr_commit record")?;
+        }
+    }
+
+    // Mark commits that are no longer in the PR as not current
+    for (commit_id, existing) in &existing_by_commit_id {
+        if !new_commit_ids.contains(commit_id) && existing.is_current {
+            updates_needed.push((existing.id, None, None, Some(false)));
+        }
+    }
+
+    // Apply all updates
+    for (id, sequence_order, commit_type, is_current) in updates_needed {
+        PrCommit::update_status(&tx, id, sequence_order, commit_type, is_current).await
+            .context("failed to update pr_commit record")?;
     }
 
     // Commit the transaction

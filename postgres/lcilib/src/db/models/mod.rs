@@ -171,10 +171,8 @@ pub struct Commit {
     pub review_status: ReviewStatus,
     pub should_run_ci: bool,
     pub ci_status: CiStatus,
-    pub commit_type: CommitType,
     pub nix_derivation: Option<String>,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 /// Pull request model
@@ -195,14 +193,6 @@ pub struct PullRequest {
     pub synced_at: DateTime<Utc>,
 }
 
-/// PR-Commit relationship model
-#[derive(Debug, Clone)]
-pub struct PrCommit {
-    pub id: i32,
-    pub pull_request_id: i32,
-    pub commit_id: i32,
-    pub sequence_order: i32,
-}
 
 /// Stack model
 #[derive(Debug, Clone)]
@@ -246,6 +236,19 @@ pub struct AllowedApprover {
     pub created_at: DateTime<Utc>,
 }
 
+/// PR-Commit relationship model
+#[derive(Debug, Clone)]
+pub struct PrCommit {
+    pub id: i32,
+    pub pull_request_id: i32,
+    pub commit_id: i32,
+    pub sequence_order: i32,
+    pub commit_type: CommitType,
+    pub is_current: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Log entry model
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -274,7 +277,6 @@ pub struct NewCommit {
     pub review_status: ReviewStatus,
     pub should_run_ci: bool,
     pub ci_status: CiStatus,
-    pub commit_type: CommitType,
     pub nix_derivation: Option<String>,
 }
 
@@ -320,7 +322,6 @@ pub struct UpdateCommit {
     pub review_status: Option<ReviewStatus>,
     pub should_run_ci: Option<bool>,
     pub ci_status: Option<CiStatus>,
-    pub commit_type: Option<CommitType>,
     pub nix_derivation: Option<Option<String>>,
 }
 
