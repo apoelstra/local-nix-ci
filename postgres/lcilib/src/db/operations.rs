@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::collections::HashSet;
 use tokio_postgres::{Error, Transaction, Row};
 
-use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, Ack, NewAck, UpdateAck, AllowedApprover, NewAllowedApprover, LogEntry, PrCommit, CommitType};
+use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, Ack, AckStatus, NewAck, UpdateAck, AllowedApprover, NewAllowedApprover, LogEntry, PrCommit, CommitType};
 use super::util::{self, EntityType};
 
 /// Error type for database operations with contextual information
@@ -1104,6 +1105,54 @@ impl Ack {
         .map_err(|e| OperationError::with_context(e, "update", "Ack", "logging update"))?;
 
         Ok(updated_ack)
+    }
+
+    /// Delete ACK
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn delete(&self, tx: &Transaction<'_>) -> Result<(), OperationError> {
+        tx.execute("DELETE FROM acks WHERE id = $1", &[&self.id])
+            .await
+            .map_err(|e| OperationError::with_context(e, "delete", "Ack", &format!("id: {}, reviewer: {}", self.id, self.reviewer_name)))?;
+
+        util::log_action(
+            tx,
+            EntityType::Ack,
+            self.id,
+            "ack_deleted",
+            Some(&format!("Deleted ACK from {}", self.reviewer_name)),
+            Some(&self.message),
+        ).await
+        .map_err(|e| OperationError::with_context(e, "delete", "Ack", "logging deletion"))?;
+
+        Ok(())
+    }
+
+    /// Delete external ACKs for a pull request that match the given criteria
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn delete_external_acks_not_in_set(
+        tx: &Transaction<'_>,
+        pull_request_id: i32,
+        keep_keys: &HashSet<String>,
+    ) -> Result<(), OperationError> {
+        // Find external ACKs that should be deleted
+        let existing_acks = Self::find_by_pull_request(tx, pull_request_id).await?;
+        
+        for ack in existing_acks {
+            if ack.status == AckStatus::External {
+                let key = format!("{}:{}", ack.reviewer_name, ack.message);
+                if !keep_keys.contains(&key) {
+                    ack.delete(tx).await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn from_row(row: &Row) -> Self {

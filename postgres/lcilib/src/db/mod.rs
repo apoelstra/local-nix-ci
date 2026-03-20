@@ -9,7 +9,7 @@ use tokio_postgres::{Client, NoTls, Transaction};
 
 pub use self::schema::SchemaError;
 pub use self::util::{EntityType, log_action_simple};
-pub use self::models::Log;
+pub use self::models::{AckStatus, CiStatus, MergeStatus, ReviewStatus, Log};
 
 pub struct Db {
     client: Client, 

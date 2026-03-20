@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
+use chrono::{DateTime, Utc};
 use lcilib::{
     Db,
     db::{models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest, PrCommit, Ack, NewAck, AckStatus}, EntityType, Log},
@@ -8,7 +9,7 @@ use lcilib::{
     git,
     repo,
 };
-use std::{env, fs, io::{self, Write}};
+use std::{env, fs, io::{self, Write}, collections::{HashMap, HashSet}};
 use xshell::{Shell, cmd};
 
 /// Show information about a PR
@@ -72,6 +73,24 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                 println!("  {}", tip.git_commit_id);
             }
         }
+
+        // Show ACKs
+        let acks = Ack::find_by_pull_request(&tx, pr.id).await
+            .context("failed to find ACKs for PR")?;
+
+        if !acks.is_empty() {
+            println!("\nACKs:");
+            for ack in acks {
+                println!("  {} by {} ({}): {}", 
+                    ack.created_at.format("%Y-%m-%d %H:%M:%S"),
+                    ack.reviewer_name,
+                    ack.status,
+                    ack.message
+                );
+            }
+        } else {
+            println!("\nACKs: None");
+        }
     } else {
         println!("PR #{} not found in database.", pr_number);
         println!("Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number);
@@ -81,6 +100,200 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to commit transaction")?;
 
     Ok(())
+}
+
+/// Scan GitHub comments and reviews for ACKs and update the database
+async fn scan_and_update_acks(
+    tx: &lcilib::Transaction<'_>,
+    pr_info: &gh::PrInfo,
+    pr_record: &PullRequest,
+    commit_records: &[Commit],
+) -> anyhow::Result<()> {
+    use std::collections::HashMap;
+    use chrono::{DateTime, Utc};
+
+    // Build a map of commit ID prefixes to commit records for fast lookup
+    let mut commit_map = HashMap::new();
+    for commit in commit_records {
+        let commit_id = &commit.git_commit_id;
+        // Add all possible prefixes of 7+ characters
+        for len in 7..=commit_id.len() {
+            let prefix = &commit_id[..len];
+            commit_map.insert(prefix.to_string(), commit);
+        }
+    }
+
+    // Collect all ACKs from comments and reviews
+    let mut found_acks: HashMap<String, (String, String, DateTime<Utc>, i32)> = HashMap::new(); // reviewer -> (message, reviewer, timestamp, commit_id)
+
+    // Scan comments
+    for comment in &pr_info.comments {
+        if let Some((ack_text, commit_id)) = extract_ack_from_text(&comment.body, &commit_map) {
+            let timestamp = parse_github_timestamp(&comment.created_at)?;
+            let reviewer = &comment.author.login;
+            
+            // Keep the latest ACK per reviewer
+            if let Some((_, _, existing_timestamp, _)) = found_acks.get(reviewer) {
+                if timestamp > *existing_timestamp {
+                    found_acks.insert(reviewer.clone(), (ack_text, reviewer.clone(), timestamp, commit_id));
+                }
+            } else {
+                found_acks.insert(reviewer.clone(), (ack_text, reviewer.clone(), timestamp, commit_id));
+            }
+        }
+    }
+
+    // Scan reviews
+    for review in &pr_info.reviews {
+        if let Some((ack_text, commit_id)) = extract_ack_from_text(&review.body, &commit_map) {
+            let timestamp = parse_github_timestamp(&review.submitted_at)?;
+            let reviewer = &review.author.login;
+            
+            // Keep the latest ACK per reviewer
+            if let Some((_, _, existing_timestamp, _)) = found_acks.get(reviewer) {
+                if timestamp > *existing_timestamp {
+                    found_acks.insert(reviewer.clone(), (ack_text, reviewer.clone(), timestamp, commit_id));
+                }
+            } else {
+                found_acks.insert(reviewer.clone(), (ack_text, reviewer.clone(), timestamp, commit_id));
+            }
+        }
+    }
+
+    // Get all existing ACKs for this PR
+    let existing_acks = Ack::find_by_pull_request(tx, pr_record.id).await
+        .context("failed to get existing ACKs")?;
+    
+    let current_user = "apoelstra"; // FIXME: should use per-repository git configuration
+    
+    // Separate existing ACKs by reviewer and status
+    let mut existing_external_acks = HashMap::new();
+    let mut existing_user_acks = HashMap::new();
+    
+    for ack in existing_acks {
+        if ack.reviewer_name == current_user {
+            // Group current user's ACKs by message
+            existing_user_acks.insert(ack.message.clone(), ack);
+        } else if ack.status == AckStatus::External {
+            let key = format!("{}:{}", ack.reviewer_name, ack.message);
+            existing_external_acks.insert(key, ack);
+        }
+    }
+
+    // Process found ACKs
+    for (ack_text, reviewer, _timestamp, commit_id) in found_acks.values() {
+        if reviewer == current_user {
+            // Handle current user's ACKs with special logic
+            if let Some(existing_user_ack) = existing_user_acks.get(ack_text) {
+                // If we have a pending/failed ACK with identical text, upgrade it to posted
+                if existing_user_ack.status == AckStatus::Pending || existing_user_ack.status == AckStatus::Failed {
+                    let update = lcilib::db::models::UpdateAck {
+                        status: Some(AckStatus::Posted),
+                        ..Default::default()
+                    };
+                    existing_user_ack.update(tx, update).await
+                        .context("failed to update ACK status to posted")?;
+                }
+                // If text is identical and status is already posted/external, do nothing
+            } else {
+                // Check if we have any pending/failed ACK with different text
+                let has_pending_or_failed = existing_user_acks.values()
+                    .any(|ack| ack.status == AckStatus::Pending || ack.status == AckStatus::Failed);
+                
+                if !has_pending_or_failed {
+                    // No conflicting pending/failed ACK, create new external ACK
+                    let new_ack = NewAck {
+                        pull_request_id: pr_record.id,
+                        commit_id: *commit_id,
+                        reviewer_name: reviewer.clone(),
+                        message: ack_text.clone(),
+                        status: AckStatus::External,
+                    };
+                    
+                    Ack::create(tx, new_ack).await
+                        .context("failed to create external ACK")?;
+                }
+                // If there is a pending/failed ACK with different text, drop this external one
+            }
+        } else {
+            // Handle other users' ACKs normally
+            let key = format!("{}:{}", reviewer, ack_text);
+            if !existing_external_acks.contains_key(&key) {
+                let new_ack = NewAck {
+                    pull_request_id: pr_record.id,
+                    commit_id: *commit_id,
+                    reviewer_name: reviewer.clone(),
+                    message: ack_text.clone(),
+                    status: AckStatus::External,
+                };
+                
+                Ack::create(tx, new_ack).await
+                    .context("failed to create external ACK")?;
+            }
+        }
+    }
+
+    // Delete external ACKs that are no longer present in GitHub
+    let found_keys: HashSet<String> = found_acks.values()
+        .filter(|(_, reviewer, _, _)| *reviewer != current_user) // Don't delete current user's ACKs
+        .map(|(ack_text, reviewer, _, _)| format!("{}:{}", reviewer, ack_text))
+        .collect();
+    
+    Ack::delete_external_acks_not_in_set(tx, pr_record.id, &found_keys).await
+        .context("failed to delete obsolete external ACKs")?;
+
+    Ok(())
+}
+
+/// Extract ACK text and commit ID from a GitHub comment/review body
+fn extract_ack_from_text(text: &str, commit_map: &HashMap<String, &Commit>) -> Option<(String, i32)> {
+    for line in text.lines() {
+        if let Some((ack_text, commit_id)) = extract_ack_from_line(line, commit_map) {
+            return Some((ack_text, commit_id));
+        }
+    }
+    None
+}
+
+/// Extract ACK text and commit ID from a single line
+fn extract_ack_from_line(line: &str, commit_map: &HashMap<String, &Commit>) -> Option<(String, i32)> {
+    // Split line into alphanumeric words (punctuation acts as separator)
+    let words: Vec<&str> = line
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    
+    // Look for words ending in "ACK" (case sensitive for ACK part)
+    let mut ack_word_pos = None;
+
+    for (i, word) in words.iter().enumerate() {
+        if word.ends_with("ACK") && !word.ends_with("NACK") && !word.ends_with("nACK") {
+            ack_word_pos = Some(i);
+            break;
+        }
+    }
+    
+    let ack_pos = ack_word_pos?;
+    
+    // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
+    for word in words.iter().skip(ack_pos) {
+        if word.len() >= 7 && word.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+            if let Some(commit) = commit_map.get(*word) {
+                // Found a valid commit ID, construct the ACK text
+                let ack_text = line.trim().to_string();
+                return Some((ack_text, commit.id));
+            }
+        }
+    }
+    
+    None
+}
+
+/// Parse GitHub timestamp string to DateTime<Utc>
+fn parse_github_timestamp(timestamp: &str) -> anyhow::Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(timestamp)
+        .map(|dt| dt.with_timezone(&Utc))
+        .with_context(|| format!("failed to parse GitHub timestamp: {}", timestamp))
 }
 
 /// Interactive review of a PR
@@ -607,6 +820,10 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         PrCommit::update_status(&tx, id, sequence_order, commit_type, is_current).await
             .context("failed to update pr_commit record")?;
     }
+
+    // Scan for ACKs in GitHub comments and reviews
+    scan_and_update_acks(&tx, &pr_info, &pr_record, &commit_records).await
+        .context("failed to scan and update ACKs")?;
 
     // Commit the transaction
     tx.commit().await

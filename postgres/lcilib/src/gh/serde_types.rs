@@ -3,21 +3,20 @@
 use crate::git::GitCommit;
 
 /// An element of the `commits` array returned by `gh pr view --json`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct Commit {
     pub oid: GitCommit,
 }
 
 /// An "author" as returned by Github.
-#[derive(Default, serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct Author {
     pub login: String,
 }
 
 /// A comment on a PR as returned by Github.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct Comment {
-    #[serde(default)]
     pub author: Author,
     #[serde(default)]
     pub body: String,
@@ -26,9 +25,8 @@ pub struct Comment {
 }
 
 /// A review on a PR as returned by Github.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct Review {
-    #[serde(default)]
     pub author: Author,
     #[serde(default)]
     pub body: String,
@@ -39,13 +37,12 @@ pub struct Review {
 }
 
 /// The output of `gh pr view --json`
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct PrInfo {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub body: String,
-    #[serde(default)]
     pub author: Author,
     #[serde(default)]
     pub commits: Vec<Commit>,
