@@ -465,17 +465,35 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         match choice {
             "1a" => {
                 if let Some(ack_message) = handle_ack_with_editor(&tip_commit, true).await? {
-                    create_ack(&tx, pr.id, tip_commit.id, &ack_message).await
+                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message).await
                         .context("failed to create ACK")?;
-                    println!("ACK created successfully.");
+                    
+                    // Update PR review status to Approved
+                    let updates = UpdatePullRequest {
+                        review_status: Some(ReviewStatus::Approved),
+                        ..Default::default()
+                    };
+                    pr.update(&tx, updates).await
+                        .context("failed to update PR review status")?;
+                    
+                    println!("ACK created successfully and PR marked as approved.");
                     break;
                 }
             }
             "1b" => {
                 if let Some(ack_message) = handle_ack_with_editor(&tip_commit, false).await? {
-                    create_ack(&tx, pr.id, tip_commit.id, &ack_message).await
+                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message).await
                         .context("failed to create NACK")?;
-                    println!("NACK created successfully.");
+                    
+                    // Update PR review status to Rejected
+                    let updates = UpdatePullRequest {
+                        review_status: Some(ReviewStatus::Rejected),
+                        ..Default::default()
+                    };
+                    pr.update(&tx, updates).await
+                        .context("failed to update PR review status")?;
+                    
+                    println!("NACK created successfully and PR marked as rejected.");
                     break;
                 }
             }
@@ -605,17 +623,31 @@ async fn handle_ack_with_editor(
     Ok(Some(ack_message))
 }
 
-/// Create a new ACK record
-async fn create_ack(
+/// Create a new ACK record, deleting any existing ACKs by the same reviewer for this PR
+async fn create_or_overwrite_ack(
     tx: &lcilib::Transaction<'_>,
     pull_request_id: i32,
     commit_id: i32,
     message: &str,
 ) -> anyhow::Result<()> {
+    let reviewer_name = "apoelstra"; // FIXME: should use per-repository git configuration
+    
+    // Delete any existing ACKs by this reviewer for this PR
+    let existing_acks = Ack::find_by_pull_request(tx, pull_request_id).await
+        .context("failed to find existing ACKs for PR")?;
+    
+    for ack in existing_acks {
+        if ack.reviewer_name == reviewer_name {
+            ack.delete(tx).await
+                .context("failed to delete existing ACK")?;
+        }
+    }
+
+    // Create the new ACK
     let new_ack = NewAck {
         pull_request_id,
         commit_id,
-        reviewer_name: "apoelstra".to_string(), // FIXME: should use per-repository git configuration
+        reviewer_name: reviewer_name.to_string(),
         message: message.to_string(),
         status: AckStatus::Pending,
     };
