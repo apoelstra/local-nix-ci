@@ -193,8 +193,12 @@ async fn print_work_summary(
             .context("getting associated PRs for stack")?;
         let pr_numbers: Vec<String> = prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
         
-        let (_total, signed, untested) = stack.get_commit_counts(tx).await
+        let (_total, untested) = stack.get_commit_counts(tx).await
             .context("getting stack commit counts")?;
+        
+        // Count signed commits in the stack
+        let signed = count_signed_commits_in_stack(tx, stack, &repo_map).await
+            .context("counting signed commits in stack")?;
         
         log::info(format_args!(
             "{} {} PRs {} ({} signed, {} left to test)",
@@ -213,8 +217,12 @@ async fn print_work_summary(
                 .context("getting associated PRs for low-priority stack")?;
             let pr_numbers: Vec<String> = prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
             
-            let (_total, signed, untested) = stack.get_commit_counts(tx).await
+            let (_total, untested) = stack.get_commit_counts(tx).await
                 .context("getting low-priority stack commit counts")?;
+            
+            // Count signed commits in the stack
+            let signed = count_signed_commits_in_stack(tx, stack, &repo_map).await
+                .context("counting signed commits in low-priority stack")?;
             
             log::info(format_args!(
                 "{} {} PRs {} ({} signed, {} left to test)",
@@ -225,6 +233,29 @@ async fn print_work_summary(
     log::info("");
 
     Ok(())
+}
+
+/// Count the number of signed commits in a stack
+async fn count_signed_commits_in_stack(
+    tx: &lcilib::Transaction<'_>,
+    stack: &Stack,
+    repo_map: &HashMap<i32, &Repository>,
+) -> anyhow::Result<usize> {
+    let commits = stack.get_commits(tx).await
+        .context("getting stack commits")?;
+    
+    let Some(repo) = repo_map.get(&stack.repository_id) else {
+        return Ok(0);
+    };
+    
+    let mut signed_count = 0;
+    for commit in &commits {
+        if util::is_commit_gpg_signed(commit, &repo.path).await? {
+            signed_count += 1;
+        }
+    }
+    
+    Ok(signed_count)
 }
 
 /// Get commits that need testing for a specific PR

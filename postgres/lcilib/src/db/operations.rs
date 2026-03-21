@@ -1130,19 +1130,17 @@ impl Stack {
 
     /// Count commits in various states for this stack
     ///
-    /// Returns `(total_commits, signed_commits, untested_commits)`
+    /// Returns `(total_commits, untested_commits)`
     /// 
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn get_commit_counts(&self, tx: &Transaction<'_>) -> Result<(i64, i64, i64), OperationError> {
+    pub async fn get_commit_counts(&self, tx: &Transaction<'_>) -> Result<(i64, i64), OperationError> {
         let row = tx
             .query_one(
                 r#"
                 SELECT 
                     COUNT(*) as total,
-                    -- We'll need to implement GPG signature checking separately
-                    0 as signed,
                     COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'unstarted' AND c.should_run_ci = true THEN 1 END) as untested
                 FROM commits c
                 JOIN stack_commits sc ON c.id = sc.commit_id
@@ -1155,7 +1153,6 @@ impl Stack {
 
         Ok((
             row.get::<_, i64>("total"),
-            row.get::<_, i64>("signed"),
             row.get::<_, i64>("untested"),
         ))
     }
