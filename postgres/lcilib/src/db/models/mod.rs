@@ -159,6 +159,7 @@ pub struct Repository {
     pub path: String,
     pub nixfile_path: String,
     pub created_at: DateTime<Utc>,
+    pub last_synced_at: DateTime<Utc>,
 }
 
 /// Commit model

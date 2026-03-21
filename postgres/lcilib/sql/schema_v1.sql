@@ -21,7 +21,8 @@ CREATE TABLE repositories (
     name VARCHAR(255) NOT NULL,
     path TEXT NOT NULL UNIQUE,
     nixfile_path TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Commits table for git commits with jj change IDs

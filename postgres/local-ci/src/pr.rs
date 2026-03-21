@@ -817,7 +817,7 @@ pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db:
     Ok(())
 }
 
-/// Refresh a PR from GitHub
+/// Refresh a PR from GitHub (CLI entry point)
 /// 
 /// # Errors
 /// 
@@ -827,8 +827,7 @@ pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db:
 /// - Git fetch of head commit fails
 /// - Database transaction or operations fail
 /// - PR has no commits
-#[allow(clippy::too_many_lines)] // unsure about this. seems reasonable enough
-pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
+pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
     let current_repo = repo::current_repo(&shell)
         .context("failed to get current repository")?;
@@ -840,6 +839,22 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     // Fetch the head commit to ensure it's available locally
     git::fetch_commit(&shell, &pr_info.head_commit)
         .context("failed to fetch head commit")?;
+
+    refresh(shell, &current_repo, &pr_info, db).await
+}
+
+/// Refresh a PR from GitHub
+///
+/// Takes ownership of its shell because `Shell` is `Send` but not `Sync`. We want to hold the shell
+/// across await points without making the whole future non-`Send` so we've gotta do this.
+/// 
+/// # Errors
+/// 
+/// Returns an error if:
+/// - Database transaction or operations fail
+/// - PR has no commits
+#[allow(clippy::too_many_lines)] // unsure about this. seems reasonable enough
+pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh::PrInfo, db: &mut Db) -> anyhow::Result<()> {
 
     // Start database transaction
     let tx = db.transaction().await
@@ -896,10 +911,10 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .context("PR has no commits")?;
 
     // Determine merge status from GitHub data
-    let merge_status = determine_merge_status_from_github(&pr_info);
+    let merge_status = determine_merge_status_from_github(pr_info);
 
     // Create or update the PR record
-    let pr_record = if let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
+    let pr_record = if let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_info.number).await
         .context("failed to query pull request")?
     {
         // Update existing PR
@@ -916,11 +931,11 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         // Create new PR
         let new_pr = NewPullRequest {
             repository_id: repo_record.id,
-            pr_number: pr_number.try_into()?,
+            pr_number: pr_info.number,
             title: pr_info.title.clone(),
             body: pr_info.body.clone(),
             tip_commit_id: tip_commit.id,
-            merge_status: merge_status,
+            merge_status,
             review_status: ReviewStatus::Unreviewed,
             priority: 0,
             ok_to_merge: true,
@@ -989,10 +1004,14 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     }
 
     // Scan for ACKs in GitHub comments and reviews
-    scan_and_update_acks(&tx, &pr_info, &pr_record, &commit_records).await
+    scan_and_update_acks(&tx, pr_info, &pr_record, &commit_records).await
         .context("failed to scan and update ACKs")?;
 
-    // If PR is conflicted, check if we need to post a rebase comment
+    // Done interacting with the database. Commit.
+    tx.commit().await
+        .context("failed to commit transaction")?;
+
+    // If PR was conflicted, check if we need to post a rebase comment
     if merge_status == MergeStatus::Conflicted {
         let rebase_comment = format!("{} needs rebase", tip_commit.git_commit_id);
         
@@ -1001,27 +1020,14 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             .any(|comment| comment.body.trim() == rebase_comment);
         
         if !comment_exists {
-            // Commit the transaction before posting the comment
-            tx.commit().await
-                .context("failed to commit transaction")?;
-            
-            // Post the rebase comment
-            gh::post_pr_comment(&shell, pr_number, &rebase_comment)
+            gh::post_pr_comment(&shell, pr_info.number, &rebase_comment)
                 .context("failed to post rebase comment")?;
             
             println!("Posted rebase comment: {}", rebase_comment);
-        } else {
-            // Commit the transaction normally
-            tx.commit().await
-                .context("failed to commit transaction")?;
         }
-    } else {
-        // Commit the transaction normally
-        tx.commit().await
-            .context("failed to commit transaction")?;
     }
 
-    println!("Successfully refreshed PR #{}", pr_number);
+    println!("Successfully refreshed PR #{}", pr_info.number);
     println!("Title: {}", pr_info.title);
     println!("Commits: {}", commit_records.len());
     println!("Head commit: {}", pr_info.head_commit);

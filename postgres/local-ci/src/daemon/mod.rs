@@ -5,19 +5,19 @@ use lcilib::Db;
 use lcilib::db::models::{Commit, Repository, UpdateCommit, CiStatus};
 use std::path::Path;
 use std::time::Duration;
-use tokio::{fs, time};
+use tokio::{fs, time, task};
 use tokio::process::Command;
 use chrono::Utc;
+use xshell::Shell;
 
 pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     println!("Starting local-ci daemon...");
     
     // Start all cycles concurrently, each with its own database connection
     let tasks = vec![
-        tokio::spawn(run_ack_cycle()),
-        tokio::spawn(run_pr_cycle()),
-        tokio::spawn(run_merge_cycle()),
+        tokio::spawn(run_maintenance_cycle()),
         tokio::spawn(run_ci_cycle_loop()),
+        tokio::spawn(run_pr_sync_cycle()),
     ];
     
     // Wait for all tasks to complete (which should never happen)
@@ -29,58 +29,41 @@ pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_ack_cycle() -> anyhow::Result<()> {
+async fn run_maintenance_cycle() -> anyhow::Result<()> {
     let mut db = Db::connect().await
-        .context("connecting to database for ACK cycle")?;
+        .context("connecting to database for maintenance cycle")?;
     
     loop {
-        match check_pending_acks(&mut db).await {
+        match run_maintenance_tasks(&mut db).await {
             Ok(had_work) => {
                 if !had_work {
                     time::sleep(Duration::from_secs(5)).await;
                 }
             }
             Err(e) => {
-                eprintln!("Error in ACK cycle: {}", e);
+                eprintln!("Error in maintenance cycle: {}", e);
                 time::sleep(Duration::from_secs(5)).await;
             }
         }
     }
 }
 
-async fn run_pr_cycle() -> anyhow::Result<()> {
+async fn run_pr_sync_cycle() -> anyhow::Result<()> {
     let mut db = Db::connect().await
-        .context("connecting to database for PR cycle")?;
+        .context("connecting to database for PR sync cycle")?;
+    
+    // Run every 15 minutes
+    let mut interval = time::interval(Duration::from_secs(15 * 60));
     
     loop {
-        match check_approved_prs(&mut db).await {
-            Ok(had_work) => {
-                if !had_work {
-                    time::sleep(Duration::from_secs(5)).await;
-                }
+        interval.tick().await;
+        
+        match sync_all_repositories(&mut db).await {
+            Ok(()) => {
+                println!("PR sync cycle completed successfully");
             }
             Err(e) => {
-                eprintln!("Error in PR cycle: {}", e);
-                time::sleep(Duration::from_secs(5)).await;
-            }
-        }
-    }
-}
-
-async fn run_merge_cycle() -> anyhow::Result<()> {
-    let mut db = Db::connect().await
-        .context("connecting to database for merge cycle")?;
-    
-    loop {
-        match check_signed_merges(&mut db).await {
-            Ok(had_work) => {
-                if !had_work {
-                    time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-            Err(e) => {
-                eprintln!("Error in merge cycle: {}", e);
-                time::sleep(Duration::from_secs(5)).await;
+                eprintln!("Error in PR sync cycle: {}", e);
             }
         }
     }
@@ -103,6 +86,27 @@ async fn run_ci_cycle_loop() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+async fn run_maintenance_tasks(db: &mut Db) -> anyhow::Result<bool> {
+    let mut had_work = false;
+
+    // Check for pending ACKs that need to be posted
+    if check_pending_acks(db).await? {
+        had_work = true;
+    }
+
+    // Check for approved PRs that need merge commits created
+    if check_approved_prs(db).await? {
+        had_work = true;
+    }
+
+    // Check for signed merge commits that need to be pushed
+    if check_signed_merges(db).await? {
+        had_work = true;
+    }
+
+    Ok(had_work)
 }
 
 async fn check_pending_acks(_db: &mut Db) -> anyhow::Result<bool> {
@@ -593,7 +597,6 @@ async fn build_derivation_with_cancellation(
                     
                     let error_msg = "CI cancelled by user request";
                     eprintln!("{}", error_msg);
-                    mark_commit_failed(db, commit, error_msg).await?;
                     return Ok(false);
                 }
             }
@@ -622,6 +625,97 @@ async fn should_cancel_ci(db: &mut Db, commit: &Commit) -> anyhow::Result<bool> 
     let should_cancel = current_commit.ci_status == CiStatus::Skipped || !current_commit.should_run_ci;
     
     Ok(should_cancel)
+}
+
+async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
+    let tx = db.transaction().await
+        .context("starting transaction to get repositories")?;
+    
+    let repositories = Repository::list_all(&tx).await
+        .map_err(|e| anyhow::anyhow!("Failed to get repositories: {}", e))?;
+    
+    tx.commit().await
+        .context("committing transaction")?;
+    
+    for repo in repositories {
+        if let Err(e) = sync_repository_prs(db, &repo).await {
+            eprintln!("Failed to sync PRs for repository {}: {}", repo.name, e);
+        }
+    }
+    
+    Ok(())
+}
+
+async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<()> {
+    struct Data {
+        current_repo: lcilib::repo::Repository,
+        pr_infos: Vec<lcilib::gh::PrInfo>,
+    }
+
+    // Use spawn_blocking for the GitHub API calls and shell operations
+    let repo_path = repo.path.clone();
+    let last_synced = repo.last_synced_at;
+    
+    let data = task::spawn_blocking(move || -> Option<Data> {
+        // Check if repository path exists
+        let shell = Shell::new().ok()?; // just eat shell creation error; this basically cannot happen
+        if !Path::new(&repo_path).exists() {
+            eprintln!("Warning: Repository path does not exist: {}", repo_path);
+            return None;
+        }
+        shell.change_dir(&repo_path);
+        
+        // Get updated PRs from GitHub
+        let pr_infos = match lcilib::gh::list_updated_prs(&shell, last_synced)  {
+            Ok(prs) => prs,
+            Err(e) => {
+                eprintln!("Warning: Failed to get updated PRs for repository {}: {}", repo_path, e);
+                return None;
+            }
+        };
+
+        let current_repo = match lcilib::repo::current_repo(&shell) {
+            Ok(repo) => repo,
+            Err(e) => {
+                eprintln!("Warning: failed to get current repo for repository path {}: {}", repo_path, e);
+                return None;
+            }
+        };
+
+        Some(Data { current_repo, pr_infos })
+    }).await
+    .context("spawning blocking task for GitHub API calls")?;
+
+    let Some(data) = data else { return Ok(()) };
+    if !data.pr_infos.is_empty() {
+        println!("Found {} updated PRs for repository {}", data.pr_infos.len(), repo.name);
+    }
+    for pr_info in &data.pr_infos {
+        // A shell cannot live across await points so we have to recreate it on every iteration
+        // and hand ownership to the refresh function.
+        let shell = Shell::new().expect("this just worked above..");
+        shell.change_dir(&repo.path);
+        if let Err(e) = crate::pr::refresh(shell, &data.current_repo, pr_info, db).await
+            .with_context(|| format!("failed to refresh PR #{}", pr_info.number))
+        {
+            eprintln!("Warning: Failed to process PR #{} in repository {}: {}", 
+                pr_info.number, repo.name, e);
+        } else {
+            println!("Successfully synced PR #{} in repository {}", pr_info.number, repo.name);
+        }
+    }
+    
+    // Update last synced time
+    let tx = db.transaction().await
+        .context("starting transaction to update last synced time")?;
+    
+    repo.update_last_synced(&tx).await
+        .map_err(|e| anyhow::anyhow!("Failed to update last synced time: {}", e))?;
+    
+    tx.commit().await
+        .context("committing transaction")?;
+    
+    Ok(())
 }
 
 async fn save_error_to_file(

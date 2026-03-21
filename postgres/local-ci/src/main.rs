@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
                 .context("getting PR info")?;
         }
         (Action::Refresh, Target::Pr(pr_number)) => {
-            pr::refresh(pr_number, &mut db).await
+            pr::refresh_from_cli(pr_number, &mut db).await
                 .context("refreshing PR")?;
         }
         (Action::Log, Target::Pr(pr_number)) => {
