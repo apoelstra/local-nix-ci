@@ -5,8 +5,9 @@ use lcilib::Db;
 use lcilib::db::models::{Commit, Repository, UpdateCommit, CiStatus};
 use std::path::Path;
 use std::time::Duration;
-use tokio::time;
+use tokio::{fs, time};
 use tokio::process::Command;
+use chrono::Utc;
 
 pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     println!("Starting local-ci daemon...");
@@ -259,8 +260,8 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
         format!("{{ {}; }}", entries.join("; "))
     };
 
-    // Get derivation path
-    let derivation_path = match get_or_create_derivation(db, commit, repo, &cargo_nixes).await {
+    // Get derivation path with cancellation checking
+    let derivation_path = match get_or_create_derivation_with_cancellation(db, commit, repo, &cargo_nixes).await {
         Ok(path) => path,
         Err(e) => {
             let error_msg = format!("Failed to get derivation: {}", e);
@@ -369,7 +370,7 @@ async fn check_has_cargo_toml(repo_path: &Path, commit_id: &str) -> anyhow::Resu
     Ok(has_cargo_toml)
 }
 
-async fn get_or_create_derivation(
+async fn get_or_create_derivation_with_cancellation(
     db: &mut Db,
     commit: &Commit,
     repo: &Repository,
@@ -392,9 +393,10 @@ async fn get_or_create_derivation(
         cargo_nixes
     );
 
-    // Instantiate derivation
+    // Instantiate derivation with cancellation checking
     println!("Instantiating derivation for commit {}", commit.git_commit_id);
-    let instantiate_output = Command::new("nix-instantiate")
+    
+    let mut child = Command::new("nix-instantiate")
         .args([
             "--show-trace",
             "--arg", "inlineJsonConfig",
@@ -406,52 +408,116 @@ async fn get_or_create_derivation(
             &repo.nixfile_path,
         ])
         .current_dir(&repo.path)
-        .output()
-        .await
-        .context("Failed to run nix-instantiate")?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("Failed to spawn nix-instantiate")?;
 
-    if !instantiate_output.status.success() {
-        return Err(anyhow::anyhow!(
-            "nix-instantiate failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
-            String::from_utf8_lossy(&instantiate_output.stdout),
-            String::from_utf8_lossy(&instantiate_output.stderr)
-        ));
+    // Check for cancellation every 10 seconds during instantiation
+    let mut interval = time::interval(Duration::from_secs(10));
+    
+    loop {
+        tokio::select! {
+            // We can't directly await the child for borrowck reasons (since in the other branch of
+            // this select we maybe want to kill it, and e.g. child.wait_on_output takes ownership).
+            // So we use `child.try_wait`, which is non-blocking and not a Future, to decide whether
+            // we want to wait -- once we call `child.wait_with_output()` we've lost ownership and
+            // we *have* to await it, no more select!ing, so we need to check first.
+            //
+            // But by using `try_wait` to check, we have a busy-loop, so we stick a short sleep to
+            // avoid that.
+            _ = time::sleep(Duration::from_millis(100)) => {
+                // Check if process has finished
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        // Process finished, get the output
+                        let output = child.wait_with_output().await
+                            .context("Failed to get output from nix-instantiate")?;
+                        
+                        if !status.success() {
+                            let error_content = format!(
+                                "nix-instantiate failed for commit {}\n\nSTDOUT:\n{}\nSTDERR:\n{}",
+                                commit.git_commit_id,
+                                String::from_utf8_lossy(&output.stdout),
+                                String::from_utf8_lossy(&output.stderr)
+                            );
+                            
+                            save_error_to_file(&repo.path, &commit.git_commit_id, "instantiate", &error_content).await?;
+                            mark_commit_failed(db, commit, "nix-instantiate failed").await?;
+                            return Err(anyhow::anyhow!("nix-instantiate failed"));
+                        }
+
+                        let stdout_str = String::from_utf8_lossy(&output.stdout);
+                        let lines: Vec<&str> = stdout_str.lines().collect();
+
+                        let derivation_path = if lines.len() > 1 {
+                            println!(
+                                "nix-instantiate returned {} lines, taking only the first line",
+                                lines.len()
+                            );
+                            lines[0].trim().to_string()
+                        } else {
+                            stdout_str.trim().to_string()
+                        };
+
+                        // Check if derivation exists on filesystem
+                        if !Path::new(&derivation_path).exists() {
+                            return Err(anyhow::anyhow!(
+                                "Instantiated derivation does not exist: {}",
+                                derivation_path
+                            ));
+                        }
+
+                        println!("Instantiated derivation: {}", derivation_path);
+
+                        // Update commit with derivation path
+                        let tx = db.transaction().await.context("starting transaction")?;
+                        let updates = UpdateCommit {
+                            nix_derivation: Some(Some(derivation_path.clone())),
+                            ..Default::default()
+                        };
+                        commit.update(&tx, updates).await
+                            .map_err(|e| anyhow::anyhow!("Failed to update commit with derivation: {}", e))?;
+                        tx.commit().await.context("committing transaction")?;
+
+                        return Ok(derivation_path);
+                    }
+                    Ok(None) => {
+                        // Process still running, continue
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("Failed to check nix-instantiate status: {}", e));
+                    }
+                }
+            }
+            
+            // Check for cancellation every 10 seconds
+            _ = interval.tick() => {
+                if let Err(e) = check_for_cancellation(db, commit).await {
+                    eprintln!("Error checking for cancellation: {}", e);
+                    continue;
+                }
+                
+                // Check if we should cancel
+                if should_cancel_ci(db, commit).await? {
+                    println!("CI cancellation requested for commit {}", commit.git_commit_id);
+                    
+                    // Kill the child process
+                    if let Err(e) = child.kill().await {
+                        eprintln!("Failed to kill nix-instantiate process: {}", e);
+                    }
+                    
+                    // Wait for it to actually exit
+                    let _ = child.wait().await;
+                    
+                    let error_msg = "CI cancelled by user request";
+                    eprintln!("{}", error_msg);
+                    mark_commit_failed(db, commit, error_msg).await?;
+                    return Err(anyhow::anyhow!("{}", error_msg));
+                }
+            }
+        }
     }
-
-    let stdout_str = String::from_utf8_lossy(&instantiate_output.stdout);
-    let lines: Vec<&str> = stdout_str.lines().collect();
-
-    let derivation_path = if lines.len() > 1 {
-        println!(
-            "nix-instantiate returned {} lines, taking only the first line",
-            lines.len()
-        );
-        lines[0].trim().to_string()
-    } else {
-        stdout_str.trim().to_string()
-    };
-
-    // Check if derivation exists on filesystem
-    if !Path::new(&derivation_path).exists() {
-        return Err(anyhow::anyhow!(
-            "Instantiated derivation does not exist: {}",
-            derivation_path
-        ));
-    }
-
-    println!("Instantiated derivation: {}", derivation_path);
-
-    // Update commit with derivation path
-    let tx = db.transaction().await.context("starting transaction")?;
-    let updates = UpdateCommit {
-        nix_derivation: Some(Some(derivation_path.clone())),
-        ..Default::default()
-    };
-    commit.update(&tx, updates).await
-        .map_err(|e| anyhow::anyhow!("Failed to update commit with derivation: {}", e))?;
-    tx.commit().await.context("committing transaction")?;
-
-    Ok(derivation_path)
 }
 
 async fn build_derivation_with_cancellation(
@@ -476,6 +542,8 @@ async fn build_derivation_with_cancellation(
             "-v",
         ])
         .current_dir(repo_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .context("Failed to spawn nix-build")?;
 
@@ -484,22 +552,36 @@ async fn build_derivation_with_cancellation(
     
     loop {
         tokio::select! {
-            // Check if the process has finished
-            result = child.wait() => {
-                match result {
-                    Ok(status) => {
+            // Sleep briefly to avoid busy waiting (see "busy-loop" comment above)
+            _ = time::sleep(Duration::from_millis(100)) => {
+                // Check if process has finished
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        // Process finished, get the output
+                        let output = child.wait_with_output().await
+                            .context("Failed to get output from nix-build")?;
+                        
                         if status.success() {
                             println!("nix-build completed successfully");
                             return Ok(true);
                         }
 
-                        let error_msg = format!("nix-build failed with exit code: {:?}", status.code());
-                        eprintln!("{}", error_msg);
-                        mark_commit_failed(db, commit, &error_msg).await?;
+                        let error_content = format!(
+                            "nix-build failed for commit {}\n\nSTDOUT:\n{}\nSTDERR:\n{}",
+                            commit.git_commit_id,
+                            String::from_utf8_lossy(&output.stdout),
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                        
+                        save_error_to_file(&repo_path.to_string_lossy(), &commit.git_commit_id, "build", &error_content).await?;
+                        mark_commit_failed(db, commit, "nix-build failed").await?;
                         return Ok(false);
                     }
+                    Ok(None) => {
+                        // Process still running, continue
+                    }
                     Err(e) => {
-                        let error_msg = format!("Failed to wait for nix-build: {}", e);
+                        let error_msg = format!("Failed to check nix-build status: {}", e);
                         eprintln!("{}", error_msg);
                         mark_commit_failed(db, commit, &error_msg).await?;
                         return Ok(false);
@@ -557,4 +639,24 @@ async fn should_cancel_ci(db: &mut Db, commit: &Commit) -> anyhow::Result<bool> 
     let should_cancel = current_commit.ci_status == CiStatus::Skipped || !current_commit.should_run_ci;
     
     Ok(should_cancel)
+}
+
+async fn save_error_to_file(
+    repo_path: &str,
+    commit_id: &str,
+    operation: &str,
+    content: &str,
+) -> anyhow::Result<()> {
+    let repo_path = Path::new(repo_path);
+    let error_dir = repo_path.parent().unwrap_or(repo_path);
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let filename = format!("local-ci-error-{}-{}-{}.log", commit_id, operation, timestamp);
+    let error_path = error_dir.join(filename);
+
+    fs::write(&error_path, content).await
+        .with_context(|| format!("Failed to write error file: {}", error_path.display()))?;
+
+    println!("Error details saved to: {}", error_path.display());
+
+    Ok(())
 }
