@@ -106,6 +106,7 @@ async fn check_pending_acks(_db: &mut Db) -> anyhow::Result<bool> {
     // TODO: Check if all non-merge commits are approved and passed CI
     // TODO: Post ACK and update status to 'posted'
     // Return true if work was done, false if nothing to do
+    time::sleep(Duration::from_secs(15)).await;
     Ok(false)
 }
 
@@ -115,6 +116,7 @@ async fn check_approved_prs(_db: &mut Db) -> anyhow::Result<bool> {
     // TODO: Create individual stack for the merge
     // TODO: Handle rebase warnings
     // Return true if work was done, false if nothing to do
+    time::sleep(Duration::from_secs(15)).await;
     Ok(false)
 }
 
@@ -122,6 +124,7 @@ async fn check_signed_merges(_db: &mut Db) -> anyhow::Result<bool> {
     // TODO: Query for signed merge commits that passed CI
     // TODO: Push them
     // Return true if work was done, false if nothing to do
+    time::sleep(Duration::from_secs(15)).await;
     Ok(false)
 }
 

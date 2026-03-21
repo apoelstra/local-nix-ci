@@ -439,7 +439,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     };
 
     // Show PR info first
-    show_pr_info(&shell, &current_repo, &pr, &tip_commit).await?;
+    show_pr_info(&shell, &current_repo, &pr, &tip_commit)?;
 
     loop {
         // Show menu
@@ -465,7 +465,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
 
         match choice {
             "1a" => {
-                if let Some(ack_message) = handle_ack_with_editor(&tip_commit, true).await? {
+                if let Some(ack_message) = handle_ack_with_editor(&tip_commit, true)? {
                     create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message).await
                         .context("failed to create ACK")?;
                     
@@ -482,7 +482,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                 }
             }
             "1b" => {
-                if let Some(ack_message) = handle_ack_with_editor(&tip_commit, false).await? {
+                if let Some(ack_message) = handle_ack_with_editor(&tip_commit, false)? {
                     create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message).await
                         .context("failed to create NACK")?;
                     
@@ -536,7 +536,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
 }
 
 /// Show PR information (extracted for reuse)
-async fn show_pr_info(
+fn show_pr_info(
     shell: &Shell,
     current_repo: &repo::Repository,
     pr: &PullRequest,
@@ -569,7 +569,7 @@ async fn show_pr_info(
 }
 
 /// Handle ACK/NACK with text editor
-async fn handle_ack_with_editor(
+fn handle_ack_with_editor(
     commit: &Commit,
     is_ack: bool,
 ) -> anyhow::Result<Option<String>> {

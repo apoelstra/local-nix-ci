@@ -363,61 +363,74 @@ async fn handle_review_with_editor(
     commit: &Commit,
     new_status: ReviewStatus,
 ) -> anyhow::Result<Option<UpdateCommit>> {
-    // Create temporary directory and file
-    let shell = Shell::new()?;
-    let temp_dir = shell.create_temp_dir()
-        .context("failed to create temporary directory")?;
+    let commit_git_id = commit.git_commit_id.clone();
+    let existing_review = commit.review_text.clone();
     
-    let temp_file_path = temp_dir.path().join("review.txt");
+    // Move all blocking operations into spawn_blocking
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+        // Create temporary directory and file
+        let shell = Shell::new()?;
+        let temp_dir = shell.create_temp_dir()
+            .context("failed to create temporary directory")?;
+        
+        let temp_file_path = temp_dir.path().join("review.txt");
 
-    let status_text = match new_status {
-        ReviewStatus::Approved => "approved",
-        ReviewStatus::Rejected => "rejected",
-        ReviewStatus::Unreviewed => "unreviewed",
-    };
+        let status_text = match new_status {
+            ReviewStatus::Approved => "approved",
+            ReviewStatus::Rejected => "rejected",
+            ReviewStatus::Unreviewed => "unreviewed",
+        };
 
-    let prefill_content = format!(
-        "# Enter your review here. Updated commit {} review status: {}\n# Edit the review message above. Lines starting with # will be removed.\n{}",
-        commit.git_commit_id,
-        status_text,
-        commit.review_text.as_deref().unwrap_or("")
-    );
+        let prefill_content = format!(
+            "# Enter your review here. Updated commit {} review status: {}\n# Edit the review message above. Lines starting with # will be removed.\n{}",
+            commit_git_id,
+            status_text,
+            existing_review.as_deref().unwrap_or("")
+        );
 
-    fs::write(&temp_file_path, prefill_content.as_bytes())
-        .context("failed to write to temporary file")?;
+        fs::write(&temp_file_path, prefill_content.as_bytes())
+            .context("failed to write to temporary file")?;
 
-    // Get editor from environment or default to vim
-    let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+        // Get editor from environment or default to vim
+        let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
 
-    // Launch editor
-    let result = cmd!(shell, "{editor} {temp_file_path}")
-        .run()
-        .with_context(|| format!("failed to launch editor: {}", editor));
+        // Launch editor
+        let result = cmd!(shell, "{editor} {temp_file_path}")
+            .run()
+            .with_context(|| format!("failed to launch editor: {}", editor));
 
-    if result.is_err() {
-        println!("Editor exited with error, review update cancelled.");
-        return Ok(None);
+        if result.is_err() {
+            println!("Editor exited with error, review update cancelled.");
+            return Ok(None);
+        }
+
+        // Read the edited content
+        let content = fs::read_to_string(&temp_file_path)
+            .context("failed to read edited file")?;
+
+        // Remove lines starting with #
+        let review_text: String = content
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(Some(review_text))
+    }).await
+    .context("failed to execute blocking editor operation")?;
+
+    match result? {
+        Some(review_text) => {
+            // Create update struct
+            let update = UpdateCommit {
+                review_text: Some(Some(review_text)),
+                review_status: Some(new_status),
+                ..Default::default()
+            };
+            Ok(Some(update))
+        }
+        None => Ok(None),
     }
-
-    // Read the edited content
-    let content = fs::read_to_string(&temp_file_path)
-        .context("failed to read edited file")?;
-
-    // Remove lines starting with #
-    let review_text: String = content
-        .lines()
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Create update struct
-    let update = UpdateCommit {
-        review_text: Some(Some(review_text)),
-        review_status: Some(new_status),
-        ..Default::default()
-    };
-
-    Ok(Some(update))
 }
 
 /// Show git diff with specified context
