@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use chrono::Utc;
-use tokio::{fs, time};
+use tokio::{fs, io::{BufReader, AsyncReadExt as _}, time};
 use tokio::process::Command;
 
 use super::{get_repository_for_commit, mark_commit_failed, mark_commit_passed};
@@ -477,6 +477,25 @@ async fn get_or_create_derivation_with_cancellation(
         .spawn()
         .context("Failed to spawn nix-instantiate")?;
 
+    // Collect stdout and stderr into a vec (in principle there is a memory-DoS vector here, but
+    // nix-instantiate should never output more than a few hundred kb, even on error, so okay).
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    let stdout_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await?;
+        Ok::<Vec<u8>, std::io::Error>(buf)
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await?;
+        Ok::<Vec<u8>, std::io::Error>(buf)
+    });
+
     // Check for cancellation every 10 seconds during instantiation
     let mut interval = time::interval(Duration::from_secs(10));
     
@@ -486,23 +505,16 @@ async fn get_or_create_derivation_with_cancellation(
                 match status_result {
                     Ok(status) => {
                         // Process finished, get the output
-                        let output = child.wait_with_output().await
-                            .context("Failed to get output from nix-instantiate")?;
+                        let stdout = stdout_task.await??;
+                        let stderr = stderr_task.await??;
                         
                         if !status.success() {
-                            let error_content = format!(
-                                "nix-instantiate failed for commit {}\n\nSTDOUT:\n{}\nSTDERR:\n{}",
-                                commit.git_commit_id,
-                                String::from_utf8_lossy(&output.stdout),
-                                String::from_utf8_lossy(&output.stderr)
-                            );
-                            
-                            save_error_to_file(&repo.path, &commit.git_commit_id, "instantiate", &error_content).await?;
+                            save_error_to_file(&repo.path, &commit.git_commit_id, "instantiate", &stdout, &stderr).await?;
                             mark_commit_failed(db, commit, "nix-instantiate failed").await?;
                             return Err(anyhow::anyhow!("nix-instantiate failed"));
                         }
 
-                        let stdout_str = String::from_utf8_lossy(&output.stdout);
+                        let stdout_str = String::from_utf8_lossy(&stdout);
                         let lines: Vec<&str> = stdout_str.lines().collect();
 
                         let derivation_path = if lines.len() > 1 {
@@ -583,13 +595,9 @@ async fn build_derivation_with_cancellation(
     // Start the nix-build process
     let mut child = Command::new("nix-build")
         .args([
-            "--builders-use-substitutes",
             "--no-build-output",
             "--no-out-link",
             "--keep-failed",
-            "--keep-derivations",
-            "--keep-outputs",
-            "--log-lines", "100",
             derivation_path,
             "-v",
         ])
@@ -598,6 +606,25 @@ async fn build_derivation_with_cancellation(
         .stderr(std::process::Stdio::piped())
         .spawn()
         .context("Failed to spawn nix-build")?;
+
+    // Collect stdout and stderr into a vec (in principle there is a memory-DoS vector here but in practice
+    // it should be fine for even the most crazy nix derivations have only a few megs of output.
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    let stdout_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await?;
+        Ok::<Vec<u8>, std::io::Error>(buf)
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await?;
+        Ok::<Vec<u8>, std::io::Error>(buf)
+    });
 
     // Check for cancellation every 30 seconds
     let mut interval = time::interval(Duration::from_secs(30));
@@ -608,22 +635,15 @@ async fn build_derivation_with_cancellation(
                 match status_result {
                     Ok(status) => {
                         // Process finished, get the output
-                        let output = child.wait_with_output().await
-                            .context("Failed to get output from nix-build")?;
+                        let stdout = stdout_task.await??;
+                        let stderr = stderr_task.await??;
                         
                         if status.success() {
                             log::info(format_args!("nix-build completed successfully"));
                             return Ok(true);
                         }
-
-                        let error_content = format!(
-                            "nix-build failed for commit {}\n\nSTDOUT:\n{}\nSTDERR:\n{}",
-                            commit.git_commit_id,
-                            String::from_utf8_lossy(&output.stdout),
-                            String::from_utf8_lossy(&output.stderr)
-                        );
                         
-                        save_error_to_file(&repo_path.to_string_lossy(), &commit.git_commit_id, "build", &error_content).await?;
+                        save_error_to_file(&repo_path.to_string_lossy(), &commit.git_commit_id, "build", &stdout, &stderr).await?;
                         mark_commit_failed(db, commit, "nix-build failed").await?;
                         return Ok(false);
                     }
@@ -691,7 +711,8 @@ async fn save_error_to_file(
     repo_path: &str,
     commit_id: &str,
     operation: &str,
-    content: &str,
+    stdout: &[u8],
+    stderr: &[u8],
 ) -> anyhow::Result<()> {
     let repo_path = Path::new(repo_path);
     let error_dir = repo_path.parent().unwrap_or(repo_path);
@@ -699,8 +720,14 @@ async fn save_error_to_file(
     let filename = format!("local-ci-error-{}-{}-{}.log", commit_id, operation, timestamp);
     let error_path = error_dir.join(filename);
 
-    fs::write(&error_path, content).await
-        .with_context(|| format!("Failed to write error file: {}", error_path.display()))?;
+    fs::write(&error_path, format!("nix-build failed for commit {}\n\nSTDOUT:\n", commit_id)).await
+        .with_context(|| format!("Failed to write error file (preamble): {}", error_path.display()))?;
+    fs::write(&error_path, stdout).await
+        .with_context(|| format!("Failed to write error file (stdout): {}", error_path.display()))?;
+    fs::write(&error_path, "\nSTDERR:\n").await
+        .with_context(|| format!("Failed to write error file (stderr preamble): {}", error_path.display()))?;
+    fs::write(&error_path, stderr).await
+        .with_context(|| format!("Failed to write error file (stderr): {}", error_path.display()))?;
 
     log::info(format_args!("Error details saved to: {}", error_path.display()));
 

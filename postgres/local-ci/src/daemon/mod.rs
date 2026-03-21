@@ -35,7 +35,8 @@ pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
 async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
     let mut db = Db::connect().await
         .context("connecting to database for maintenance cycle")?;
-    
+
+    let mut idle_time = Duration::from_secs(300);
     loop {
         let mut had_work = false;
 
@@ -54,8 +55,13 @@ async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
             had_work = true;
         }
 
-        if !had_work {
-            time::sleep(Duration::from_secs(5)).await;
+        if had_work {
+            idle_time = Duration::from_secs(300);
+        } else {
+            if idle_time < Duration::from_hours(2) { 
+                idle_time *= 2;
+            }
+            time::sleep(idle_time).await;
         }
     }
 }
@@ -382,7 +388,7 @@ async fn process_approved_pr(
         .collect();
     
     for stack in matching_stacks {
-        if try_extend_stack(&tx, &stack, pr, &merge_commit, repo).await? {
+        if try_extend_stack(&tx, &stack, pr, repo).await? {
             extended_stack = true;
             break;
         }
@@ -412,9 +418,10 @@ async fn try_extend_stack(
     tx: &lcilib::Transaction<'_>,
     stack: &Stack,
     pr: &PullRequest,
-    merge_commit: &Commit,
     repo: &Repository,
 ) -> anyhow::Result<bool> {
+    use lcilib::db::models::{Commit, NewCommit, ReviewStatus, CiStatus};
+    
     // Check if stack already has a merge for this PR
     let existing = tx.query_opt(
         r#"
@@ -430,20 +437,27 @@ async fn try_extend_stack(
         return Ok(true); // Already in stack
     }
     
-    // Get current stack commits
+    // Get current stack commits to find the tip
     let stack_commits = stack.get_commits(tx).await
         .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
+    
+    // Get the tip commit of the PR
+    let tip_commit = Commit::find_by_id(tx, pr.tip_commit_id).await
+        .map_err(|e| anyhow::anyhow!("Failed to find tip commit: {}", e))?
+        .ok_or_else(|| anyhow::anyhow!("Tip commit not found"))?;
     
     // Try to create merge on top of stack
     let shell = Shell::new().context("creating shell")?;
     shell.change_dir(&repo.path);
     
-    let parent_commit = if let Some(last_commit) = stack_commits.last() {
+    // The parent for the merge is either the last commit in the stack or the target branch
+    let stack_tip = if let Some(last_commit) = stack_commits.last() {
         &last_commit.jj_change_id
     } else {
-        &pr.target_branch
+        &stack.target_branch
     };
     
+    // Build ACK description
     let acks = lcilib::db::models::Ack::find_by_pull_request(tx, pr.id).await
         .map_err(|e| anyhow::anyhow!("Failed to get ACKs: {}", e))?;
     
@@ -458,11 +472,35 @@ async fn try_extend_stack(
         format!("Merge PR #{}: {}\n\nACKs:\n{}", pr.pr_number, pr.title, ack_lines.join("\n"))
     };
     
-    match lcilib::jj::create_merge_commit(&shell, &merge_commit.git_commit_id, parent_commit, &description) {
+    // Create merge commit: merge PR tip into stack tip
+    match lcilib::jj::create_merge_commit(&shell, &tip_commit.git_commit_id, stack_tip, &description) {
         Ok(change_id) => {
-            // Success - add to stack
-            let next_order = stack_commits.len() as i32 + 1;
-            stack.add_commit(tx, merge_commit.id, next_order).await
+            // Get the git commit ID for the new merge
+            let git_commit_id = lcilib::jj::get_current_git_commit_for_change_id(&shell, &change_id)
+                .context("getting git commit ID for stack merge")?;
+            
+            // Create commit record for the new merge
+            let new_commit = NewCommit {
+                repository_id: pr.repository_id,
+                git_commit_id: git_commit_id.parse().context("parsing git commit ID")?,
+                jj_change_id: change_id,
+                review_status: ReviewStatus::Approved,
+                should_run_ci: true,
+                ci_status: CiStatus::Unstarted,
+                nix_derivation: None,
+                review_text: Some(format!("Stack merge commit for PR #{}", pr.pr_number)),
+            };
+            
+            let stack_merge_commit = Commit::create(tx, new_commit).await
+                .map_err(|e| anyhow::anyhow!("Failed to create stack merge commit record: {}", e))?;
+            
+            // Add to PR as a merge commit
+            lcilib::db::models::PrCommit::create(tx, pr.id, stack_merge_commit.id, 1000, lcilib::db::models::CommitType::Merge).await
+                .map_err(|e| anyhow::anyhow!("Failed to create pr_commit record for stack merge: {}", e))?;
+            
+            // Add to stack
+            let next_order = i32::try_from(stack_commits.len())? + 1;
+            stack.add_commit(tx, stack_merge_commit.id, next_order).await
                 .map_err(|e| anyhow::anyhow!("Failed to add commit to stack: {}", e))?;
             
             log::info(format_args!("Extended stack {} with PR #{}", stack.id, pr.pr_number));
@@ -598,9 +636,9 @@ async fn process_stack_updates(
             Ok(current_git_id) => {
                 if current_git_id != commit.git_commit_id {
                     // Get tree hash and parents to check what changed
-                    let current_tree = lcilib::git::resolve_ref(&shell, &format!("{}^{{tree}}", current_git_id))
+                    let current_tree = lcilib::git::resolve_ref(&shell, format!("{}^{{tree}}", current_git_id))
                         .context("getting current tree hash")?;
-                    let original_tree = lcilib::git::resolve_ref(&shell, &format!("{}^{{tree}}", commit.git_commit_id))
+                    let original_tree = lcilib::git::resolve_ref(&shell, format!("{}^{{tree}}", commit.git_commit_id))
                         .context("getting original tree hash")?;
                     
                     let current_parents = lcilib::git::list_parents(&shell, &current_git_id)
