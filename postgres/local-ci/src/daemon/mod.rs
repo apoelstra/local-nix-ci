@@ -418,18 +418,9 @@ async fn get_or_create_derivation_with_cancellation(
     
     loop {
         tokio::select! {
-            // We can't directly await the child for borrowck reasons (since in the other branch of
-            // this select we maybe want to kill it, and e.g. child.wait_on_output takes ownership).
-            // So we use `child.try_wait`, which is non-blocking and not a Future, to decide whether
-            // we want to wait -- once we call `child.wait_with_output()` we've lost ownership and
-            // we *have* to await it, no more select!ing, so we need to check first.
-            //
-            // But by using `try_wait` to check, we have a busy-loop, so we stick a short sleep to
-            // avoid that.
-            _ = time::sleep(Duration::from_millis(100)) => {
-                // Check if process has finished
-                match child.try_wait() {
-                    Ok(Some(status)) => {
+            status_result = child.wait() => {
+                match status_result {
+                    Ok(status) => {
                         // Process finished, get the output
                         let output = child.wait_with_output().await
                             .context("Failed to get output from nix-instantiate")?;
@@ -481,9 +472,6 @@ async fn get_or_create_derivation_with_cancellation(
                         tx.commit().await.context("committing transaction")?;
 
                         return Ok(derivation_path);
-                    }
-                    Ok(None) => {
-                        // Process still running, continue
                     }
                     Err(e) => {
                         return Err(anyhow::anyhow!("Failed to check nix-instantiate status: {}", e));
@@ -552,11 +540,9 @@ async fn build_derivation_with_cancellation(
     
     loop {
         tokio::select! {
-            // Sleep briefly to avoid busy waiting (see "busy-loop" comment above)
-            _ = time::sleep(Duration::from_millis(100)) => {
-                // Check if process has finished
-                match child.try_wait() {
-                    Ok(Some(status)) => {
+            status_result = child.wait() => {
+                match status_result {
+                    Ok(status) => {
                         // Process finished, get the output
                         let output = child.wait_with_output().await
                             .context("Failed to get output from nix-build")?;
@@ -576,9 +562,6 @@ async fn build_derivation_with_cancellation(
                         save_error_to_file(&repo_path.to_string_lossy(), &commit.git_commit_id, "build", &error_content).await?;
                         mark_commit_failed(db, commit, "nix-build failed").await?;
                         return Ok(false);
-                    }
-                    Ok(None) => {
-                        // Process still running, continue
                     }
                     Err(e) => {
                         let error_msg = format!("Failed to check nix-build status: {}", e);
