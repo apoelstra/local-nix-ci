@@ -35,23 +35,26 @@ pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
 async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
     let mut db = Db::connect().await
         .context("connecting to database for maintenance cycle")?;
+    real_run_db_maintenance_cycle(&mut db).await
+}
 
+async fn real_run_db_maintenance_cycle(db: &mut Db) -> anyhow::Result<()> {
     let mut idle_time = Duration::from_secs(300);
     loop {
         let mut had_work = false;
 
         // Check for pending ACKs that need to be posted
-        if check_pending_acks(&mut db).await? {
+        if check_pending_acks(db).await? {
             had_work = true;
         }
 
         // Check for approved PRs that need merge commits created
-        if check_approved_prs(&mut db).await? {
+        if check_approved_prs(db).await? {
             had_work = true;
         }
 
         // Check for signed merge commits that need to be pushed
-        if check_signed_merges(&mut db).await? {
+        if check_signed_merges(db).await? {
             had_work = true;
         }
 

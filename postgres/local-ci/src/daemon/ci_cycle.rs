@@ -763,6 +763,8 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                     if success {
                         log::info(format_args!("CI SUCCESS for commit: {}", commit.git_commit_id));
                         mark_commit_passed(&mut db, &commit).await?;
+                        // After a commit succeeds, re-scan the database to see if we should make merge commits or something
+                        super::real_run_db_maintenance_cycle(&mut db).await?;
                     } else {
                         log::warn(format_args!("CI FAILED for commit: {}", commit.git_commit_id));
                         // Error details already logged and commit marked as failed in process_commit_ci
@@ -786,7 +788,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
             
             let now = std::time::Instant::now();
             if now.duration_since(last_no_work_log).as_secs() >= delay_secs {
-                log::info(format_args!("Nothing to do"));
+                log::info(format_args!("Nothing to do."));
                 no_work_count += 1;
                 last_no_work_log = now;
             }
