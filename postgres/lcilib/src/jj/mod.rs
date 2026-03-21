@@ -84,3 +84,12 @@ pub fn jj_log<R: AsRef<OsStr>>(shell: &Shell, template: &str, revset: R) -> Resu
         .map_err(Error::Shell)
         .map(|s| s.trim().to_string())
 }
+
+/// Get the jj change ID for a git commit hash.
+///
+/// # Errors
+///
+/// Returns an error if the jj command fails to execute or if the commit is not found.
+pub fn get_change_id_for_commit(shell: &Shell, git_commit_id: &str) -> Result<String, Error> {
+    jj_log(shell, "change_id", git_commit_id)
+}

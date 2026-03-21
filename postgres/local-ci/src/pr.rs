@@ -7,6 +7,7 @@ use lcilib::{
     db::{models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest, PrCommit, Ack, NewAck, AckStatus}, EntityType, Log},
     gh,
     git,
+    jj,
     repo,
 };
 use std::{env, fs, io::{self, Write}, collections::{HashMap, HashSet}};
@@ -843,11 +844,15 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         {
             commit
         } else {
+            // Get the jj change ID for this commit
+            let jj_change_id = jj::get_change_id_for_commit(&shell, &commit_oid.to_string())
+                .with_context(|| format!("failed to get jj change ID for commit {}", commit_oid))?;
+
             // Create new commit record
             let new_commit = NewCommit {
                 repository_id: repo_record.id,
                 git_commit_id: commit_oid.clone(),
-                jj_change_id: format!("unknown-{}", commit_oid), // Will be updated later when we have jj integration
+                jj_change_id,
                 review_status: ReviewStatus::Unreviewed,
                 should_run_ci: false,
                 ci_status: CiStatus::Unstarted,
