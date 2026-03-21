@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use core::fmt;
 use lcilib::{Db, db::models::{Commit, PullRequest, Stack, Repository}};
 use std::collections::HashMap;
 use chrono::Utc;
@@ -18,10 +19,18 @@ pub async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Comm
         .context("getting repository list")?;
     let repo_map: HashMap<i32, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
 
-    // 1. Check high-priority stacks first (with positive priority)
+     // Compute lists of available work and print summary.
     let high_priority_stacks = Stack::find_highest_priority_by_repo_branch(&tx).await
         .context("finding high-priority stacks")?;
+    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx).await
+        .context("finding PRs needing testing")?;
+    let low_priority_stacks = Stack::find_low_priority_stacks(&tx).await
+        .context("finding low-priority stacks")?;
     
+    print_work_summary(&tx, &high_priority_stacks, &prs_needing_testing, &low_priority_stacks).await
+        .context("printing work summary")?;
+    
+    // 1. Check high-priority stacks first (with positive priority)
     let mut prioritized_stacks = Vec::new();
     for (stack, commits) in &high_priority_stacks {
         let priority = calculate_stack_priority(commits, &tx, &repo_map).await
@@ -44,9 +53,6 @@ pub async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Comm
     }
 
     // 2. Check PRs by priority (user priority, then all approved, then fewer untested, then age)
-    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx).await
-        .context("finding PRs needing testing")?;
-    
     let mut prioritized_prs = Vec::new();
     for pr in &prs_needing_testing {
         let (total_commits, approved_commits, untested_commits) = pr.get_commit_counts(&tx).await
@@ -76,9 +82,6 @@ pub async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Comm
     }
 
     // 3. Check low-priority stacks (negative priority or conflicting)
-    let low_priority_stacks = Stack::find_low_priority_stacks(&tx).await
-        .context("finding low-priority stacks")?;
-    
     let mut low_priority_with_scores = Vec::new();
     for (stack, commits) in &low_priority_stacks {
         let priority = calculate_stack_priority(commits, &tx, &repo_map).await
@@ -97,10 +100,6 @@ pub async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Comm
             return Ok(Some(commit));
         }
     }
-
-    // 4. Print summary of remaining work
-    print_work_summary(&tx, &high_priority_stacks, &prs_needing_testing, &low_priority_stacks).await
-        .context("printing work summary")?;
 
     tx.commit().await.context("committing transaction")?;
     Ok(None)
@@ -130,7 +129,7 @@ async fn print_work_summary(
             .context("getting PR commit counts")?;
         
         let unapproved = total_commits - approved_commits;
-        log_info(&format!(
+        log_info(format_args!(
             "{} PR#{} {} commits left to test ({} unapproved)",
             repo_name, pr.pr_number, untested_commits, unapproved
         ));
@@ -149,7 +148,7 @@ async fn print_work_summary(
         let (_total, signed, untested) = stack.get_commit_counts(tx).await
             .context("getting stack commit counts")?;
         
-        log_info(&format!(
+        log_info(format_args!(
             "{} {} PRs {} ({} signed, {} left to test)",
             repo_name, stack.target_branch, pr_numbers.join(", "), signed, untested
         ));
@@ -170,12 +169,13 @@ async fn print_work_summary(
             let (_total, signed, untested) = stack.get_commit_counts(tx).await
                 .context("getting low-priority stack commit counts")?;
             
-            log_info(&format!(
+            log_info(&format_args!(
                 "{} {} PRs {} ({} signed, {} left to test)",
                 repo_name, stack.target_branch, pr_numbers.join(", "), signed, untested
             ));
         }
     }
+    log_info("");
 
     Ok(())
 }
@@ -256,7 +256,7 @@ async fn calculate_commit_priority(
             Ok(true) => priority += 0.5,
             Ok(false) => {}, // No bonus
             Err(e) => {
-                log_info(&format!("Warning: Failed to check GPG signature for commit {}: {}", commit.jj_change_id, e));
+                log_info(format_args!("Warning: Failed to check GPG signature for commit {}: {}", commit.jj_change_id, e));
                 // Assume unsigned
             }
         }
@@ -296,7 +296,7 @@ async fn is_commit_gpg_signed(commit: &Commit, repo_path: &str) -> anyhow::Resul
 }
 
 /// Log a message with timestamp prefix
-fn log_info(message: &str) {
+fn log_info<D: fmt::Display>(message: D) {
     let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
     println!("[{}] {}", timestamp, message);
 }

@@ -131,6 +131,7 @@ async fn run_ci_cycle(db: &mut Db) -> anyhow::Result<bool> {
         Some(commit) => {
             // TODO: Actually start CI for this commit
             println!("Would start CI for commit: {} ({})", commit.git_commit_id, commit.jj_change_id);
+            time::sleep(Duration::from_secs(15)).await;
             Ok(true)
         }
         None => {
