@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+mod log;
 mod stacks;
 
 use anyhow::Context as _;
@@ -11,11 +14,11 @@ use chrono::Utc;
 use xshell::Shell;
 
 pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
-    println!("Starting local-ci daemon...");
+    log::info(format_args!("Starting local-ci daemon..."));
     
     // Start all cycles concurrently, each with its own database connection
     let tasks = vec![
-        tokio::spawn(run_maintenance_cycle()),
+        tokio::spawn(run_db_maintenance_cycle()),
         tokio::spawn(run_ci_cycle_loop()),
         tokio::spawn(run_pr_sync_cycle()),
     ];
@@ -29,21 +32,30 @@ pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_maintenance_cycle() -> anyhow::Result<()> {
+async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
     let mut db = Db::connect().await
         .context("connecting to database for maintenance cycle")?;
     
     loop {
-        match run_maintenance_tasks(&mut db).await {
-            Ok(had_work) => {
-                if !had_work {
-                    time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-            Err(e) => {
-                eprintln!("Error in maintenance cycle: {}", e);
-                time::sleep(Duration::from_secs(5)).await;
-            }
+        let mut had_work = false;
+
+        // Check for pending ACKs that need to be posted
+        if check_pending_acks(&mut db).await? {
+            had_work = true;
+        }
+
+        // Check for approved PRs that need merge commits created
+        if check_approved_prs(&mut db).await? {
+            had_work = true;
+        }
+
+        // Check for signed merge commits that need to be pushed
+        if check_signed_merges(&mut db).await? {
+            had_work = true;
+        }
+
+        if !had_work {
+            time::sleep(Duration::from_secs(5)).await;
         }
     }
 }
@@ -60,10 +72,10 @@ async fn run_pr_sync_cycle() -> anyhow::Result<()> {
         
         match sync_all_repositories(&mut db).await {
             Ok(()) => {
-                println!("PR sync cycle completed successfully");
+                log::info(format_args!("PR sync cycle completed successfully"));
             }
             Err(e) => {
-                eprintln!("Error in PR sync cycle: {}", e);
+                log::warn(format_args!("Error in PR sync cycle: {}", e));
             }
         }
     }
@@ -73,40 +85,62 @@ async fn run_ci_cycle_loop() -> anyhow::Result<()> {
     let mut db = Db::connect().await
         .context("connecting to database for CI cycle")?;
     
+    let mut no_work_count = 0u32;
+    let mut last_no_work_log = std::time::Instant::now();
+    
     loop {
-        match run_ci_cycle(&mut db).await {
-            Ok(had_work) => {
-                if !had_work {
-                    time::sleep(Duration::from_secs(5)).await;
+        if let Some(commit) = stacks::find_next_commit_to_test(&mut db).await
+            .context("finding next commit to test")?
+        {
+            log::info(format_args!("Starting CI for commit: {} ({})", commit.git_commit_id, commit.jj_change_id));
+        
+            // Get repository info
+            let repo = match get_repository_for_commit(&mut db, &commit).await {
+                Ok(repo) => repo,
+                Err(e) => {
+                    log::warn_backoff(format!("Failed to get repository for commit {}: {}", commit.git_commit_id, e)).await;
+                    continue;
+                }
+            };
+
+            // Process the commit
+            match process_commit_ci(&mut db, &commit, &repo).await {
+                Ok(success) => {
+                    log::reset_error_sleep();
+                    if success {
+                        log::info(format_args!("CI SUCCESS for commit: {}", commit.git_commit_id));
+                        mark_commit_passed(&mut db, &commit).await?;
+                    } else {
+                        log::warn(format_args!("CI FAILED for commit: {}", commit.git_commit_id));
+                        // Error details already logged and commit marked as failed in process_commit_ci
+                    }
+                }
+                Err(e) => {
+                    log::warn_backoff(format!("Error processing commit {}: {}", commit.git_commit_id, e)).await;
+                    mark_commit_failed(&mut db, &commit, &format!("Processing error: {}", e)).await?;
                 }
             }
-            Err(e) => {
-                eprintln!("Error in CI cycle: {}", e);
-                time::sleep(Duration::from_secs(5)).await;
+        
+        } else {
+            // Nothing to do -- just sleep for a second and maybe post a 'nothing to do' message so the
+            // user knows we're still alive.
+            let delay_secs = match no_work_count {
+                0 => 5,
+                1 => 60,
+                2 => 300,
+                n => 300 * (1u64 << (n - 2)).min(18000), // Cap at 5 hours
+            };
+            
+            let now = std::time::Instant::now();
+            if now.duration_since(last_no_work_log).as_secs() >= delay_secs {
+                log::info(format_args!("Nothing to do"));
+                no_work_count += 1;
+                last_no_work_log = now;
             }
+            
+            time::sleep(Duration::from_secs(1)).await;
         }
     }
-}
-
-async fn run_maintenance_tasks(db: &mut Db) -> anyhow::Result<bool> {
-    let mut had_work = false;
-
-    // Check for pending ACKs that need to be posted
-    if check_pending_acks(db).await? {
-        had_work = true;
-    }
-
-    // Check for approved PRs that need merge commits created
-    if check_approved_prs(db).await? {
-        had_work = true;
-    }
-
-    // Check for signed merge commits that need to be pushed
-    if check_signed_merges(db).await? {
-        had_work = true;
-    }
-
-    Ok(had_work)
 }
 
 async fn check_pending_acks(_db: &mut Db) -> anyhow::Result<bool> {
@@ -134,48 +168,6 @@ async fn check_signed_merges(_db: &mut Db) -> anyhow::Result<bool> {
     // Return true if work was done, false if nothing to do
     time::sleep(Duration::from_secs(15)).await;
     Ok(false)
-}
-
-async fn run_ci_cycle(db: &mut Db) -> anyhow::Result<bool> {
-    match stacks::find_next_commit_to_test(db).await
-        .context("finding next commit to test")? {
-        Some(commit) => {
-            println!("Starting CI for commit: {} ({})", commit.git_commit_id, commit.jj_change_id);
-            
-            // Get repository info
-            let repo = match get_repository_for_commit(db, &commit).await {
-                Ok(repo) => repo,
-                Err(e) => {
-                    eprintln!("Failed to get repository for commit {}: {}", commit.git_commit_id, e);
-                    mark_commit_failed(db, &commit, &format!("Failed to get repository: {}", e)).await?;
-                    return Ok(true);
-                }
-            };
-
-            // Process the commit
-            match process_commit_ci(db, &commit, &repo).await {
-                Ok(success) => {
-                    if success {
-                        println!("CI SUCCESS for commit: {}", commit.git_commit_id);
-                        mark_commit_passed(db, &commit).await?;
-                    } else {
-                        println!("CI FAILED for commit: {}", commit.git_commit_id);
-                        // Error details already logged and commit marked as failed in process_commit_ci
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error processing commit {}: {}", commit.git_commit_id, e);
-                    mark_commit_failed(db, &commit, &format!("Processing error: {}", e)).await?;
-                }
-            }
-            
-            Ok(true)
-        }
-        None => {
-            // No work to do
-            Ok(false)
-        }
-    }
 }
 
 async fn get_repository_for_commit(db: &mut Db, commit: &Commit) -> anyhow::Result<Repository> {
@@ -219,7 +211,7 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
     // Check if nixfile exists
     if !nixfile_path.exists() {
         let error_msg = format!("Nixfile not found: {}", nixfile_path.display());
-        eprintln!("{}", error_msg);
+        log::warn(format_args!("{}", error_msg));
         mark_commit_failed(db, commit, &error_msg).await?;
         return Ok(false);
     }
@@ -229,7 +221,7 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
         Ok(files) => files,
         Err(e) => {
             let error_msg = format!("Failed to find Cargo.lock files: {}", e);
-            eprintln!("{}", error_msg);
+            log::warn(format_args!("{}", error_msg));
             mark_commit_failed(db, commit, &error_msg).await?;
             return Ok(false);
         }
@@ -240,7 +232,7 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
         Ok(has_toml) => has_toml,
         Err(e) => {
             let error_msg = format!("Failed to check for Cargo.toml files: {}", e);
-            eprintln!("{}", error_msg);
+            log::warn(format_args!("{}", error_msg));
             mark_commit_failed(db, commit, &error_msg).await?;
             return Ok(false);
         }
@@ -248,7 +240,7 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
 
     if has_cargo_toml && lockfiles.is_empty() {
         let error_msg = "Found Cargo.toml files but no Cargo.lock files";
-        eprintln!("{}", error_msg);
+        log::warn(format_args!("{}", error_msg));
         mark_commit_failed(db, commit, error_msg).await?;
         return Ok(false);
     }
@@ -269,7 +261,7 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
         Ok(path) => path,
         Err(e) => {
             let error_msg = format!("Failed to get derivation: {}", e);
-            eprintln!("{}", error_msg);
+            log::warn(format_args!("{}", error_msg));
             mark_commit_failed(db, commit, &error_msg).await?;
             return Ok(false);
         }
@@ -285,7 +277,7 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
         }
         Err(e) => {
             let error_msg = format!("Build process error: {}", e);
-            eprintln!("{}", error_msg);
+            log::warn(format_args!("{}", error_msg));
             mark_commit_failed(db, commit, &error_msg).await?;
             Ok(false)
         }
@@ -383,10 +375,10 @@ async fn get_or_create_derivation_with_cancellation(
     // Check if derivation already exists and is valid
     if let Some(existing_derivation) = &commit.nix_derivation {
         if Path::new(existing_derivation).exists() {
-            println!("Using existing derivation: {}", existing_derivation);
+            log::info(format_args!("Using existing derivation: {}", existing_derivation));
             return Ok(existing_derivation.clone());
         }
-        println!("Existing derivation {} not found, will recreate", existing_derivation);
+        log::info(format_args!("Existing derivation {} not found, will recreate", existing_derivation));
     }
 
     // Build commit JSON for nix-instantiate
@@ -398,7 +390,7 @@ async fn get_or_create_derivation_with_cancellation(
     );
 
     // Instantiate derivation with cancellation checking
-    println!("Instantiating derivation for commit {}", commit.git_commit_id);
+    log::info(format_args!("Instantiating derivation for commit {}", commit.git_commit_id));
     
     let mut child = Command::new("nix-instantiate")
         .args([
@@ -446,10 +438,10 @@ async fn get_or_create_derivation_with_cancellation(
                         let lines: Vec<&str> = stdout_str.lines().collect();
 
                         let derivation_path = if lines.len() > 1 {
-                            println!(
+                            log::info(format_args!(
                                 "nix-instantiate returned {} lines, taking only the first line",
                                 lines.len()
-                            );
+                            ));
                             lines[0].trim().to_string()
                         } else {
                             stdout_str.trim().to_string()
@@ -463,7 +455,7 @@ async fn get_or_create_derivation_with_cancellation(
                             ));
                         }
 
-                        println!("Instantiated derivation: {}", derivation_path);
+                        log::info(format_args!("Instantiated derivation: {}", derivation_path));
 
                         // Update commit with derivation path
                         let tx = db.transaction().await.context("starting transaction")?;
@@ -486,24 +478,24 @@ async fn get_or_create_derivation_with_cancellation(
             // Check for cancellation every 10 seconds
             _ = interval.tick() => {
                 if let Err(e) = check_for_cancellation(db, commit).await {
-                    eprintln!("Error checking for cancellation: {}", e);
+                    log::warn(format_args!("Error checking for cancellation: {}", e));
                     continue;
                 }
                 
                 // Check if we should cancel
                 if should_cancel_ci(db, commit).await? {
-                    println!("CI cancellation requested for commit {}", commit.git_commit_id);
+                    log::info(format_args!("CI cancellation requested for commit {}", commit.git_commit_id));
                     
                     // Kill the child process
                     if let Err(e) = child.kill().await {
-                        eprintln!("Failed to kill nix-instantiate process: {}", e);
+                        log::warn(format_args!("Failed to kill nix-instantiate process: {}", e));
                     }
                     
                     // Wait for it to actually exit
                     let _ = child.wait().await;
                     
                     let error_msg = "CI cancelled by user request";
-                    eprintln!("{}", error_msg);
+                    log::warn(format_args!("{}", error_msg));
                     mark_commit_failed(db, commit, error_msg).await?;
                     return Err(anyhow::anyhow!("{}", error_msg));
                 }
@@ -518,7 +510,7 @@ async fn build_derivation_with_cancellation(
     repo_path: &Path,
     derivation_path: &str,
 ) -> anyhow::Result<bool> {
-    println!("Building derivation: {}", derivation_path);
+    log::info(format_args!("Building derivation: {}", derivation_path));
 
     // Start the nix-build process
     let mut child = Command::new("nix-build")
@@ -552,7 +544,7 @@ async fn build_derivation_with_cancellation(
                             .context("Failed to get output from nix-build")?;
                         
                         if status.success() {
-                            println!("nix-build completed successfully");
+                            log::info(format_args!("nix-build completed successfully"));
                             return Ok(true);
                         }
 
@@ -569,7 +561,7 @@ async fn build_derivation_with_cancellation(
                     }
                     Err(e) => {
                         let error_msg = format!("Failed to check nix-build status: {}", e);
-                        eprintln!("{}", error_msg);
+                        log::warn(format_args!("{}", error_msg));
                         mark_commit_failed(db, commit, &error_msg).await?;
                         return Ok(false);
                     }
@@ -579,24 +571,24 @@ async fn build_derivation_with_cancellation(
             // Check for cancellation every 30 seconds
             _ = interval.tick() => {
                 if let Err(e) = check_for_cancellation(db, commit).await {
-                    eprintln!("Error checking for cancellation: {}", e);
+                    log::warn(format_args!("Error checking for cancellation: {}", e));
                     continue;
                 }
                 
                 // Check if we should cancel
                 if should_cancel_ci(db, commit).await? {
-                    println!("CI cancellation requested for commit {}", commit.git_commit_id);
+                    log::info(format_args!("CI cancellation requested for commit {}", commit.git_commit_id));
                     
                     // Kill the child process
                     if let Err(e) = child.kill().await {
-                        eprintln!("Failed to kill nix-build process: {}", e);
+                        log::warn(format_args!("Failed to kill nix-build process: {}", e));
                     }
                     
                     // Wait for it to actually exit
                     let _ = child.wait().await;
                     
                     let error_msg = "CI cancelled by user request";
-                    eprintln!("{}", error_msg);
+                    log::warn(format_args!("{}", error_msg));
                     return Ok(false);
                 }
             }
@@ -639,7 +631,7 @@ async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
     
     for repo in repositories {
         if let Err(e) = sync_repository_prs(db, &repo).await {
-            eprintln!("Failed to sync PRs for repository {}: {}", repo.name, e);
+            log::warn(format_args!("Failed to sync PRs for repository {}: {}", repo.name, e));
         }
     }
     
@@ -660,7 +652,7 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         // Check if repository path exists
         let shell = Shell::new().ok()?; // just eat shell creation error; this basically cannot happen
         if !Path::new(&repo_path).exists() {
-            eprintln!("Warning: Repository path does not exist: {}", repo_path);
+            log::warn(format_args!("Warning: Repository path does not exist: {}", repo_path));
             return None;
         }
         shell.change_dir(&repo_path);
@@ -669,7 +661,7 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         let pr_infos = match lcilib::gh::list_updated_prs(&shell, last_synced)  {
             Ok(prs) => prs,
             Err(e) => {
-                eprintln!("Warning: Failed to get updated PRs for repository {}: {}", repo_path, e);
+                log::warn(format_args!("Warning: Failed to get updated PRs for repository {}: {}", repo_path, e));
                 return None;
             }
         };
@@ -677,7 +669,7 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         let current_repo = match lcilib::repo::current_repo(&shell) {
             Ok(repo) => repo,
             Err(e) => {
-                eprintln!("Warning: failed to get current repo for repository path {}: {}", repo_path, e);
+                log::warn(format_args!("Warning: failed to get current repo for repository path {}: {}", repo_path, e));
                 return None;
             }
         };
@@ -688,7 +680,7 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
 
     let Some(data) = data else { return Ok(()) };
     if !data.pr_infos.is_empty() {
-        println!("Found {} updated PRs for repository {}", data.pr_infos.len(), repo.name);
+        log::info(format_args!("Found {} updated PRs for repository {}", data.pr_infos.len(), repo.name));
     }
     for pr_info in &data.pr_infos {
         // A shell cannot live across await points so we have to recreate it on every iteration
@@ -698,10 +690,10 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         if let Err(e) = crate::pr::refresh(shell, &data.current_repo, pr_info, db).await
             .with_context(|| format!("failed to refresh PR #{}", pr_info.number))
         {
-            eprintln!("Warning: Failed to process PR #{} in repository {}: {}", 
-                pr_info.number, repo.name, e);
+            log::warn(format_args!("Warning: Failed to process PR #{} in repository {}: {}", 
+                pr_info.number, repo.name, e));
         } else {
-            println!("Successfully synced PR #{} in repository {}", pr_info.number, repo.name);
+            log::info(format_args!("Successfully synced PR #{} in repository {}", pr_info.number, repo.name));
         }
     }
     
@@ -733,7 +725,7 @@ async fn save_error_to_file(
     fs::write(&error_path, content).await
         .with_context(|| format!("Failed to write error file: {}", error_path.display()))?;
 
-    println!("Error details saved to: {}", error_path.display());
+    log::info(format_args!("Error details saved to: {}", error_path.display()));
 
     Ok(())
 }

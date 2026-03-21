@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::Context as _;
-use core::fmt;
 use lcilib::{Db, db::models::{Commit, PullRequest, Stack, Repository}};
 use std::collections::HashMap;
 use chrono::Utc;
 use tokio::task;
+
+use super::log;
 
 /// Find the next commit that needs testing, following the priority rules
 /// 
@@ -46,7 +49,7 @@ pub async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Comm
     for (stack, _commits, _priority) in &prioritized_stacks {
         if let Some(commit) = stack.get_next_untested_commit(&tx).await
             .context("getting next untested commit from stack")? {
-            log_info("Found commit from high-priority stack");
+            log::info("Found commit from high-priority stack");
             tx.commit().await.context("committing transaction")?;
             return Ok(Some(commit));
         }
@@ -75,7 +78,7 @@ pub async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Comm
     for (pr, _all_approved, _neg_untested, _age) in &prioritized_prs {
         if let Some(commit) = pr.get_next_untested_commit(&tx).await
             .context("getting next untested commit from PR")? {
-            log_info("Found commit from PR");
+            log::info("Found commit from PR");
             tx.commit().await.context("committing transaction")?;
             return Ok(Some(commit));
         }
@@ -95,7 +98,7 @@ pub async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Comm
     for (stack, _commits, _priority) in &low_priority_with_scores {
         if let Some(commit) = stack.get_next_untested_commit(&tx).await
             .context("getting next untested commit from low-priority stack")? {
-            log_info("Found commit from low-priority stack");
+            log::info("Found commit from low-priority stack");
             tx.commit().await.context("committing transaction")?;
             return Ok(Some(commit));
         }
@@ -117,7 +120,14 @@ async fn print_work_summary(
         .context("getting repository list")?;
     let repo_map: HashMap<i32, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
 
-    log_info("=== Work Summary ===");
+    if prs_needing_testing.is_empty() && high_priority_stacks.is_empty() && low_priority_stacks.is_empty() {
+        // If there is nothing to do, print no summary. We will use backoff logic
+        // to print "nothing to do" messages without spamming the user at a higher
+        // layer.
+        return Ok(());
+    }
+
+    log::info("=== Available Work Summary ===");
 
     // Print PR summary with individual commits
     for pr in prs_needing_testing {
@@ -146,7 +156,7 @@ async fn print_work_summary(
             )
         };
         
-        log_info(format_args!("{}", pr_line));
+        log::info(format_args!("{}", pr_line));
         
         // Get commits that need testing for this PR
         let commits_to_test = get_commits_needing_testing_for_pr(tx, pr).await
@@ -159,7 +169,7 @@ async fn print_work_summary(
                 &commit.jj_change_id
             };
             
-            log_info(format_args!(
+            log::info(format_args!(
                 "  - {} ({})",
                 commit.git_commit_id, jj_change_id_short
             ));
@@ -178,7 +188,7 @@ async fn print_work_summary(
         let (_total, signed, untested) = stack.get_commit_counts(tx).await
             .context("getting stack commit counts")?;
         
-        log_info(format_args!(
+        log::info(format_args!(
             "{} {} PRs {} ({} signed, {} left to test)",
             repo_name, stack.target_branch, pr_numbers.join(", "), signed, untested
         ));
@@ -186,7 +196,7 @@ async fn print_work_summary(
 
     // Print low-priority stack summary if any
     if !low_priority_stacks.is_empty() {
-        log_info("=== Low Priority Stacks ===");
+        log::info("=== Low Priority Stacks ===");
         for (stack, _commits) in low_priority_stacks {
             let repo_name = repo_map.get(&stack.repository_id)
                 .map_or("unknown", |r| r.name.as_str());
@@ -198,13 +208,13 @@ async fn print_work_summary(
             let (_total, signed, untested) = stack.get_commit_counts(tx).await
                 .context("getting low-priority stack commit counts")?;
             
-            log_info(format_args!(
+            log::info(format_args!(
                 "{} {} PRs {} ({} signed, {} left to test)",
                 repo_name, stack.target_branch, pr_numbers.join(", "), signed, untested
             ));
         }
     }
-    log_info("");
+    log::info("");
 
     Ok(())
 }
@@ -330,7 +340,7 @@ async fn calculate_commit_priority(
             Ok(true) => priority += 0.5,
             Ok(false) => {}, // No bonus
             Err(e) => {
-                log_info(format_args!("Warning: Failed to check GPG signature for commit {}: {}", commit.jj_change_id, e));
+                log::info(format_args!("Warning: Failed to check GPG signature for commit {}: {}", commit.jj_change_id, e));
                 // Assume unsigned
             }
         }
@@ -367,10 +377,4 @@ async fn is_commit_gpg_signed(commit: &Commit, repo_path: &str) -> anyhow::Resul
     .context("spawning blocking task for jj command")??;
     
     Ok(result)
-}
-
-/// Log a message with timestamp prefix
-fn log_info<D: fmt::Display>(message: D) {
-    let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-    println!("[{}] {}", timestamp, message);
 }
