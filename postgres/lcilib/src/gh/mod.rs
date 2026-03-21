@@ -96,3 +96,18 @@ pub fn post_pr_comment(shell: &Shell, pr_number: i32, comment: &str) -> Result<(
     
     Ok(())
 }
+
+/// Posts an approval review on a GitHub PR using the `gh` CLI tool.
+///
+/// # Errors
+///
+/// Returns an error if the `gh pr review` invocation fails.
+pub fn post_pr_approval(shell: &Shell, pr_number: i32, message: &str) -> Result<(), Error> {
+    let pr_num_s = pr_number.to_string();
+    let cmd_str = format!("gh pr review {pr_number} --approve --body '{message}'");
+    cmd!(shell, "gh pr review {pr_num_s} --approve --body {message}")
+        .run()
+        .map_err(|e| Error::Shell(cmd_str, e))?;
+    
+    Ok(())
+}

@@ -921,6 +921,7 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
         let updates = UpdatePullRequest {
             title: Some(pr_info.title.clone()),
             body: Some(pr_info.body.clone()),
+            author_login: Some(pr_info.author.login.clone()),
             tip_commit_id: Some(tip_commit.id),
             merge_status: Some(merge_status),
             ..Default::default()
@@ -934,6 +935,7 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
             pr_number: pr_info.number,
             title: pr_info.title.clone(),
             body: pr_info.body.clone(),
+            author_login: pr_info.author.login.clone(),
             tip_commit_id: tip_commit.id,
             merge_status,
             review_status: ReviewStatus::Unreviewed,

@@ -185,6 +185,7 @@ pub struct PullRequest {
     pub pr_number: i32,
     pub title: String,
     pub body: String,
+    pub author_login: String,
     pub tip_commit_id: i32,
     pub merge_status: MergeStatus,
     pub review_status: ReviewStatus,
@@ -289,6 +290,7 @@ pub struct NewPullRequest {
     pub pr_number: i32,
     pub title: String,
     pub body: String,
+    pub author_login: String,
     pub tip_commit_id: i32,
     pub merge_status: MergeStatus,
     pub review_status: ReviewStatus,
@@ -333,6 +335,7 @@ pub struct UpdateCommit {
 pub struct UpdatePullRequest {
     pub title: Option<String>,
     pub body: Option<String>,
+    pub author_login: Option<String>,
     pub tip_commit_id: Option<i32>,
     pub merge_status: Option<MergeStatus>,
     pub review_status: Option<ReviewStatus>,

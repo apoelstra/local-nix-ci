@@ -79,13 +79,132 @@ async fn run_pr_sync_cycle() -> anyhow::Result<()> {
     }
 }
 
-async fn check_pending_acks(_db: &mut Db) -> anyhow::Result<bool> {
-    // TODO: Query for PRs with pending ACKs
-    // TODO: Check if all non-merge commits are approved and passed CI
-    // TODO: Post ACK and update status to 'posted'
-    // Return true if work was done, false if nothing to do
-    time::sleep(Duration::from_secs(15)).await;
-    Ok(false)
+async fn check_pending_acks(db: &mut Db) -> anyhow::Result<bool> {
+    let tx = db.transaction().await.context("starting transaction")?;
+    
+    // Query for ACKs that are pending or failed and might be ready to post
+    let rows = tx
+        .query(
+            r#"
+            SELECT 
+                a.id as ack_id,
+                a.pull_request_id,
+                a.commit_id,
+                a.reviewer_name,
+                a.message,
+                a.status as ack_status,
+                pr.pr_number,
+                pr.review_status as pr_review_status,
+                pr.author_login,
+                r.path as repo_path
+            FROM acks a
+            JOIN pull_requests pr ON a.pull_request_id = pr.id
+            JOIN repositories r ON pr.repository_id = r.id
+            WHERE a.status IN ('pending', 'failed')
+            AND pr.review_status = 'approved'
+            ORDER BY a.created_at ASC
+            "#,
+            &[],
+        )
+        .await
+        .context("querying for pending ACKs")?;
+
+    let mut work_done = false;
+
+    for row in rows {
+        let ack_id: i32 = row.get("ack_id");
+        let pull_request_id: i32 = row.get("pull_request_id");
+        let pr_number: i32 = row.get("pr_number");
+        let reviewer_name: String = row.get("reviewer_name");
+        let message: String = row.get("message");
+        let repo_path: String = row.get("repo_path");
+        let author_login: String = row.get("author_login");
+
+        // Check if all non-merge commits in this PR are approved and passed CI
+        let commit_check_rows = tx
+            .query(
+                r#"
+                SELECT COUNT(*) as total_commits,
+                       COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'passed' THEN 1 END) as ready_commits
+                FROM commits c
+                JOIN pr_commits pc ON c.id = pc.commit_id
+                WHERE pc.pull_request_id = $1 
+                AND pc.is_current = true
+                AND pc.commit_type != 'merge'
+                "#,
+                &[&pull_request_id],
+            )
+            .await
+            .context("checking commit status for PR")?;
+
+        if let Some(commit_row) = commit_check_rows.first() {
+            let total_commits: i64 = commit_row.get("total_commits");
+            let ready_commits: i64 = commit_row.get("ready_commits");
+
+            if total_commits == 0 {
+                log::info(format_args!(
+                    "ACK for PR #{} not posted: no non-merge commits found",
+                    pr_number
+                ));
+                continue;
+            }
+
+            if ready_commits != total_commits {
+                log::info(format_args!(
+                    "ACK for PR #{} not posted: {}/{} non-merge commits are approved and passed CI",
+                    pr_number, ready_commits, total_commits
+                ));
+                continue;
+            }
+
+            // All conditions met, post the ACK
+            let shell = Shell::new().context("creating shell")?;
+            shell.change_dir(&repo_path);
+
+            let post_result = if author_login == "apoelstra" {
+                // Post comment instead of approval for own PRs
+                lcilib::gh::post_pr_comment(&shell, pr_number, &message)
+            } else {
+                // Post approval review
+                lcilib::gh::post_pr_approval(&shell, pr_number, &message)
+            };
+
+            match post_result {
+                Ok(()) => {
+                    // Update ACK status to 'posted'
+                    tx.execute(
+                        "UPDATE acks SET status = 'posted' WHERE id = $1",
+                        &[&ack_id],
+                    )
+                    .await
+                    .context("updating ACK status to posted")?;
+
+                    log::info(format_args!(
+                        "Posted ACK for PR #{} from reviewer {}",
+                        pr_number, reviewer_name
+                    ));
+                    work_done = true;
+                }
+                Err(e) => {
+                    log::warn_backoff(format!(
+                        "Failed to post ACK for PR #{} from reviewer {}: {}",
+                        pr_number, reviewer_name, e
+                    )).await;
+
+                    // Update ACK status to 'failed'
+                    tx.execute(
+                        "UPDATE acks SET status = 'failed' WHERE id = $1",
+                        &[&ack_id],
+                    )
+                    .await
+                    .context("updating ACK status to failed")?;
+                }
+            }
+        }
+    }
+
+    tx.commit().await.context("committing transaction")?;
+    Ok(work_done)
 }
 
 async fn check_approved_prs(_db: &mut Db) -> anyhow::Result<bool> {
