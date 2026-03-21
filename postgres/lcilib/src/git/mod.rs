@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use core::{fmt, str::FromStr};
+use std::collections::HashMap;
 use std::ffi::OsStr;
+use postgres_types::{FromSql, ToSql};
 use xshell::{Shell, cmd};
 
 /// Information about a git commit
@@ -13,14 +15,15 @@ pub struct CommitInfo {
     pub diffstat: String,
 }
 
-/// A representation of a git commit.
+/// A representation of a git commit ID.
 ///
 /// When deserialized, validated to be 20 hex digits, but stored
-/// as a string to allow efficient use with xshell.
-#[derive(Clone, Default, PartialEq, Eq, Debug, Hash)]
-pub struct GitCommit(String);
+/// as a string to allow efficient use with xshell and postgres.
+#[derive(Clone, Default, PartialEq, Eq, Debug, Hash, FromSql, ToSql)]
+#[postgres(transparent)]
+pub struct CommitId(String);
 
-impl<'de> serde::Deserialize<'de> for GitCommit {
+impl<'de> serde::Deserialize<'de> for CommitId {
     fn deserialize<D: serde::Deserializer<'de>>(des: D) -> Result<Self, D::Error> {
         use bitcoin_hashes::Sha1;
 
@@ -29,7 +32,7 @@ impl<'de> serde::Deserialize<'de> for GitCommit {
     }
 }
 
-impl FromStr for GitCommit {
+impl FromStr for CommitId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -44,15 +47,35 @@ impl FromStr for GitCommit {
     }
 }
 
-impl fmt::Display for GitCommit {
+impl fmt::Display for CommitId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl AsRef<OsStr> for GitCommit {
+impl AsRef<OsStr> for CommitId {
     fn as_ref(&self) -> &OsStr {
         self.0.as_ref()
+    }
+}
+
+impl CommitId {
+    /// A string representation of the commit ID
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Populates a map from string prefixes (length 7 and greater) to database commit IDs
+    pub fn populate_prefix_map<X: Copy>(&self, map: &mut HashMap<String, X>, target: X) {
+        for len in 7..=self.0.len() {
+            let prefix = self.0[..len].to_owned();
+            map.insert(prefix, target);
+        }
+    }
+
+    /// Returns the 8-character prefix of the commit ID.
+    pub fn prefix8(&self) -> &str {
+        &self.0[..8]
     }
 }
 
@@ -92,7 +115,7 @@ impl std::error::Error for Error {
 ///
 /// Returns an error if the git command fails to execute or if any of the parent commit IDs
 /// cannot be parsed as valid git commits.
-pub fn list_parents<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<Vec<GitCommit>, Error> {
+pub fn list_parents<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<Vec<CommitId>, Error> {
     let output = cmd!(shell, "git rev-list --parents -n 1 {commit}")
         .read()
         .map_err(Error::Shell)?;
@@ -100,7 +123,7 @@ pub fn list_parents<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<Vec<Git
     output
         .split_whitespace()
         .skip(1) // first element is the commit itself
-        .map(GitCommit::from_str)
+        .map(CommitId::from_str)
         .collect()
 }
 
@@ -110,12 +133,12 @@ pub fn list_parents<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<Vec<Git
 ///
 /// Returns an error if the git command fails to execute or if the resolved commit ID
 /// cannot be parsed as a valid git commit.
-pub fn resolve_ref<R: AsRef<OsStr>>(shell: &Shell, git_ref: R) -> Result<GitCommit, Error> {
+pub fn resolve_ref<R: AsRef<OsStr>>(shell: &Shell, git_ref: R) -> Result<CommitId, Error> {
     let output = cmd!(shell, "git rev-parse {git_ref}")
         .read()
         .map_err(Error::Shell)?;
 
-    GitCommit::from_str(output.trim())
+    CommitId::from_str(output.trim())
 }
 
 /// Checks whether a commit is available locally; failing that tries to fetch it from origin;
@@ -180,7 +203,7 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
 ///
 /// Returns an error if the fetch operation fails for both origin and upstream remotes,
 /// or if the resolved commit ID cannot be parsed as a valid git commit.
-pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<GitCommit, Error> {
+pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<CommitId, Error> {
     cmd!(shell, "git fetch origin {remote_ref}")
         .quiet()
         .ignore_stderr()

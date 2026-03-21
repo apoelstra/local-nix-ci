@@ -5,6 +5,7 @@ use lcilib::{
     Db,
     db::CiStatus,
     db::models::{Commit, PullRequest, Stack, Repository, UpdateCommit},
+    git::CommitId,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -171,15 +172,9 @@ async fn print_work_summary(
             .context("getting commits needing testing for PR")?;
         
         for commit in commits_to_test {
-            let jj_change_id_short = if commit.jj_change_id.len() > 12 {
-                &commit.jj_change_id[..12]
-            } else {
-                &commit.jj_change_id
-            };
-            
             log::info(format_args!(
                 "  - {} ({})",
-                commit.git_commit_id, jj_change_id_short
+                commit.git_commit_id, commit.jj_change_id.prefix8()
             ));
         }
     }
@@ -384,9 +379,9 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
 }
 
 #[expect(clippy::case_sensitive_file_extension_comparisons)] // neat lint. complains about looking for .lock files. deliberately violating for now.
-async fn find_cargo_lockfiles(repo_path: &Path, commit_id: &str) -> anyhow::Result<Vec<String>> {
+async fn find_cargo_lockfiles(repo_path: &Path, commit_id: &CommitId) -> anyhow::Result<Vec<String>> {
     let output = Command::new("git")
-        .args(["ls-tree", "-r", "--name-only", commit_id])
+        .args(["ls-tree", "-r", "--name-only", commit_id.as_str()])
         .current_dir(repo_path)
         .output()
         .await
@@ -442,9 +437,9 @@ async fn find_cargo_lockfiles(repo_path: &Path, commit_id: &str) -> anyhow::Resu
     Ok(lockfiles)
 }
 
-async fn check_has_cargo_toml(repo_path: &Path, commit_id: &str) -> anyhow::Result<bool> {
+async fn check_has_cargo_toml(repo_path: &Path, commit_id: &CommitId) -> anyhow::Result<bool> {
     let output = Command::new("git")
-        .args(["ls-tree", "-r", "--name-only", commit_id])
+        .args(["ls-tree", "-r", "--name-only", commit_id.as_str()])
         .current_dir(repo_path)
         .output()
         .await
@@ -740,7 +735,7 @@ async fn should_cancel_ci(db: &mut Db, commit: &Commit) -> anyhow::Result<bool> 
 
 async fn save_error_to_file(
     repo_path: &str,
-    commit_id: &str,
+    commit_id: &CommitId,
     operation: &str,
     stdout: &[u8],
     stderr: &[u8],

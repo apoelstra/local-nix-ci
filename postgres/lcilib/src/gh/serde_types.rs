@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::git::GitCommit;
+use crate::git::CommitId;
 
 /// An element of the `commits` array returned by `gh pr view --json`.
 #[derive(serde::Deserialize, Debug)]
 pub struct Commit {
-    pub oid: GitCommit,
+    pub oid: CommitId,
 }
 
 /// An "author" as returned by Github.
@@ -52,7 +52,7 @@ pub struct PrInfo {
     #[serde(default)]
     pub reviews: Vec<Review>,
     #[serde(rename = "headRefOid")]
-    pub head_commit: GitCommit,
+    pub head_commit: CommitId,
     #[serde(rename = "baseRefName")]
     pub base_ref: String,
     #[serde(default)]
@@ -69,7 +69,7 @@ pub struct PrInfo {
 
 impl PrInfo {
     /// Iterator over all the `oid`s in the `commits` array.
-    pub fn commit_ids(&self) -> impl Iterator<Item = &GitCommit> {
+    pub fn commit_ids(&self) -> impl Iterator<Item = &CommitId> {
         self.commits.iter().map(|c| &c.oid)
     }
 }

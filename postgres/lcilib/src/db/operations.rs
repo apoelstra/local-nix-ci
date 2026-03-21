@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use tokio_postgres::{Error, Transaction, Row};
 
+use crate::git::CommitId;
 use super::models::{Repository, NewRepository, Commit, NewCommit, UpdateCommit, PullRequest, NewPullRequest, UpdatePullRequest, Stack, NewStack, UpdateStack, Ack, AckStatus, NewAck, UpdateAck, AllowedApprover, NewAllowedApprover, LogEntry, PrCommit, CommitType};
 use super::util::{self, EntityType};
 
@@ -304,7 +305,7 @@ impl Commit {
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_by_git_id(tx: &Transaction<'_>, repository_id: i32, git_commit_id: &crate::git::GitCommit) -> Result<Option<Self>, OperationError> {
+    pub async fn find_by_git_id(tx: &Transaction<'_>, repository_id: i32, git_commit_id: &CommitId) -> Result<Option<Self>, OperationError> {
         let git_commit_str = git_commit_id.to_string();
         let rows = tx
             .query(

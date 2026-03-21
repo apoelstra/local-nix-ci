@@ -2,11 +2,15 @@
 
 pub mod log;
 
+use crate::git::CommitId;
+use crate::jj::ChangeId;
+
 use chrono::{DateTime, Utc};
 use std::fmt;
 use postgres_types::{FromSql, ToSql};
 
 pub use log::Log;
+
 
 /// Error type for parsing enum values from strings
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,8 +171,8 @@ pub struct Repository {
 pub struct Commit {
     pub id: i32,
     pub repository_id: i32,
-    pub git_commit_id: String,
-    pub jj_change_id: String,
+    pub git_commit_id: CommitId,
+    pub jj_change_id: ChangeId,
     pub review_status: ReviewStatus,
     pub should_run_ci: bool,
     pub ci_status: CiStatus,
@@ -276,8 +280,8 @@ pub struct NewRepository {
 #[derive(Debug, Clone)]
 pub struct NewCommit {
     pub repository_id: i32,
-    pub git_commit_id: crate::git::GitCommit,
-    pub jj_change_id: String,
+    pub git_commit_id: CommitId,
+    pub jj_change_id: ChangeId,
     pub review_status: ReviewStatus,
     pub should_run_ci: bool,
     pub ci_status: CiStatus,

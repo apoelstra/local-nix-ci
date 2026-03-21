@@ -241,7 +241,7 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[Commit], acks: &[Ack]) {
         println!("Commits Needing CI ({}):", ci_needed.len());
         for commit in ci_needed.iter().take(10) { // Limit to first 10
             println!("  {}: {}", 
-                &commit.git_commit_id[..8], 
+                commit.git_commit_id.prefix8(), 
                 commit.review_text.as_deref().unwrap_or("(no review text)").lines().next().unwrap_or("")
             );
         }
@@ -270,7 +270,7 @@ fn show_ci_status(commits: &[Commit]) {
         println!("CI Failures ({}):", ci_failed.len());
         for commit in ci_failed.iter().take(10) { // Limit to first 10
             println!("  {}: {}", 
-                &commit.git_commit_id[..8], 
+                commit.git_commit_id.prefix8(), 
                 commit.review_text.as_deref().unwrap_or("(no review text)").lines().next().unwrap_or("")
             );
         }
@@ -289,7 +289,7 @@ fn show_ci_status(commits: &[Commit]) {
         println!("Recent CI Passes (showing last 5):");
         for commit in ci_passed.iter().take(5) {
             println!("  {}: {}", 
-                &commit.git_commit_id[..8], 
+                commit.git_commit_id.prefix8(), 
                 commit.review_text.as_deref().unwrap_or("(no review text)").lines().next().unwrap_or("")
             );
         }

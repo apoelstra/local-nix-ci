@@ -183,7 +183,7 @@ pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                 .context("failed to commit transaction")?;
             
             // Review this commit
-            return crate::commit::review(&commit.git_commit_id, db).await
+            return crate::commit::review(&shell, &commit.git_commit_id, db).await
                 .context("failed to review commit");
         }
     }
@@ -220,12 +220,7 @@ async fn scan_and_update_acks(
     // Build a map of commit ID prefixes to commit records for fast lookup
     let mut commit_map = HashMap::new();
     for commit in commit_records {
-        let commit_id = &commit.git_commit_id;
-        // Add all possible prefixes of 7+ characters
-        for len in 7..=commit_id.len() {
-            let prefix = &commit_id[..len];
-            commit_map.insert(prefix.to_string(), commit);
-        }
+        commit.git_commit_id.populate_prefix_map(&mut commit_map, commit.id);
     }
 
     // Collect all ACKs from comments and reviews
@@ -351,47 +346,38 @@ async fn scan_and_update_acks(
 }
 
 /// Extract ACK text and commit ID from a GitHub comment/review body
-fn extract_ack_from_text(text: &str, commit_map: &HashMap<String, &Commit>) -> Option<(String, i32)> {
+fn extract_ack_from_text(text: &str, commit_map: &HashMap<String, i32>) -> Option<(String, i32)> {
     for line in text.lines() {
-        if let Some((ack_text, commit_id)) = extract_ack_from_line(line, commit_map) {
-            return Some((ack_text, commit_id));
-        }
-    }
-    None
-}
+        // Split line into alphanumeric words (punctuation acts as separator)
+        let words: Vec<&str> = line
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .collect();
+    
+        // Look for words ending in "ACK" (case sensitive for ACK part)
+        let mut ack_word_pos = None;
 
-/// Extract ACK text and commit ID from a single line
-fn extract_ack_from_line(line: &str, commit_map: &HashMap<String, &Commit>) -> Option<(String, i32)> {
-    // Split line into alphanumeric words (punctuation acts as separator)
-    let words: Vec<&str> = line
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .collect();
+        for (i, word) in words.iter().enumerate() {
+            if word.ends_with("ACK") && !word.ends_with("NACK") && !word.ends_with("nACK") {
+                ack_word_pos = Some(i);
+                break;
+            }
+        }
     
-    // Look for words ending in "ACK" (case sensitive for ACK part)
-    let mut ack_word_pos = None;
-
-    for (i, word) in words.iter().enumerate() {
-        if word.ends_with("ACK") && !word.ends_with("NACK") && !word.ends_with("nACK") {
-            ack_word_pos = Some(i);
-            break;
+        let ack_pos = ack_word_pos?;
+    
+        // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
+        for word in words.iter().skip(ack_pos) {
+            if word.len() >= 7 && word.chars().all(|c| c.is_ascii_hexdigit()
+                && !c.is_ascii_uppercase())
+                && let Some(commit_id) = commit_map.get(*word)
+            {
+                // Found a valid commit ID, construct the ACK text
+                let ack_text = line.trim().to_string();
+                return Some((ack_text, *commit_id));
+            }
         }
     }
-    
-    let ack_pos = ack_word_pos?;
-    
-    // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
-    for word in words.iter().skip(ack_pos) {
-        if word.len() >= 7 && word.chars().all(|c| c.is_ascii_hexdigit()
-            && !c.is_ascii_uppercase())
-            && let Some(commit) = commit_map.get(*word)
-        {
-            // Found a valid commit ID, construct the ACK text
-            let ack_text = line.trim().to_string();
-            return Some((ack_text, commit.id));
-        }
-    }
-    
     None
 }
 
@@ -737,7 +723,7 @@ async fn erase_ack(
 }
 
 /// Show git diff with specified context
-fn show_diff(shell: &Shell, commit_hash: &str, context: Option<u32>) -> anyhow::Result<()> {
+fn show_diff(shell: &Shell, commit_hash: &git::CommitId, context: Option<u32>) -> anyhow::Result<()> {
     if let Some(lines) = context {
         let lines = lines.to_string();
         cmd!(shell, "git show --unified={lines} {commit_hash}")
@@ -753,7 +739,7 @@ fn show_diff(shell: &Shell, commit_hash: &str, context: Option<u32>) -> anyhow::
 }
 
 /// Show git diff stat
-fn show_diff_stat(shell: &Shell, commit_hash: &str) -> anyhow::Result<()> {
+fn show_diff_stat(shell: &Shell, commit_hash: &git::CommitId) -> anyhow::Result<()> {
     cmd!(shell, "git show --stat {commit_hash}")
         .run()
         .context("failed to run git show --stat")?;
@@ -885,7 +871,7 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
             commit
         } else {
             // Get the jj change ID for this commit
-            let jj_change_id = jj::get_change_id_for_commit(&shell, &commit_oid.to_string())
+            let jj_change_id = jj::get_change_id_for_commit(&shell, commit_oid)
                 .with_context(|| format!("failed to get jj change ID for commit {}", commit_oid))?;
 
             // Create new commit record

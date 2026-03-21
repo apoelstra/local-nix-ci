@@ -347,7 +347,7 @@ async fn process_approved_pr(
         let shell = Shell::new().context("creating shell")?;
         shell.change_dir(&repo.path);
         
-        let change_id = match lcilib::jj::create_merge_commit(&shell, &tip_commit.git_commit_id, &pr.target_branch, &description) {
+        let jj_change_id = match lcilib::jj::create_merge_commit(&shell, tip_commit.git_commit_id.as_str(), &pr.target_branch, &description) {
             Ok(id) => id,
             Err(e) => {
                 log::warn(format_args!("Failed to create merge commit for PR #{}: {}", pr.pr_number, e));
@@ -356,14 +356,14 @@ async fn process_approved_pr(
             }
         };
         
-        let git_commit_id = lcilib::jj::get_current_git_commit_for_change_id(&shell, &change_id)
+        let git_commit_id = lcilib::jj::get_current_git_commit_for_change_id(&shell, &jj_change_id)
             .context("getting git commit ID for merge")?;
         
         // Create commit record
         let new_commit = NewCommit {
             repository_id: pr.repository_id,
-            git_commit_id: git_commit_id.parse().context("parsing git commit ID")?,
-            jj_change_id: change_id,
+            git_commit_id,
+            jj_change_id,
             review_status: ReviewStatus::Approved,
             should_run_ci: true,
             ci_status: CiStatus::Unstarted,
@@ -455,7 +455,7 @@ async fn try_extend_stack(
     
     // The parent for the merge is either the last commit in the stack or the target branch
     let stack_tip = if let Some(last_commit) = stack_commits.last() {
-        &last_commit.jj_change_id
+        last_commit.jj_change_id.as_str()
     } else {
         &stack.target_branch
     };
@@ -476,17 +476,17 @@ async fn try_extend_stack(
     };
     
     // Create merge commit: merge PR tip into stack tip
-    match lcilib::jj::create_merge_commit(&shell, &tip_commit.git_commit_id, stack_tip, &description) {
-        Ok(change_id) => {
+    match lcilib::jj::create_merge_commit(&shell, tip_commit.git_commit_id.as_str(), stack_tip, &description) {
+        Ok(jj_change_id) => {
             // Get the git commit ID for the new merge
-            let git_commit_id = lcilib::jj::get_current_git_commit_for_change_id(&shell, &change_id)
+            let git_commit_id = lcilib::jj::get_current_git_commit_for_change_id(&shell, &jj_change_id)
                 .context("getting git commit ID for stack merge")?;
             
             // Create commit record for the new merge
             let new_commit = NewCommit {
                 repository_id: pr.repository_id,
-                git_commit_id: git_commit_id.parse().context("parsing git commit ID")?,
-                jj_change_id: change_id,
+                git_commit_id,
+                jj_change_id,
                 review_status: ReviewStatus::Approved,
                 should_run_ci: true,
                 ci_status: CiStatus::Unstarted,
