@@ -449,6 +449,80 @@ impl Commit {
         commit.update(tx, updates).await
     }
 
+    /// Update commit with custom log message
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the database operation fails.
+    pub async fn update_with_custom_log(&self, tx: &Transaction<'_>, updates: UpdateCommit, log_action: &str, log_description: Option<&str>, log_reason: Option<&str>) -> Result<Self, OperationError> {
+        let mut set_clauses = Vec::new();
+        let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
+        let mut param_count = 1;
+
+        if let Some(review_status) = &updates.review_status {
+            set_clauses.push(format!("review_status = ${}", param_count));
+            params.push(review_status);
+            param_count += 1;
+        }
+
+        if let Some(should_run_ci) = &updates.should_run_ci {
+            set_clauses.push(format!("should_run_ci = ${}", param_count));
+            params.push(should_run_ci);
+            param_count += 1;
+        }
+
+        if let Some(ci_status) = &updates.ci_status {
+            set_clauses.push(format!("ci_status = ${}", param_count));
+            params.push(ci_status);
+            param_count += 1;
+        }
+
+        if let Some(nix_derivation) = &updates.nix_derivation {
+            set_clauses.push(format!("nix_derivation = ${}", param_count));
+            params.push(nix_derivation);
+            param_count += 1;
+        }
+
+        if let Some(review_text) = &updates.review_text {
+            set_clauses.push(format!("review_text = ${}", param_count));
+            params.push(review_text);
+            param_count += 1;
+        }
+
+        if set_clauses.is_empty() {
+            return Ok(self.clone());
+        }
+
+        params.push(&self.id);
+        let query = format!(
+            r#"
+            UPDATE commits SET {}
+            WHERE id = ${}
+            RETURNING id, repository_id, git_commit_id, jj_change_id, review_status,
+                     should_run_ci, ci_status, nix_derivation, review_text, created_at
+            "#,
+            set_clauses.join(", "),
+            param_count
+        );
+
+        let row = tx.query_one(&query, &params).await
+            .map_err(|e| OperationError::with_context(e, "update_with_custom_log", "Commit", &format!("id: {}, git_commit_id: {}", self.id, self.git_commit_id)))?;
+        let updated_commit = Self::from_row(&row);
+
+        // Log with custom message
+        util::log_action(
+            tx,
+            EntityType::Commit,
+            self.id,
+            log_action,
+            log_description,
+            log_reason,
+        ).await
+        .map_err(|e| OperationError::with_context(e, "update_with_custom_log", "Commit", "logging custom action"))?;
+
+        Ok(updated_commit)
+    }
+
     fn from_row(row: &Row) -> Self {
         Self {
             id: row.get("id"),
