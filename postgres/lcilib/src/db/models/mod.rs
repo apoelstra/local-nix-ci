@@ -89,8 +89,8 @@ pub enum MergeStatus {
     Pending,
     #[postgres(name = "cancelled")]
     Cancelled,
-    #[postgres(name = "failed")]
-    Failed,
+    #[postgres(name = "conflicted")]
+    Conflicted,
     #[postgres(name = "pushed")]
     Pushed,
 }
@@ -100,7 +100,7 @@ impl fmt::Display for MergeStatus {
         match self {
             Self::Pending => write!(f, "pending"),
             Self::Cancelled => write!(f, "cancelled"),
-            Self::Failed => write!(f, "failed"),
+            Self::Conflicted => write!(f, "conflicted"),
             Self::Pushed => write!(f, "pushed"),
         }
     }
@@ -185,6 +185,7 @@ pub struct PullRequest {
     pub title: String,
     pub body: String,
     pub tip_commit_id: i32,
+    pub merge_status: MergeStatus,
     pub review_status: ReviewStatus,
     pub priority: i32,
     pub ok_to_merge: bool,
@@ -201,7 +202,6 @@ pub struct Stack {
     pub id: i32,
     pub repository_id: i32,
     pub target_branch: String,
-    pub status: MergeStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -289,6 +289,7 @@ pub struct NewPullRequest {
     pub title: String,
     pub body: String,
     pub tip_commit_id: i32,
+    pub merge_status: MergeStatus,
     pub review_status: ReviewStatus,
     pub priority: i32,
     pub ok_to_merge: bool,
@@ -299,7 +300,6 @@ pub struct NewPullRequest {
 pub struct NewStack {
     pub repository_id: i32,
     pub target_branch: String,
-    pub status: MergeStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -333,6 +333,7 @@ pub struct UpdatePullRequest {
     pub title: Option<String>,
     pub body: Option<String>,
     pub tip_commit_id: Option<i32>,
+    pub merge_status: Option<MergeStatus>,
     pub review_status: Option<ReviewStatus>,
     pub priority: Option<i32>,
     pub ok_to_merge: Option<bool>,
@@ -342,7 +343,6 @@ pub struct UpdatePullRequest {
 #[derive(Debug, Clone, Default)]
 pub struct UpdateStack {
     pub target_branch: Option<String>,
-    pub status: Option<MergeStatus>,
 }
 
 #[derive(Debug, Clone, Default)]

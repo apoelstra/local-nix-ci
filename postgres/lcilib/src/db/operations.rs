@@ -575,12 +575,13 @@ impl PullRequest {
             .query(
                 r#"
                 SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, 
-                       pr.tip_commit_id, pr.review_status, pr.priority, pr.ok_to_merge, 
+                       pr.tip_commit_id, pr.merge_status, pr.review_status, pr.priority, pr.ok_to_merge, 
                        pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
                 FROM pull_requests pr
                 JOIN pr_commits pc ON pr.id = pc.pull_request_id AND pc.is_current = true
                 JOIN commits c ON pc.commit_id = c.id
-                WHERE c.review_status = 'approved' 
+                WHERE pr.merge_status = 'pending'
+                AND c.review_status = 'approved' 
                 AND c.ci_status = 'unstarted' 
                 AND c.should_run_ci = true
                 ORDER BY pr.priority DESC, pr.created_at ASC
@@ -662,9 +663,9 @@ impl PullRequest {
             .query_one(
                 r#"
                 INSERT INTO pull_requests (repository_id, pr_number, title, body, tip_commit_id, 
-                                         review_status, priority, ok_to_merge, required_reviewers)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                RETURNING id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                                         merge_status, review_status, priority, ok_to_merge, required_reviewers)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING id, repository_id, pr_number, title, body, tip_commit_id, merge_status, review_status, 
                          priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 "#,
                 &[
@@ -673,6 +674,7 @@ impl PullRequest {
                     &new_pr.title,
                     &new_pr.body,
                     &new_pr.tip_commit_id,
+                    &new_pr.merge_status,
                     &new_pr.review_status,
                     &new_pr.priority,
                     &new_pr.ok_to_merge,
@@ -710,7 +712,7 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                SELECT id, repository_id, pr_number, title, body, tip_commit_id, merge_status, review_status, 
                        priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests WHERE id = $1
                 "#,
@@ -731,7 +733,7 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                SELECT id, repository_id, pr_number, title, body, tip_commit_id, merge_status, review_status, 
                        priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests WHERE repository_id = $1 AND pr_number = $2
                 "#,
@@ -752,7 +754,7 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+                SELECT id, repository_id, pr_number, title, body, tip_commit_id, merge_status, review_status, 
                        priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests 
                 WHERE review_status = 'approved' AND ok_to_merge = true
@@ -886,6 +888,12 @@ impl PullRequest {
             param_count += 1;
         }
 
+        if let Some(status) = &updates.merge_status {
+            set_clauses.push(format!("merge_status = ${}", param_count));
+            params.push(status);
+            param_count += 1;
+        }
+
         if let Some(required_reviewers) = &updates.required_reviewers {
             set_clauses.push(format!("required_reviewers = ${}", param_count));
             params.push(required_reviewers);
@@ -901,7 +909,7 @@ impl PullRequest {
             r#"
             UPDATE pull_requests SET {}
             WHERE id = ${}
-            RETURNING id, repository_id, pr_number, title, body, tip_commit_id, review_status, 
+            RETURNING id, repository_id, pr_number, title, body, tip_commit_id, merge_status, review_status, 
                      priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
             "#,
             set_clauses.join(", "),
@@ -933,6 +941,7 @@ impl PullRequest {
             title: row.get("title"),
             body: row.get("body"),
             tip_commit_id: row.get("tip_commit_id"),
+            merge_status: row.get("merge_status"),
             review_status: row.get("review_status"),
             priority: row.get("priority"),
             ok_to_merge: row.get("ok_to_merge"),
@@ -957,9 +966,8 @@ impl Stack {
         let stack_rows = tx
             .query(
                 r#"
-                SELECT s.id, s.repository_id, s.target_branch, s.status, s.created_at, s.updated_at
+                SELECT s.id, s.repository_id, s.target_branch, s.created_at, s.updated_at
                 FROM stacks s
-                WHERE s.status = 'pending'
                 ORDER BY s.repository_id, s.target_branch, s.created_at ASC
                 "#,
                 &[],
@@ -1000,13 +1008,12 @@ impl Stack {
             .map(|(stack, _)| (stack.repository_id, stack.target_branch.clone()))
             .collect();
 
-        // Find all other pending stacks
+        // Find all other stacks
         let stack_rows = tx
             .query(
                 r#"
-                SELECT s.id, s.repository_id, s.target_branch, s.status, s.created_at, s.updated_at
+                SELECT s.id, s.repository_id, s.target_branch, s.created_at, s.updated_at
                 FROM stacks s
-                WHERE s.status = 'pending'
                 ORDER BY s.created_at ASC
                 "#,
                 &[],
@@ -1067,7 +1074,7 @@ impl Stack {
             .query(
                 r#"
                 SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, 
-                       pr.tip_commit_id, pr.review_status, pr.priority, pr.ok_to_merge, 
+                       pr.tip_commit_id, pr.merge_status, pr.review_status, pr.priority, pr.ok_to_merge, 
                        pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
                 FROM pull_requests pr
                 JOIN pr_commits pc ON pr.id = pc.pull_request_id AND pc.is_current = true
@@ -1123,11 +1130,11 @@ impl Stack {
         let row = tx
             .query_one(
                 r#"
-                INSERT INTO stacks (repository_id, target_branch, status)
-                VALUES ($1, $2, $3)
-                RETURNING id, repository_id, target_branch, status, created_at, updated_at
+                INSERT INTO stacks (repository_id, target_branch)
+                VALUES ($1, $2)
+                RETURNING id, repository_id, target_branch, created_at, updated_at
                 "#,
-                &[&new_stack.repository_id, &new_stack.target_branch, &new_stack.status],
+                &[&new_stack.repository_id, &new_stack.target_branch],
             )
             .await
             .map_err(|e| OperationError::with_context(e, "create", "Stack", &format!("target_branch: {}", new_stack.target_branch)))?;
@@ -1155,7 +1162,7 @@ impl Stack {
     pub async fn find_by_id(tx: &Transaction<'_>, id: i32) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .query(
-                "SELECT id, repository_id, target_branch, status, created_at, updated_at FROM stacks WHERE id = $1",
+                "SELECT id, repository_id, target_branch, created_at, updated_at FROM stacks WHERE id = $1",
                 &[&id],
             )
             .await
@@ -1164,22 +1171,22 @@ impl Stack {
         Ok(rows.first().map(Self::from_row))
     }
 
-    /// Find pending stacks
+    /// Find all stacks
     /// 
     /// # Errors
     /// 
     /// Returns an error if the database operation fails.
-    pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
+    pub async fn find_all(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, target_branch, status, created_at, updated_at 
-                FROM stacks WHERE status = 'pending' ORDER BY created_at ASC
+                SELECT id, repository_id, target_branch, created_at, updated_at 
+                FROM stacks ORDER BY created_at ASC
                 "#,
                 &[],
             )
             .await
-            .map_err(|e| OperationError::new(e, "find_pending", "Stack", None))?;
+            .map_err(|e| OperationError::new(e, "find_all", "Stack", None))?;
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
@@ -1249,12 +1256,6 @@ impl Stack {
             param_count += 1;
         }
 
-        if let Some(status) = &updates.status {
-            set_clauses.push(format!("status = ${}", param_count));
-            params.push(status);
-            param_count += 1;
-        }
-
         if set_clauses.is_empty() {
             return Ok(self.clone());
         }
@@ -1264,7 +1265,7 @@ impl Stack {
             r#"
             UPDATE stacks SET {}
             WHERE id = ${}
-            RETURNING id, repository_id, target_branch, status, created_at, updated_at
+            RETURNING id, repository_id, target_branch, created_at, updated_at
             "#,
             set_clauses.join(", "),
             param_count
@@ -1292,7 +1293,6 @@ impl Stack {
             id: row.get("id"),
             repository_id: row.get("repository_id"),
             target_branch: row.get("target_branch"),
-            status: row.get("status"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }

@@ -41,10 +41,10 @@ impl std::error::Error for Error {
 /// Github returns JSON we cannot parse.
 pub fn get_pr_info(shell: &Shell, pr_number: usize) -> Result<PrInfo, Error> {
     let pr_num_s = pr_number.to_string();
-    let cmd_str = format!("gh pr view {pr_number} --json title,body,author,commits,comments,reviews,headRefOid,baseRefName");
+    let cmd_str = format!("gh pr view {pr_number} --json title,body,author,commits,comments,reviews,headRefOid,baseRefName,state,mergeable,mergeStateStatus,closed,mergedAt");
     let output = cmd!(
         shell,
-        "gh pr view {pr_num_s} --json title,body,author,commits,comments,reviews,headRefOid,baseRefName"
+        "gh pr view {pr_num_s} --json title,body,author,commits,comments,reviews,headRefOid,baseRefName,state,mergeable,mergeStateStatus,closed,mergedAt"
     )
     .read()
     .map_err(|e| Error::Shell(cmd_str.clone(), e))?;

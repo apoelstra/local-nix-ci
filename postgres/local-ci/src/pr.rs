@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use lcilib::{
     Db,
-    db::{models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest, PrCommit, Ack, NewAck, AckStatus}, EntityType, Log},
+    db::{models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest, PrCommit, Ack, NewAck, AckStatus, MergeStatus}, EntityType, Log},
     gh,
     git,
     jj,
@@ -45,6 +45,7 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         println!();
         println!("{}", if pr.body.is_empty() { "(empty)" } else { &pr.body });
         println!();
+        println!("Merge Status: {:?}", pr.merge_status);
         println!("Review Status: {:?}", pr.review_status);
         println!("Priority: {}", pr.priority);
         println!("OK to Merge: {}", pr.ok_to_merge);
@@ -401,6 +402,27 @@ fn parse_github_timestamp(timestamp: &str) -> anyhow::Result<DateTime<Utc>> {
         .with_context(|| format!("failed to parse GitHub timestamp: {}", timestamp))
 }
 
+/// Determine merge status from GitHub PR data
+fn determine_merge_status_from_github(pr_info: &gh::PrInfo) -> MergeStatus {
+    // If the PR is merged, this is merge status 'pushed'
+    if pr_info.merged_at.is_some() {
+        return MergeStatus::Pushed;
+    }
+    
+    // If it is closed, this is merge status 'cancelled'
+    if pr_info.closed {
+        return MergeStatus::Cancelled;
+    }
+    
+    // Otherwise, if the PR cannot be merged due to conflict, it is 'conflicted'
+    if pr_info.mergeable == "CONFLICTING" {
+        return MergeStatus::Conflicted;
+    }
+    
+    // Otherwise, it is 'pending'
+    MergeStatus::Pending
+}
+
 /// Interactive review of a PR
 /// 
 /// # Errors
@@ -559,6 +581,7 @@ fn show_pr_info(
     println!();
     println!("Diffstat: {}", commit_info.diffstat);
     println!();
+    println!("Merge Status: {:?}", pr.merge_status);
     println!("Review Status: {:?}", pr.review_status);
     println!("Priority: {}", pr.priority);
     println!("OK to Merge: {}", pr.ok_to_merge);
@@ -872,6 +895,9 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let tip_commit = commit_records.last()
         .context("PR has no commits")?;
 
+    // Determine merge status from GitHub data
+    let merge_status = determine_merge_status_from_github(&pr_info);
+
     // Create or update the PR record
     let pr_record = if let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
         .context("failed to query pull request")?
@@ -881,6 +907,7 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             title: Some(pr_info.title.clone()),
             body: Some(pr_info.body.clone()),
             tip_commit_id: Some(tip_commit.id),
+            merge_status: Some(merge_status),
             ..Default::default()
         };
         pr.update(&tx, updates).await
@@ -893,6 +920,7 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             title: pr_info.title.clone(),
             body: pr_info.body.clone(),
             tip_commit_id: tip_commit.id,
+            merge_status: merge_status,
             review_status: ReviewStatus::Unreviewed,
             priority: 0,
             ok_to_merge: true,

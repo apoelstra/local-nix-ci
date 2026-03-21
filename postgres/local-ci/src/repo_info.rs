@@ -94,6 +94,7 @@ async fn get_all_prs_for_repo(
         title: row.get("title"),
         body: row.get("body"),
         tip_commit_id: row.get("tip_commit_id"),
+        merge_status: row.get("merge_status"),
         review_status: row.get("review_status"),
         priority: row.get("priority"),
         ok_to_merge: row.get("ok_to_merge"),

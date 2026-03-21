@@ -54,6 +54,16 @@ pub struct PrInfo {
     pub head_commit: GitCommit,
     #[serde(rename = "baseRefName")]
     pub base_ref: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub mergeable: String,
+    #[serde(rename = "mergeStateStatus", default)]
+    pub merge_state_status: String,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(rename = "mergedAt")]
+    pub merged_at: Option<String>,
 }
 
 impl PrInfo {

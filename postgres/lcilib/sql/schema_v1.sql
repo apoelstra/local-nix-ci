@@ -2,7 +2,7 @@
 
 CREATE TYPE ack_status AS ENUM ('pending', 'failed', 'posted', 'external');
 CREATE TYPE ci_status AS ENUM ('unstarted', 'skipped', 'failed', 'passed');
-CREATE TYPE merge_status AS ENUM ('pending', 'cancelled', 'failed', 'pushed');
+CREATE TYPE merge_status AS ENUM ('pending', 'cancelled', 'conflicted', 'pushed');
 CREATE TYPE review_status AS ENUM ('unreviewed', 'rejected', 'approved');
 
 CREATE TYPE commit_type AS ENUM ('normal', 'single', 'tip', 'merge');
@@ -49,6 +49,7 @@ CREATE TABLE pull_requests (
     title TEXT NOT NULL DEFAULT '',
     body TEXT NOT NULL DEFAULT '',
     tip_commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE,
+    merge_status merge_status NOT NULL DEFAULT 'pending',
     review_status review_status NOT NULL DEFAULT 'unreviewed',
     priority INTEGER NOT NULL DEFAULT 0,
     ok_to_merge BOOLEAN NOT NULL DEFAULT TRUE,
@@ -79,7 +80,6 @@ CREATE TABLE stacks (
     id SERIAL PRIMARY KEY,
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     target_branch VARCHAR(255) NOT NULL,
-    status merge_status NOT NULL DEFAULT 'pending',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -146,7 +146,6 @@ CREATE INDEX idx_pr_commits_is_current ON pr_commits(is_current);
 CREATE INDEX idx_pr_commits_commit_type ON pr_commits(commit_type);
 
 CREATE INDEX idx_stacks_repository_id ON stacks(repository_id);
-CREATE INDEX idx_stacks_status ON stacks(status);
 CREATE INDEX idx_stacks_target_branch ON stacks(target_branch);
 CREATE INDEX idx_stacks_repo_branch ON stacks(repository_id, target_branch);
 
