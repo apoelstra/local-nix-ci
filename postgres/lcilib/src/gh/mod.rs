@@ -56,3 +56,18 @@ pub fn get_pr_info(shell: &Shell, pr_number: usize) -> Result<PrInfo, Error> {
 
     serde_json::from_str(&output).map_err(|e| Error::Json(output, e))
 }
+
+/// Posts a comment on a GitHub PR using the `gh` CLI tool.
+///
+/// # Errors
+///
+/// Returns an error if the `gh pr comment` invocation fails.
+pub fn post_pr_comment(shell: &Shell, pr_number: usize, comment: &str) -> Result<(), Error> {
+    let pr_num_s = pr_number.to_string();
+    let cmd_str = format!("gh pr comment {pr_number} --body '{comment}'");
+    cmd!(shell, "gh pr comment {pr_num_s} --body {comment}")
+        .run()
+        .map_err(|e| Error::Shell(cmd_str, e))?;
+    
+    Ok(())
+}

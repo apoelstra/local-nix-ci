@@ -992,9 +992,34 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     scan_and_update_acks(&tx, &pr_info, &pr_record, &commit_records).await
         .context("failed to scan and update ACKs")?;
 
-    // Commit the transaction
-    tx.commit().await
-        .context("failed to commit transaction")?;
+    // If PR is conflicted, check if we need to post a rebase comment
+    if merge_status == MergeStatus::Conflicted {
+        let rebase_comment = format!("{} needs rebase", tip_commit.git_commit_id);
+        
+        // Check if this exact comment already exists
+        let comment_exists = pr_info.comments.iter()
+            .any(|comment| comment.body.trim() == rebase_comment);
+        
+        if !comment_exists {
+            // Commit the transaction before posting the comment
+            tx.commit().await
+                .context("failed to commit transaction")?;
+            
+            // Post the rebase comment
+            gh::post_pr_comment(&shell, pr_number, &rebase_comment)
+                .context("failed to post rebase comment")?;
+            
+            println!("Posted rebase comment: {}", rebase_comment);
+        } else {
+            // Commit the transaction normally
+            tx.commit().await
+                .context("failed to commit transaction")?;
+        }
+    } else {
+        // Commit the transaction normally
+        tx.commit().await
+            .context("failed to commit transaction")?;
+    }
 
     println!("Successfully refreshed PR #{}", pr_number);
     println!("Title: {}", pr_info.title);
