@@ -119,7 +119,7 @@ async fn print_work_summary(
 
     log_info("=== Work Summary ===");
 
-    // Print PR summary
+    // Print PR summary with individual commits
     for pr in prs_needing_testing {
         let repo_name = repo_map.get(&pr.repository_id)
             .map_or("unknown", |r| r.name.as_str());
@@ -128,10 +128,42 @@ async fn print_work_summary(
             .context("getting PR commit counts")?;
         
         let unapproved = total_commits - approved_commits;
-        log_info(format_args!(
-            "{} PR#{} {} commits left to test ({} unapproved)",
-            repo_name, pr.pr_number, untested_commits, unapproved
-        ));
+        let review_status_text = match pr.review_status {
+            lcilib::db::models::ReviewStatus::Approved => "approved".to_string(),
+            lcilib::db::models::ReviewStatus::Unreviewed => "unreviewed".to_string(),
+            lcilib::db::models::ReviewStatus::Rejected => "rejected".to_string(),
+        };
+        
+        let pr_line = if unapproved > 0 {
+            format!(
+                "{} PR#{} {} commits left to test ({} unapproved) (PR {})",
+                repo_name, pr.pr_number, untested_commits, unapproved, review_status_text
+            )
+        } else {
+            format!(
+                "{} PR#{} {} commits left to test (PR {})",
+                repo_name, pr.pr_number, untested_commits, review_status_text
+            )
+        };
+        
+        log_info(format_args!("{}", pr_line));
+        
+        // Get commits that need testing for this PR
+        let commits_to_test = get_commits_needing_testing_for_pr(tx, pr).await
+            .context("getting commits needing testing for PR")?;
+        
+        for commit in commits_to_test {
+            let jj_change_id_short = if commit.jj_change_id.len() > 12 {
+                &commit.jj_change_id[..12]
+            } else {
+                &commit.jj_change_id
+            };
+            
+            log_info(format_args!(
+                "  - {} ({})",
+                commit.git_commit_id, jj_change_id_short
+            ));
+        }
     }
 
     // Print high-priority stack summary
@@ -175,6 +207,50 @@ async fn print_work_summary(
     log_info("");
 
     Ok(())
+}
+
+/// Get commits that need testing for a specific PR
+/// 
+/// # Errors
+/// 
+/// Returns an error if database operations fail.
+async fn get_commits_needing_testing_for_pr(
+    tx: &lcilib::Transaction<'_>,
+    pr: &PullRequest,
+) -> anyhow::Result<Vec<Commit>> {
+    let rows = tx
+        .query(
+            r#"
+            SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
+                   c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
+            FROM commits c
+            JOIN pr_commits pc ON c.id = pc.commit_id
+            WHERE pc.pull_request_id = $1 
+            AND pc.is_current = true
+            AND c.review_status = 'approved'
+            AND c.ci_status = 'unstarted'
+            AND c.should_run_ci = true
+            ORDER BY pc.sequence_order ASC
+            "#,
+            &[&pr.id],
+        )
+        .await
+        .context("querying commits needing testing for PR")?;
+
+    let commits = rows.iter().map(|row| Commit {
+        id: row.get("id"),
+        repository_id: row.get("repository_id"),
+        git_commit_id: row.get("git_commit_id"),
+        jj_change_id: row.get("jj_change_id"),
+        review_status: row.get("review_status"),
+        should_run_ci: row.get("should_run_ci"),
+        ci_status: row.get("ci_status"),
+        nix_derivation: row.get("nix_derivation"),
+        review_text: row.get("review_text"),
+        created_at: row.get("created_at"),
+    }).collect();
+
+    Ok(commits)
 }
 
 /// Calculate the priority of a stack using the formula from the documentation
