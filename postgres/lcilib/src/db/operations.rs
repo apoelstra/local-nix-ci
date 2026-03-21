@@ -13,9 +13,9 @@ pub enum OperationError {
     Database {
         /// The underlying database error
         db_error: Error,
-        /// The operation that failed (e.g., "create_repository", "find_commit_by_id")
+        /// The operation that failed (e.g., "`create_repository`", "`find_commit_by_id`")
         operation: String,
-        /// The entity type being operated on (e.g., "Repository", "Commit")
+        /// The entity type being operated on (e.g., "`Repository`", "`Commit`")
         entity_type: String,
         /// Additional context about the operation
         context: Option<String>,
@@ -68,7 +68,7 @@ impl OperationError {
     }
 
     /// Wrap an existing operation error with additional context
-    pub fn wrap(inner: OperationError, operation: &str, entity_type: &str, context: &str) -> Self {
+    pub fn wrap(inner: Self, operation: &str, entity_type: &str, context: &str) -> Self {
         Self::Wrapped {
             inner: Box::new(inner),
             operation: operation.to_string(),
@@ -123,7 +123,7 @@ impl std::error::Error for OperationError {
     }
 }
 
-/// Repository operations
+/// `Repository` operations
 impl Repository {
     /// Create a new repository
     /// 
@@ -209,7 +209,7 @@ impl Repository {
     }
 }
 
-/// Commit operations
+/// `Commit` operations
 impl Commit {
     /// Create a new commit
     /// 
@@ -465,7 +465,7 @@ impl Commit {
     }
 }
 
-/// Pull request operations
+/// `PullRequest` operations
 impl PullRequest {
     /// Get the number of valid ACKs for this pull request
     /// Only counts 'posted' and 'external' ACKs for the tip commit
@@ -549,7 +549,8 @@ impl PullRequest {
     }
 
     /// Count commits in various states for this PR
-    /// Returns (total_commits, approved_commits, untested_commits)
+    ///
+    /// Returns `(total_commits, approved_commits, untested_commits)`
     /// 
     /// # Errors
     /// 
@@ -869,7 +870,7 @@ impl PullRequest {
     }
 }
 
-/// Stack operations
+/// `Stack` operations
 impl Stack {
     /// Find all stacks with their commits, grouped by repository and target branch
     /// Returns the highest priority stack for each repo/branch combination
@@ -1009,7 +1010,8 @@ impl Stack {
     }
 
     /// Count commits in various states for this stack
-    /// Returns (total_commits, signed_commits, untested_commits)
+    ///
+    /// Returns `(total_commits, signed_commits, untested_commits)`
     /// 
     /// # Errors
     /// 
@@ -1223,7 +1225,7 @@ impl Stack {
     }
 }
 
-/// ACK operations
+/// `Ack` operations
 impl Ack {
     /// Create a new ACK
     /// 
@@ -1446,7 +1448,7 @@ impl Ack {
     }
 }
 
-/// Allowed approver operations
+/// `AllowedApprover` operations
 impl AllowedApprover {
     /// Create a new allowed approver
     /// 
@@ -1530,7 +1532,7 @@ impl AllowedApprover {
     }
 }
 
-/// Log entry operations
+/// `LogEntry` operations
 impl LogEntry {
     /// Find logs for entity
     /// 
@@ -1585,7 +1587,7 @@ impl LogEntry {
     }
 }
 
-/// PrCommit operations
+/// `PrCommit` operations
 impl PrCommit {
     /// Create a new PR-commit relationship
     /// 

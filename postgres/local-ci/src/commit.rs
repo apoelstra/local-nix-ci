@@ -291,7 +291,6 @@ pub async fn review(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
             }
             _ => {
                 println!("Invalid choice. Please enter 1a, 1b, 2a, 2b, 3a, 3b, 3c, 3d, or 3.");
-                continue;
             }
         }
     }

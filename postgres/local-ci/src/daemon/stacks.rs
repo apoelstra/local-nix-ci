@@ -122,8 +122,7 @@ async fn print_work_summary(
     // Print PR summary
     for pr in prs_needing_testing {
         let repo_name = repo_map.get(&pr.repository_id)
-            .map(|r| r.name.as_str())
-            .unwrap_or("unknown");
+            .map_or("unknown", |r| r.name.as_str());
         
         let (total_commits, approved_commits, untested_commits) = pr.get_commit_counts(tx).await
             .context("getting PR commit counts")?;
@@ -138,8 +137,7 @@ async fn print_work_summary(
     // Print high-priority stack summary
     for (stack, _commits) in high_priority_stacks {
         let repo_name = repo_map.get(&stack.repository_id)
-            .map(|r| r.name.as_str())
-            .unwrap_or("unknown");
+            .map_or("unknown", |r| r.name.as_str());
         
         let prs = stack.get_associated_prs(tx).await
             .context("getting associated PRs for stack")?;
@@ -159,8 +157,7 @@ async fn print_work_summary(
         log_info("=== Low Priority Stacks ===");
         for (stack, _commits) in low_priority_stacks {
             let repo_name = repo_map.get(&stack.repository_id)
-                .map(|r| r.name.as_str())
-                .unwrap_or("unknown");
+                .map_or("unknown", |r| r.name.as_str());
             
             let prs = stack.get_associated_prs(tx).await
                 .context("getting associated PRs for low-priority stack")?;
@@ -169,7 +166,7 @@ async fn print_work_summary(
             let (_total, signed, untested) = stack.get_commit_counts(tx).await
                 .context("getting low-priority stack commit counts")?;
             
-            log_info(&format_args!(
+            log_info(format_args!(
                 "{} {} PRs {} ({} signed, {} left to test)",
                 repo_name, stack.target_branch, pr_numbers.join(", "), signed, untested
             ));
@@ -197,7 +194,7 @@ async fn calculate_stack_priority(
             .context("calculating commit priority")?;
         
         // Apply position weighting: (1/2)^position
-        let weight = 0.5_f64.powi(position as i32);
+        let weight = 0.5_f64.powi(i32::try_from(position)?);
         total_priority += commit_priority * weight;
     }
     
@@ -209,6 +206,7 @@ async fn calculate_stack_priority(
 /// # Errors
 /// 
 /// Returns an error if database operations fail.
+#[expect(clippy::cast_precision_loss)] // fine; we are computing priorities which don't need to be precise
 async fn calculate_commit_priority(
     commit: &Commit,
     tx: &lcilib::Transaction<'_>,
@@ -229,12 +227,12 @@ async fn calculate_commit_priority(
     
     for pr_commit in &pr_commits {
         if let Some(pr) = PullRequest::find_by_id(tx, pr_commit.pull_request_id).await
-            .context("finding pull request")? {
+            .context("finding pull request")?
+        && (oldest_pr.is_none() || pr.created_at < oldest_pr.as_ref().unwrap().created_at)
+        {
             
-            if oldest_pr.is_none() || pr.created_at < oldest_pr.as_ref().unwrap().created_at {
-                oldest_pr = Some(pr.clone());
-                base_priority = pr.priority;
-            }
+            oldest_pr = Some(pr.clone());
+            base_priority = pr.priority;
         }
     }
     
@@ -243,7 +241,7 @@ async fn calculate_commit_priority(
     };
     
     // Start with: 10 × PR priority
-    let mut priority = 10.0 * base_priority as f64;
+    let mut priority = 10.0 * f64::from(base_priority);
     
     // Add: +1 for every ACK
     let ack_count = oldest_pr.get_ack_count(tx).await

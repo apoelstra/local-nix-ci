@@ -76,7 +76,7 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         
         if !previous_tips.is_empty() {
             println!("\nPrevious tip commits:");
-            for tip in previous_tips.iter() {
+            for tip in &previous_tips {
                 println!("  {}", tip.git_commit_id);
             }
         }
@@ -85,7 +85,9 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         let acks = Ack::find_by_pull_request(&tx, pr.id).await
             .context("failed to find ACKs for PR")?;
 
-        if !acks.is_empty() {
+        if acks.is_empty() {
+            println!("\nACKs: None");
+        } else {
             println!("\nACKs:");
             for ack in acks {
                 println!("  {} by {} ({}): {}", 
@@ -95,8 +97,6 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                     ack.message
                 );
             }
-        } else {
-            println!("\nACKs: None");
         }
 
         // Show next action
@@ -381,19 +381,20 @@ fn extract_ack_from_line(line: &str, commit_map: &HashMap<String, &Commit>) -> O
     
     // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
     for word in words.iter().skip(ack_pos) {
-        if word.len() >= 7 && word.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
-            if let Some(commit) = commit_map.get(*word) {
-                // Found a valid commit ID, construct the ACK text
-                let ack_text = line.trim().to_string();
-                return Some((ack_text, commit.id));
-            }
+        if word.len() >= 7 && word.chars().all(|c| c.is_ascii_hexdigit()
+            && !c.is_ascii_uppercase())
+            && let Some(commit) = commit_map.get(*word)
+        {
+            // Found a valid commit ID, construct the ACK text
+            let ack_text = line.trim().to_string();
+            return Some((ack_text, commit.id));
         }
     }
     
     None
 }
 
-/// Parse GitHub timestamp string to DateTime<Utc>
+/// Parse GitHub timestamp string to `DateTime<Utc>`
 fn parse_github_timestamp(timestamp: &str) -> anyhow::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(timestamp)
         .map(|dt| dt.with_timezone(&Utc))
@@ -409,6 +410,7 @@ fn parse_github_timestamp(timestamp: &str) -> anyhow::Result<DateTime<Utc>> {
 /// - Database transaction fails
 /// - Repository or PR lookup fails
 /// - Editor invocation fails
+#[allow(clippy::too_many_lines)] // yeah half these are just printlns
 pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
     let current_repo = repo::current_repo(&shell)
@@ -524,7 +526,6 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             }
             _ => {
                 println!("Invalid choice. Please enter 1a, 1b, 2a, 2b, 3a, 3b, 3c, 3d, or 4.");
-                continue;
             }
         }
     }
@@ -803,6 +804,7 @@ pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db:
 /// - Git fetch of head commit fails
 /// - Database transaction or operations fail
 /// - PR has no commits
+#[allow(clippy::too_many_lines)] // unsure about this. seems reasonable enough
 pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
     let current_repo = repo::current_repo(&shell)
@@ -900,9 +902,6 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             .context("failed to create pull request")?
     };
 
-    // Implement the new refresh logic
-    use std::collections::{HashMap, HashSet};
-
     // Get existing pr_commits for this PR
     let existing_pr_commits = PrCommit::find_by_pr(&tx, pr_record.id).await
         .context("failed to get existing PR commits")?;
@@ -920,7 +919,7 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     for (i, commit) in commit_records.iter().enumerate() {
         new_commit_ids.insert(commit.id);
         
-        let new_sequence = (i + 1) as i32;
+        let new_sequence = i32::try_from(i + 1)?;
         let new_commit_type = if i == commit_records.len() - 1 {
             CommitType::Tip
         } else {
