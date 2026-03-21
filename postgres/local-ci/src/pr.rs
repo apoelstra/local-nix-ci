@@ -854,7 +854,7 @@ pub async fn refresh(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                 git_commit_id: commit_oid.clone(),
                 jj_change_id,
                 review_status: ReviewStatus::Unreviewed,
-                should_run_ci: false,
+                should_run_ci: true,
                 ci_status: CiStatus::Unstarted,
                 nix_derivation: None,
                 review_text: None,
