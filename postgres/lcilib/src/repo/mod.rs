@@ -29,8 +29,13 @@ impl std::fmt::Display for RepoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::GitCommandFailed(e) => write!(f, "Failed to get repository root: {e}"),
-            Self::UnknownProjectName => write!(f, "Failed to get project name from upstream/origin URLs"),
-            Self::UnknownUpstream => write!(f, "Failed to get upstream type (Github, Gitea) from upstream/origin URLs"),
+            Self::UnknownProjectName => {
+                write!(f, "Failed to get project name from upstream/origin URLs")
+            }
+            Self::UnknownUpstream => write!(
+                f,
+                "Failed to get upstream type (Github, Gitea) from upstream/origin URLs"
+            ),
         }
     }
 }
@@ -88,10 +93,8 @@ pub fn current_repo(sh: &Shell) -> Result<Repository, RepoError> {
         }
     }
 
-    let project_name = project_name
-        .ok_or(RepoError::UnknownProjectName)?;
-    let upstream = upstream
-        .ok_or(RepoError::UnknownUpstream)?;
+    let project_name = project_name.ok_or(RepoError::UnknownProjectName)?;
+    let upstream = upstream.ok_or(RepoError::UnknownUpstream)?;
 
     Ok(Repository {
         project_name,

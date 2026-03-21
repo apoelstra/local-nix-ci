@@ -60,10 +60,7 @@ fn parse_as_pr_number(s: &str) -> Option<usize> {
 
 /// Returns true if the string is a valid stack ID (s followed by exactly 6 digits).
 fn parse_as_stack_id(s: &str) -> Option<u32> {
-    if s.len() == 7
-        && s.as_bytes()[0] == b's'
-        && s.as_bytes()[1..].iter().all(u8::is_ascii_digit)
-    {
+    if s.len() == 7 && s.as_bytes()[0] == b's' && s.as_bytes()[1..].iter().all(u8::is_ascii_digit) {
         s[1..].parse().ok()
     } else {
         None

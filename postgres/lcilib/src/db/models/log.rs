@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::db::util::EntityType;
 use chrono::{DateTime, Utc};
 use tokio_postgres::Transaction;
-use crate::db::util::EntityType;
 
 /// A log entry from the database
 #[derive(Debug, Clone)]
@@ -39,7 +39,9 @@ impl Log {
         tx: &Transaction<'_>,
         filter: LogFilter,
     ) -> Result<Vec<Self>, tokio_postgres::Error> {
-        let mut query = "SELECT id, entity_type, entity_id, action, description, reason, timestamp FROM logs".to_string();
+        let mut query =
+            "SELECT id, entity_type, entity_id, action, description, reason, timestamp FROM logs"
+                .to_string();
         let mut conditions = Vec::new();
         let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
         let mut param_count = 1;
@@ -150,7 +152,11 @@ impl Log {
         let mut param_count = 1;
 
         for (entity_type, entity_id) in entities {
-            entity_conditions.push(format!("(entity_type = ${} AND entity_id = ${})", param_count, param_count + 1));
+            entity_conditions.push(format!(
+                "(entity_type = ${} AND entity_id = ${})",
+                param_count,
+                param_count + 1
+            ));
             params.push(entity_type);
             params.push(entity_id);
             param_count += 2;
@@ -193,12 +199,16 @@ impl Log {
 
     /// Format this log entry for display
     pub fn format_for_display(&self) -> String {
-        let mut log_line = format!("{} - action: {}", self.timestamp.format("%Y-%m-%d %H:%M:%S"), self.action);
-        
+        let mut log_line = format!(
+            "{} - action: {}",
+            self.timestamp.format("%Y-%m-%d %H:%M:%S"),
+            self.action
+        );
+
         if let Some(desc) = &self.description {
             log_line.push_str(&format!(" - description: {}", desc));
         }
-        
+
         if let Some(reason) = &self.reason {
             log_line.push_str(&format!(" - reason: {}", reason));
         }

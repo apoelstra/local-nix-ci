@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use core::{fmt, str};
-use std::ffi::OsStr;
 use postgres_types::{FromSql, ToSql};
+use std::ffi::OsStr;
 
 /// A representation of a jj change ID.
 ///
@@ -17,7 +17,10 @@ impl str::FromStr for ChangeId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() != 32 {
-            return Err(Error::WrongLength { expected: 32, got: s.len() });
+            return Err(Error::WrongLength {
+                expected: 32,
+                got: s.len(),
+            });
         }
         for ch in s.chars() {
             if !('k'..='z').contains(&ch) {
@@ -49,30 +52,26 @@ impl ChangeId {
     /// An 8-character jj prefix
     pub fn prefix8(&self) -> &str {
         &self.0[..8]
-
     }
-    
 }
 
 #[derive(Debug)]
 pub enum Error {
-    WrongLength {
-        expected: usize,
-        got: usize,
-    },
-    InvalidCharacter {
-        ch: char,
-    }
+    WrongLength { expected: usize, got: usize },
+    InvalidCharacter { ch: char },
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            Self::WrongLength { expected, got } => write!(f, "jj change ID had length {} (expected {})", got, expected),
-            Self::InvalidCharacter { ch } => write!(f, "invalid character '{}' in jj change ID", ch),
+            Self::WrongLength { expected, got } => {
+                write!(f, "jj change ID had length {} (expected {})", got, expected)
+            }
+            Self::InvalidCharacter { ch } => {
+                write!(f, "invalid character '{}' in jj change ID", ch)
+            }
         }
     }
 }
-
 
 impl std::error::Error for Error {}

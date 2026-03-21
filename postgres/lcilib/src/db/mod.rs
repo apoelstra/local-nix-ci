@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-mod schema;
-mod util;
 pub mod models;
 pub mod operations;
+mod schema;
+mod util;
 
 use tokio_postgres::{Client, NoTls, Transaction};
 
+pub use self::models::{AckStatus, CiStatus, Log, MergeStatus, ReviewStatus};
 pub use self::schema::SchemaError;
 pub use self::util::{EntityType, log_action_simple};
-pub use self::models::{AckStatus, CiStatus, MergeStatus, ReviewStatus, Log};
 
 pub struct Db {
-    client: Client, 
+    client: Client,
     _driver: tokio::task::JoinHandle<()>,
 }
 
@@ -27,9 +27,10 @@ impl Db {
         // This connect-and-spawn logic is directly from the `tokio_postgres` front-page docs,
         // except that I'm holding the joinhandle (for future proofing, e.g. to handle shutdown
         // more gracefully or something) rather than just dropping it.
-        let (mut client, connection) = tokio_postgres::connect("host=localhost user=postgres dbname=local-ci", NoTls)
-            .await
-            .map_err(Error::Connect)?;
+        let (mut client, connection) =
+            tokio_postgres::connect("host=localhost user=postgres dbname=local-ci", NoTls)
+                .await
+                .map_err(Error::Connect)?;
         let driver = tokio::spawn(async move {
             if let Err(e) = connection.await {
                 eprintln!("connection error: {}", e);
@@ -69,7 +70,11 @@ impl Db {
     /// Returns an error if the transaction fails or if the function returns an error.
     pub async fn with_transaction<F, R, E>(&mut self, f: F) -> Result<R, Error>
     where
-        F: for<'a> FnOnce(&'a Transaction<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R, E>> + Send + 'a>>,
+        F: for<'a> FnOnce(
+            &'a Transaction<'a>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<R, E>> + Send + 'a>,
+        >,
         E: Into<Error>,
     {
         let tx = self.transaction().await.map_err(Error::Connect)?;
@@ -92,7 +97,9 @@ impl Db {
     /// Returns an error if the query fails.
     pub async fn get_schema_version(&mut self) -> Result<i32, Error> {
         let tx = self.transaction().await.map_err(Error::Connect)?;
-        let version = util::get_schema_version(&tx).await.map_err(Error::Connect)?;
+        let version = util::get_schema_version(&tx)
+            .await
+            .map_err(Error::Connect)?;
         tx.commit().await.map_err(Error::Connect)?;
         Ok(version)
     }
@@ -104,7 +111,9 @@ impl Db {
     /// Returns an error if the query fails.
     pub async fn repository_exists_by_path(&mut self, path: &str) -> Result<bool, Error> {
         let tx = self.transaction().await.map_err(Error::Connect)?;
-        let exists = util::repository_exists_by_path(&tx, path).await.map_err(Error::Connect)?;
+        let exists = util::repository_exists_by_path(&tx, path)
+            .await
+            .map_err(Error::Connect)?;
         tx.commit().await.map_err(Error::Connect)?;
         Ok(exists)
     }
@@ -116,7 +125,9 @@ impl Db {
     /// Returns an error if the query fails.
     pub async fn get_repository_id_by_path(&mut self, path: &str) -> Result<Option<i32>, Error> {
         let tx = self.transaction().await.map_err(Error::Connect)?;
-        let id = util::get_repository_id_by_path(&tx, path).await.map_err(Error::Connect)?;
+        let id = util::get_repository_id_by_path(&tx, path)
+            .await
+            .map_err(Error::Connect)?;
         tx.commit().await.map_err(Error::Connect)?;
         Ok(id)
     }
@@ -126,9 +137,15 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub async fn commit_exists_by_git_id(&mut self, repository_id: i32, git_commit_id: &str) -> Result<bool, Error> {
+    pub async fn commit_exists_by_git_id(
+        &mut self,
+        repository_id: i32,
+        git_commit_id: &str,
+    ) -> Result<bool, Error> {
         let tx = self.transaction().await.map_err(Error::Connect)?;
-        let exists = util::commit_exists_by_git_id(&tx, repository_id, git_commit_id).await.map_err(Error::Connect)?;
+        let exists = util::commit_exists_by_git_id(&tx, repository_id, git_commit_id)
+            .await
+            .map_err(Error::Connect)?;
         tx.commit().await.map_err(Error::Connect)?;
         Ok(exists)
     }
@@ -138,9 +155,15 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub async fn pull_request_exists(&mut self, repository_id: i32, pr_number: i32) -> Result<bool, Error> {
+    pub async fn pull_request_exists(
+        &mut self,
+        repository_id: i32,
+        pr_number: i32,
+    ) -> Result<bool, Error> {
         let tx = self.transaction().await.map_err(Error::Connect)?;
-        let exists = util::pull_request_exists(&tx, repository_id, pr_number).await.map_err(Error::Connect)?;
+        let exists = util::pull_request_exists(&tx, repository_id, pr_number)
+            .await
+            .map_err(Error::Connect)?;
         tx.commit().await.map_err(Error::Connect)?;
         Ok(exists)
     }
@@ -158,9 +181,16 @@ impl Db {
         description: Option<&str>,
         reason: Option<&str>,
     ) -> Result<(), Error> {
-        log_action_simple(&mut self.client, entity_type, entity_id, action, description, reason)
-            .await
-            .map_err(Error::Connect)
+        log_action_simple(
+            &mut self.client,
+            entity_type,
+            entity_id,
+            action,
+            description,
+            reason,
+        )
+        .await
+        .map_err(Error::Connect)
     }
 }
 

@@ -6,11 +6,10 @@ use crate::git::CommitId;
 use crate::jj::ChangeId;
 
 use chrono::{DateTime, Utc};
-use std::fmt;
 use postgres_types::{FromSql, ToSql};
+use std::fmt;
 
 pub use log::Log;
-
 
 /// Error type for parsing enum values from strings
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +59,6 @@ impl fmt::Display for AckStatus {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromSql, ToSql)]
 #[postgres(name = "ci_status")]
@@ -201,7 +199,6 @@ pub struct PullRequest {
     pub updated_at: DateTime<Utc>,
     pub synced_at: DateTime<Utc>,
 }
-
 
 /// Stack model
 #[derive(Debug, Clone)]

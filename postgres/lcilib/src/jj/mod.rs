@@ -98,9 +98,11 @@ pub fn jj_log<R: AsRef<OsStr>>(shell: &Shell, template: &str, revset: R) -> Resu
 /// # Errors
 ///
 /// Returns an error if the jj command fails to execute or if the commit is not found.
-pub fn get_change_id_for_commit(shell: &Shell, git_commit_id: &CommitId) -> Result<ChangeId, Error> {
-    jj_log(shell, "change_id", git_commit_id)
-        .and_then(|s| s.parse().map_err(Error::ChangeId))
+pub fn get_change_id_for_commit(
+    shell: &Shell,
+    git_commit_id: &CommitId,
+) -> Result<ChangeId, Error> {
+    jj_log(shell, "change_id", git_commit_id).and_then(|s| s.parse().map_err(Error::ChangeId))
 }
 
 /// Check if a commit is GPG signed using jj
@@ -128,18 +130,26 @@ pub fn has_conflicts(shell: &Shell, change_id: &ChangeId) -> Result<bool, Error>
 /// # Errors
 ///
 /// Returns an error if the jj command fails to execute or if the merge has conflicts.
-pub fn create_merge_commit(shell: &Shell, pr_tip_commit: &str, target_branch: &str, description: &str) -> Result<ChangeId, Error> {
+pub fn create_merge_commit(
+    shell: &Shell,
+    pr_tip_commit: &str,
+    target_branch: &str,
+    description: &str,
+) -> Result<ChangeId, Error> {
     // Create new merge commit
     let change_id = jj_new(shell, &[target_branch, pr_tip_commit])?;
-    
+
     // Set the description
     update_commit_description(shell, &change_id, description)?;
-    
+
     // Check for conflicts
     if has_conflicts(shell, &change_id)? {
-        return Err(Error::ParseOutput(format!("Merge commit {} has conflicts", change_id)));
+        return Err(Error::ParseOutput(format!(
+            "Merge commit {} has conflicts",
+            change_id
+        )));
     }
-    
+
     Ok(change_id)
 }
 
@@ -152,8 +162,12 @@ pub fn create_merge_commit(shell: &Shell, pr_tip_commit: &str, target_branch: &s
 /// # Panics
 ///
 /// Panics if 'jj' outputs something that can't be parsed as a git commit ID.
-pub fn get_current_git_commit_for_change_id(shell: &Shell, change_id: &ChangeId) -> Result<CommitId, Error> {
-    jj_log(shell, "commit_id", change_id).map(|res| res.parse().expect("jj to output a valid commit ID"))
+pub fn get_current_git_commit_for_change_id(
+    shell: &Shell,
+    change_id: &ChangeId,
+) -> Result<CommitId, Error> {
+    jj_log(shell, "commit_id", change_id)
+        .map(|res| res.parse().expect("jj to output a valid commit ID"))
 }
 
 /// Update the description of a commit using jj
@@ -161,7 +175,11 @@ pub fn get_current_git_commit_for_change_id(shell: &Shell, change_id: &ChangeId)
 /// # Errors
 ///
 /// Returns an error if the jj command fails to execute.
-pub fn update_commit_description(shell: &Shell, change_id: &ChangeId, description: &str) -> Result<(), Error> {
+pub fn update_commit_description(
+    shell: &Shell,
+    change_id: &ChangeId,
+    description: &str,
+) -> Result<(), Error> {
     jj(shell)
         .arg("describe")
         .arg("--quiet")
@@ -173,6 +191,6 @@ pub fn update_commit_description(shell: &Shell, change_id: &ChangeId, descriptio
         .quiet()
         .run()
         .map_err(Error::Shell)?;
-    
+
     Ok(())
 }

@@ -1,63 +1,80 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
+use chrono::Utc;
 use lcilib::{
     Db,
     db::CiStatus,
-    db::models::{Commit, PullRequest, Stack, Repository, UpdateCommit},
+    db::models::{Commit, PullRequest, Repository, Stack, UpdateCommit},
     git::CommitId,
 };
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-use chrono::Utc;
-use tokio::{fs, io::{BufReader, AsyncReadExt as _}, time};
 use tokio::process::Command;
+use tokio::{
+    fs,
+    io::{AsyncReadExt as _, BufReader},
+    time,
+};
 
 use super::{get_repository_for_commit, mark_commit_failed, mark_commit_passed};
 use super::{log, util};
 
 /// Find the next commit that needs testing, following the priority rules
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns an error if database operations fail.
 async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Commit>> {
-    let tx = db.transaction().await
-        .context("starting transaction")?;
+    let tx = db.transaction().await.context("starting transaction")?;
 
     // Get repository info for GPG checking
-    let repos = Repository::list_all(&tx).await
+    let repos = Repository::list_all(&tx)
+        .await
         .context("getting repository list")?;
     let repo_map: HashMap<i32, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
 
-     // Compute lists of available work and print summary.
-    let high_priority_stacks = Stack::find_highest_priority_by_repo_branch(&tx).await
+    // Compute lists of available work and print summary.
+    let high_priority_stacks = Stack::find_highest_priority_by_repo_branch(&tx)
+        .await
         .context("finding high-priority stacks")?;
-    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx).await
+    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx)
+        .await
         .context("finding PRs needing testing")?;
-    let low_priority_stacks = Stack::find_low_priority_stacks(&tx).await
+    let low_priority_stacks = Stack::find_low_priority_stacks(&tx)
+        .await
         .context("finding low-priority stacks")?;
-    
-    print_work_summary(&tx, &high_priority_stacks, &prs_needing_testing, &low_priority_stacks).await
-        .context("printing work summary")?;
-    
+
+    print_work_summary(
+        &tx,
+        &high_priority_stacks,
+        &prs_needing_testing,
+        &low_priority_stacks,
+    )
+    .await
+    .context("printing work summary")?;
+
     // 1. Check high-priority stacks first (with positive priority)
     let mut prioritized_stacks = Vec::new();
     for (stack, commits) in &high_priority_stacks {
-        let priority = util::calculate_stack_priority(commits, &tx, &repo_map).await
+        let priority = util::calculate_stack_priority(commits, &tx, &repo_map)
+            .await
             .context("calculating stack priority")?;
         if priority > 0.0 {
             prioritized_stacks.push((stack, commits, priority));
         }
     }
-    
+
     // Sort by priority (highest first)
     prioritized_stacks.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-    
+
     for (stack, _commits, _priority) in &prioritized_stacks {
-        if let Some(commit) = stack.get_next_untested_commit(&tx).await
-            .context("getting next untested commit from stack")? {
+        if let Some(commit) = stack
+            .get_next_untested_commit(&tx)
+            .await
+            .context("getting next untested commit from stack")?
+        {
             log::info("Found commit from high-priority stack");
             tx.commit().await.context("committing transaction")?;
             return Ok(Some(commit));
@@ -67,26 +84,33 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Commit>>
     // 2. Check PRs by priority (user priority, then all approved, then fewer untested, then age)
     let mut prioritized_prs = Vec::new();
     for pr in &prs_needing_testing {
-        let (total_commits, approved_commits, untested_commits) = pr.get_commit_counts(&tx).await
-            .context("getting PR commit counts")?;
-        
+        let (total_commits, approved_commits, untested_commits) =
+            pr.get_commit_counts(&tx)
+                .await
+                .context("getting PR commit counts")?;
+
         let all_approved = approved_commits == total_commits;
         let age_days = (Utc::now() - pr.created_at).num_days();
-        
+
         prioritized_prs.push((pr, all_approved, -untested_commits, age_days));
     }
-    
+
     // Sort by: priority DESC, all_approved DESC, fewer untested DESC (negative untested), age DESC (older first)
     prioritized_prs.sort_by(|a, b| {
-        a.0.priority.cmp(&b.0.priority).reverse()
+        a.0.priority
+            .cmp(&b.0.priority)
+            .reverse()
             .then(a.1.cmp(&b.1).reverse())
             .then(a.2.cmp(&b.2).reverse())
             .then(a.3.cmp(&b.3).reverse())
     });
-    
+
     for (pr, _all_approved, _neg_untested, _age) in &prioritized_prs {
-        if let Some(commit) = pr.get_next_untested_commit(&tx).await
-            .context("getting next untested commit from PR")? {
+        if let Some(commit) = pr
+            .get_next_untested_commit(&tx)
+            .await
+            .context("getting next untested commit from PR")?
+        {
             log::info("Found commit from PR");
             tx.commit().await.context("committing transaction")?;
             return Ok(Some(commit));
@@ -96,17 +120,22 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Commit>>
     // 3. Check low-priority stacks (negative priority or conflicting)
     let mut low_priority_with_scores = Vec::new();
     for (stack, commits) in &low_priority_stacks {
-        let priority = util::calculate_stack_priority(commits, &tx, &repo_map).await
+        let priority = util::calculate_stack_priority(commits, &tx, &repo_map)
+            .await
             .context("calculating low-priority stack priority")?;
         low_priority_with_scores.push((stack, commits, priority));
     }
-    
+
     // Sort by priority (highest first, even if negative)
-    low_priority_with_scores.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-    
+    low_priority_with_scores
+        .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
     for (stack, _commits, _priority) in &low_priority_with_scores {
-        if let Some(commit) = stack.get_next_untested_commit(&tx).await
-            .context("getting next untested commit from low-priority stack")? {
+        if let Some(commit) = stack
+            .get_next_untested_commit(&tx)
+            .await
+            .context("getting next untested commit from low-priority stack")?
+        {
             log::info("Found commit from low-priority stack");
             tx.commit().await.context("committing transaction")?;
             return Ok(Some(commit));
@@ -125,11 +154,15 @@ async fn print_work_summary(
     low_priority_stacks: &[(Stack, Vec<Commit>)],
 ) -> anyhow::Result<()> {
     // Get repository info for display names
-    let repos = Repository::list_all(tx).await
+    let repos = Repository::list_all(tx)
+        .await
         .context("getting repository list")?;
     let repo_map: HashMap<i32, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
 
-    if prs_needing_testing.is_empty() && high_priority_stacks.is_empty() && low_priority_stacks.is_empty() {
+    if prs_needing_testing.is_empty()
+        && high_priority_stacks.is_empty()
+        && low_priority_stacks.is_empty()
+    {
         // If there is nothing to do, print no summary. We will use backoff logic
         // to print "nothing to do" messages without spamming the user at a higher
         // layer.
@@ -140,19 +173,22 @@ async fn print_work_summary(
 
     // Print PR summary with individual commits
     for pr in prs_needing_testing {
-        let repo_name = repo_map.get(&pr.repository_id)
+        let repo_name = repo_map
+            .get(&pr.repository_id)
             .map_or("unknown", |r| r.name.as_str());
-        
-        let (total_commits, approved_commits, untested_commits) = pr.get_commit_counts(tx).await
+
+        let (total_commits, approved_commits, untested_commits) = pr
+            .get_commit_counts(tx)
+            .await
             .context("getting PR commit counts")?;
-        
+
         let unapproved = total_commits - approved_commits;
         let review_status_text = match pr.review_status {
             lcilib::db::models::ReviewStatus::Approved => "approved".to_string(),
             lcilib::db::models::ReviewStatus::Unreviewed => "unreviewed".to_string(),
             lcilib::db::models::ReviewStatus::Rejected => "rejected".to_string(),
         };
-        
+
         let pr_line = if unapproved > 0 {
             format!(
                 "{} PR#{} {} commits left to test ({} unapproved) (PR {})",
@@ -164,40 +200,52 @@ async fn print_work_summary(
                 repo_name, pr.pr_number, untested_commits, review_status_text
             )
         };
-        
+
         log::info(format_args!("{}", pr_line));
-        
+
         // Get commits that need testing for this PR
-        let commits_to_test = get_commits_needing_testing_for_pr(tx, pr).await
+        let commits_to_test = get_commits_needing_testing_for_pr(tx, pr)
+            .await
             .context("getting commits needing testing for PR")?;
-        
+
         for commit in commits_to_test {
             log::info(format_args!(
                 "  - {} ({})",
-                commit.git_commit_id, commit.jj_change_id.prefix8()
+                commit.git_commit_id,
+                commit.jj_change_id.prefix8()
             ));
         }
     }
 
     // Print high-priority stack summary
     for (stack, _commits) in high_priority_stacks {
-        let repo_name = repo_map.get(&stack.repository_id)
+        let repo_name = repo_map
+            .get(&stack.repository_id)
             .map_or("unknown", |r| r.name.as_str());
-        
-        let prs = stack.get_associated_prs(tx).await
+
+        let prs = stack
+            .get_associated_prs(tx)
+            .await
             .context("getting associated PRs for stack")?;
         let pr_numbers: Vec<String> = prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
-        
-        let (_total, untested) = stack.get_commit_counts(tx).await
+
+        let (_total, untested) = stack
+            .get_commit_counts(tx)
+            .await
             .context("getting stack commit counts")?;
-        
+
         // Count signed commits in the stack
-        let signed = count_signed_commits_in_stack(tx, stack, &repo_map).await
+        let signed = count_signed_commits_in_stack(tx, stack, &repo_map)
+            .await
             .context("counting signed commits in stack")?;
-        
+
         log::info(format_args!(
             "{} {} PRs {} ({} signed, {} left to test)",
-            repo_name, stack.target_branch, pr_numbers.join(", "), signed, untested
+            repo_name,
+            stack.target_branch,
+            pr_numbers.join(", "),
+            signed,
+            untested
         ));
     }
 
@@ -205,23 +253,34 @@ async fn print_work_summary(
     if !low_priority_stacks.is_empty() {
         log::info("=== Low Priority Stacks ===");
         for (stack, _commits) in low_priority_stacks {
-            let repo_name = repo_map.get(&stack.repository_id)
+            let repo_name = repo_map
+                .get(&stack.repository_id)
                 .map_or("unknown", |r| r.name.as_str());
-            
-            let prs = stack.get_associated_prs(tx).await
+
+            let prs = stack
+                .get_associated_prs(tx)
+                .await
                 .context("getting associated PRs for low-priority stack")?;
-            let pr_numbers: Vec<String> = prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
-            
-            let (_total, untested) = stack.get_commit_counts(tx).await
+            let pr_numbers: Vec<String> =
+                prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
+
+            let (_total, untested) = stack
+                .get_commit_counts(tx)
+                .await
                 .context("getting low-priority stack commit counts")?;
-            
+
             // Count signed commits in the stack
-            let signed = count_signed_commits_in_stack(tx, stack, &repo_map).await
+            let signed = count_signed_commits_in_stack(tx, stack, &repo_map)
+                .await
                 .context("counting signed commits in low-priority stack")?;
-            
+
             log::info(format_args!(
                 "{} {} PRs {} ({} signed, {} left to test)",
-                repo_name, stack.target_branch, pr_numbers.join(", "), signed, untested
+                repo_name,
+                stack.target_branch,
+                pr_numbers.join(", "),
+                signed,
+                untested
             ));
         }
     }
@@ -236,27 +295,29 @@ async fn count_signed_commits_in_stack(
     stack: &Stack,
     repo_map: &HashMap<i32, &Repository>,
 ) -> anyhow::Result<usize> {
-    let commits = stack.get_commits(tx).await
+    let commits = stack
+        .get_commits(tx)
+        .await
         .context("getting stack commits")?;
-    
+
     let Some(repo) = repo_map.get(&stack.repository_id) else {
         return Ok(0);
     };
-    
+
     let mut signed_count = 0;
     for commit in &commits {
         if util::is_commit_gpg_signed(commit, &repo.path).await? {
             signed_count += 1;
         }
     }
-    
+
     Ok(signed_count)
 }
 
 /// Get commits that need testing for a specific PR
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns an error if database operations fail.
 async fn get_commits_needing_testing_for_pr(
     tx: &lcilib::Transaction<'_>,
@@ -269,7 +330,7 @@ async fn get_commits_needing_testing_for_pr(
                    c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
             FROM commits c
             JOIN pr_commits pc ON c.id = pc.commit_id
-            WHERE pc.pull_request_id = $1 
+            WHERE pc.pull_request_id = $1
             AND pc.is_current = true
             AND c.review_status = 'approved'
             AND c.ci_status = 'unstarted'
@@ -281,24 +342,30 @@ async fn get_commits_needing_testing_for_pr(
         .await
         .context("querying commits needing testing for PR")?;
 
-    let commits = rows.iter().map(|row| Commit {
-        id: row.get("id"),
-        repository_id: row.get("repository_id"),
-        git_commit_id: row.get("git_commit_id"),
-        jj_change_id: row.get("jj_change_id"),
-        review_status: row.get("review_status"),
-        should_run_ci: row.get("should_run_ci"),
-        ci_status: row.get("ci_status"),
-        nix_derivation: row.get("nix_derivation"),
-        review_text: row.get("review_text"),
-        created_at: row.get("created_at"),
-    }).collect();
+    let commits = rows
+        .iter()
+        .map(|row| Commit {
+            id: row.get("id"),
+            repository_id: row.get("repository_id"),
+            git_commit_id: row.get("git_commit_id"),
+            jj_change_id: row.get("jj_change_id"),
+            review_status: row.get("review_status"),
+            should_run_ci: row.get("should_run_ci"),
+            ci_status: row.get("ci_status"),
+            nix_derivation: row.get("nix_derivation"),
+            review_text: row.get("review_text"),
+            created_at: row.get("created_at"),
+        })
+        .collect();
 
     Ok(commits)
 }
 
-
-async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> anyhow::Result<bool> {
+async fn process_commit_ci(
+    db: &mut Db,
+    commit: &Commit,
+    repo: &Repository,
+) -> anyhow::Result<bool> {
     let repo_path = Path::new(&repo.path);
     let nixfile_path = Path::new(&repo.nixfile_path);
 
@@ -351,15 +418,16 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
     };
 
     // Get derivation path with cancellation checking
-    let derivation_path = match get_or_create_derivation_with_cancellation(db, commit, repo, &cargo_nixes).await {
-        Ok(path) => path,
-        Err(e) => {
-            let error_msg = format!("Failed to get derivation: {}", e);
-            log::warn(format_args!("{}", error_msg));
-            mark_commit_failed(db, commit, &error_msg).await?;
-            return Ok(false);
-        }
-    };
+    let derivation_path =
+        match get_or_create_derivation_with_cancellation(db, commit, repo, &cargo_nixes).await {
+            Ok(path) => path,
+            Err(e) => {
+                let error_msg = format!("Failed to get derivation: {}", e);
+                log::warn(format_args!("{}", error_msg));
+                mark_commit_failed(db, commit, &error_msg).await?;
+                return Ok(false);
+            }
+        };
 
     // Build the derivation with cancellation checking
     match build_derivation_with_cancellation(db, commit, repo_path, &derivation_path).await {
@@ -379,7 +447,10 @@ async fn process_commit_ci(db: &mut Db, commit: &Commit, repo: &Repository) -> a
 }
 
 #[expect(clippy::case_sensitive_file_extension_comparisons)] // neat lint. complains about looking for .lock files. deliberately violating for now.
-async fn find_cargo_lockfiles(repo_path: &Path, commit_id: &CommitId) -> anyhow::Result<Vec<String>> {
+async fn find_cargo_lockfiles(
+    repo_path: &Path,
+    commit_id: &CommitId,
+) -> anyhow::Result<Vec<String>> {
     let output = Command::new("git")
         .args(["ls-tree", "-r", "--name-only", commit_id.as_str()])
         .current_dir(repo_path)
@@ -453,9 +524,7 @@ async fn check_has_cargo_toml(repo_path: &Path, commit_id: &CommitId) -> anyhow:
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let has_cargo_toml = stdout
-        .lines()
-        .any(|line| line.ends_with("Cargo.toml"));
+    let has_cargo_toml = stdout.lines().any(|line| line.ends_with("Cargo.toml"));
 
     Ok(has_cargo_toml)
 }
@@ -469,31 +538,44 @@ async fn get_or_create_derivation_with_cancellation(
     // Check if derivation already exists and is valid
     if let Some(existing_derivation) = &commit.nix_derivation {
         if Path::new(existing_derivation).exists() {
-            log::info(format_args!("Using existing derivation: {}", existing_derivation));
+            log::info(format_args!(
+                "Using existing derivation: {}",
+                existing_derivation
+            ));
             return Ok(existing_derivation.clone());
         }
-        log::info(format_args!("Existing derivation {} not found, will recreate", existing_derivation));
+        log::info(format_args!(
+            "Existing derivation {} not found, will recreate",
+            existing_derivation
+        ));
     }
 
     // Build commit JSON for nix-instantiate
     let commit_str = format!(
         "{{ commit = \"{}\"; isTip = true; gitUrl = \"{}\"; cargoNixes = {}; }}",
-        commit.git_commit_id,
-        repo.path,
-        cargo_nixes
+        commit.git_commit_id, repo.path, cargo_nixes
     );
 
     // Instantiate derivation with cancellation checking
-    log::info(format_args!("Instantiating derivation for commit {}", commit.git_commit_id));
-    
+    log::info(format_args!(
+        "Instantiating derivation for commit {}",
+        commit.git_commit_id
+    ));
+
     let mut child = Command::new("nix-instantiate")
         .args([
             "--show-trace",
-            "--arg", "inlineJsonConfig",
-            &format!("{{ gitDir = \"{}\"; projectName = \"{}\"; }}", repo.path, repo.name),
-            "--arg", "inlineCommitList",
+            "--arg",
+            "inlineJsonConfig",
+            &format!(
+                "{{ gitDir = \"{}\"; projectName = \"{}\"; }}",
+                repo.path, repo.name
+            ),
+            "--arg",
+            "inlineCommitList",
             &format!("[ {} ]", commit_str),
-            "--arg", "prNum",
+            "--arg",
+            "prNum",
             "\"\"",
             &repo.nixfile_path,
         ])
@@ -524,7 +606,7 @@ async fn get_or_create_derivation_with_cancellation(
 
     // Check for cancellation every 10 seconds during instantiation
     let mut interval = time::interval(Duration::from_secs(10));
-    
+
     loop {
         tokio::select! {
             status_result = child.wait() => {
@@ -533,7 +615,7 @@ async fn get_or_create_derivation_with_cancellation(
                         // Process finished, get the output
                         let stdout = stdout_task.await??;
                         let stderr = stderr_task.await??;
-                        
+
                         if !status.success() {
                             save_error_to_file(&repo.path, &commit.git_commit_id, "instantiate", &stdout, &stderr).await?;
                             mark_commit_failed(db, commit, "nix-instantiate failed").await?;
@@ -580,26 +662,26 @@ async fn get_or_create_derivation_with_cancellation(
                     }
                 }
             }
-            
+
             // Check for cancellation every 10 seconds
             _ = interval.tick() => {
                 if let Err(e) = check_for_cancellation(db, commit).await {
                     log::warn(format_args!("Error checking for cancellation: {}", e));
                     continue;
                 }
-                
+
                 // Check if we should cancel
                 if should_cancel_ci(db, commit).await? {
                     log::info(format_args!("CI cancellation requested for commit {}", commit.git_commit_id));
-                    
+
                     // Kill the child process
                     if let Err(e) = child.kill().await {
                         log::warn(format_args!("Failed to kill nix-instantiate process: {}", e));
                     }
-                    
+
                     // Wait for it to actually exit
                     let _ = child.wait().await;
-                    
+
                     let error_msg = "CI cancelled by user request";
                     log::warn(format_args!("{}", error_msg));
                     mark_commit_failed(db, commit, error_msg).await?;
@@ -654,7 +736,7 @@ async fn build_derivation_with_cancellation(
 
     // Check for cancellation every 30 seconds
     let mut interval = time::interval(Duration::from_secs(30));
-    
+
     loop {
         tokio::select! {
             status_result = child.wait() => {
@@ -663,12 +745,12 @@ async fn build_derivation_with_cancellation(
                         // Process finished, get the output
                         let stdout = stdout_task.await??;
                         let stderr = stderr_task.await??;
-                        
+
                         if status.success() {
                             log::info(format_args!("nix-build completed successfully"));
                             return Ok(true);
                         }
-                        
+
                         save_error_to_file(&repo_path.to_string_lossy(), &commit.git_commit_id, "build", &stdout, &stderr).await?;
                         mark_commit_failed(db, commit, "nix-build failed").await?;
                         return Ok(false);
@@ -681,26 +763,26 @@ async fn build_derivation_with_cancellation(
                     }
                 }
             }
-            
+
             // Check for cancellation every 30 seconds
             _ = interval.tick() => {
                 if let Err(e) = check_for_cancellation(db, commit).await {
                     log::warn(format_args!("Error checking for cancellation: {}", e));
                     continue;
                 }
-                
+
                 // Check if we should cancel
                 if should_cancel_ci(db, commit).await? {
                     log::info(format_args!("CI cancellation requested for commit {}", commit.git_commit_id));
-                    
+
                     // Kill the child process
                     if let Err(e) = child.kill().await {
                         log::warn(format_args!("Failed to kill nix-build process: {}", e));
                     }
-                    
+
                     // Wait for it to actually exit
                     let _ = child.wait().await;
-                    
+
                     let error_msg = "CI cancelled by user request";
                     log::warn(format_args!("{}", error_msg));
                     return Ok(false);
@@ -712,24 +794,31 @@ async fn build_derivation_with_cancellation(
 
 async fn check_for_cancellation(db: &mut Db, _commit: &Commit) -> anyhow::Result<()> {
     // Just ensure we can still connect to the database
-    let tx = db.transaction().await.context("starting transaction for cancellation check")?;
-    tx.commit().await.context("committing cancellation check transaction")?;
+    let tx = db
+        .transaction()
+        .await
+        .context("starting transaction for cancellation check")?;
+    tx.commit()
+        .await
+        .context("committing cancellation check transaction")?;
     Ok(())
 }
 
 async fn should_cancel_ci(db: &mut Db, commit: &Commit) -> anyhow::Result<bool> {
     let tx = db.transaction().await.context("starting transaction")?;
-    
+
     // Reload the commit to check current status
-    let current_commit = Commit::find_by_id(&tx, commit.id).await
+    let current_commit = Commit::find_by_id(&tx, commit.id)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to reload commit: {}", e))?
         .ok_or_else(|| anyhow::anyhow!("Commit not found: {}", commit.id))?;
-    
+
     tx.commit().await.context("committing transaction")?;
-    
+
     // Check if CI should be cancelled
-    let should_cancel = current_commit.ci_status == CiStatus::Skipped || !current_commit.should_run_ci;
-    
+    let should_cancel =
+        current_commit.ci_status == CiStatus::Skipped || !current_commit.should_run_ci;
+
     Ok(should_cancel)
 }
 
@@ -743,41 +832,79 @@ async fn save_error_to_file(
     let repo_path = Path::new(repo_path);
     let error_dir = repo_path.parent().unwrap_or(repo_path);
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    let filename = format!("local-ci-error-{}-{}-{}.log", commit_id, operation, timestamp);
+    let filename = format!(
+        "local-ci-error-{}-{}-{}.log",
+        commit_id, operation, timestamp
+    );
     let error_path = error_dir.join(filename);
 
-    fs::write(&error_path, format!("nix-build failed for commit {}\n\nSTDOUT:\n", commit_id)).await
-        .with_context(|| format!("Failed to write error file (preamble): {}", error_path.display()))?;
-    fs::write(&error_path, stdout).await
-        .with_context(|| format!("Failed to write error file (stdout): {}", error_path.display()))?;
-    fs::write(&error_path, "\nSTDERR:\n").await
-        .with_context(|| format!("Failed to write error file (stderr preamble): {}", error_path.display()))?;
-    fs::write(&error_path, stderr).await
-        .with_context(|| format!("Failed to write error file (stderr): {}", error_path.display()))?;
+    fs::write(
+        &error_path,
+        format!("nix-build failed for commit {}\n\nSTDOUT:\n", commit_id),
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to write error file (preamble): {}",
+            error_path.display()
+        )
+    })?;
+    fs::write(&error_path, stdout).await.with_context(|| {
+        format!(
+            "Failed to write error file (stdout): {}",
+            error_path.display()
+        )
+    })?;
+    fs::write(&error_path, "\nSTDERR:\n")
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to write error file (stderr preamble): {}",
+                error_path.display()
+            )
+        })?;
+    fs::write(&error_path, stderr).await.with_context(|| {
+        format!(
+            "Failed to write error file (stderr): {}",
+            error_path.display()
+        )
+    })?;
 
-    log::info(format_args!("Error details saved to: {}", error_path.display()));
+    log::info(format_args!(
+        "Error details saved to: {}",
+        error_path.display()
+    ));
 
     Ok(())
 }
 
 pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
-    let mut db = Db::connect().await
+    let mut db = Db::connect()
+        .await
         .context("connecting to database for CI cycle")?;
-    
+
     let mut no_work_count = 0u32;
     let mut last_no_work_log = std::time::Instant::now();
-    
+
     loop {
-        if let Some(commit) = find_next_commit_to_test(&mut db).await
+        if let Some(commit) = find_next_commit_to_test(&mut db)
+            .await
             .context("finding next commit to test")?
         {
-            log::info(format_args!("Starting CI for commit: {} ({})", commit.git_commit_id, commit.jj_change_id));
-        
+            log::info(format_args!(
+                "Starting CI for commit: {} ({})",
+                commit.git_commit_id, commit.jj_change_id
+            ));
+
             // Get repository info
             let repo = match get_repository_for_commit(&mut db, &commit).await {
                 Ok(repo) => repo,
                 Err(e) => {
-                    log::warn_backoff(format!("Failed to get repository for commit {}: {}", commit.git_commit_id, e)).await;
+                    log::warn_backoff(format!(
+                        "Failed to get repository for commit {}: {}",
+                        commit.git_commit_id, e
+                    ))
+                    .await;
                     continue;
                 }
             };
@@ -787,21 +914,31 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                 Ok(success) => {
                     log::reset_error_sleep();
                     if success {
-                        log::info(format_args!("CI SUCCESS for commit: {}", commit.git_commit_id));
+                        log::info(format_args!(
+                            "CI SUCCESS for commit: {}",
+                            commit.git_commit_id
+                        ));
                         mark_commit_passed(&mut db, &commit).await?;
                         // After a commit succeeds, re-scan the database to see if we should make merge commits or something
                         super::real_run_db_maintenance_cycle(&mut db).await?;
                     } else {
-                        log::warn(format_args!("CI FAILED for commit: {}", commit.git_commit_id));
+                        log::warn(format_args!(
+                            "CI FAILED for commit: {}",
+                            commit.git_commit_id
+                        ));
                         // Error details already logged and commit marked as failed in process_commit_ci
                     }
                 }
                 Err(e) => {
-                    log::warn_backoff(format!("Error processing commit {}: {}", commit.git_commit_id, e)).await;
-                    mark_commit_failed(&mut db, &commit, &format!("Processing error: {}", e)).await?;
+                    log::warn_backoff(format!(
+                        "Error processing commit {}: {}",
+                        commit.git_commit_id, e
+                    ))
+                    .await;
+                    mark_commit_failed(&mut db, &commit, &format!("Processing error: {}", e))
+                        .await?;
                 }
             }
-        
         } else {
             // Nothing to do -- just sleep for a second and maybe post a 'nothing to do' message so the
             // user knows we're still alive.
@@ -811,14 +948,14 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                 2 => 300,
                 n => 300 * (1u64 << (n - 2)).min(18000), // Cap at 5 hours
             };
-            
+
             let now = std::time::Instant::now();
             if now.duration_since(last_no_work_log).as_secs() >= delay_secs {
                 log::info(format_args!("Nothing to do."));
                 no_work_count += 1;
                 last_no_work_log = now;
             }
-            
+
             time::sleep(Duration::from_secs(1)).await;
         }
     }

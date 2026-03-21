@@ -4,33 +4,43 @@ use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use lcilib::{
     Db,
-    db::{models::{Repository, PullRequest, NewRepository, Commit, CommitType, NewCommit, ReviewStatus, CiStatus, UpdatePullRequest, NewPullRequest, PrCommit, Ack, NewAck, AckStatus, MergeStatus}, EntityType, Log},
-    gh,
-    git,
-    jj,
-    repo,
+    db::{
+        EntityType, Log,
+        models::{
+            Ack, AckStatus, CiStatus, Commit, CommitType, MergeStatus, NewAck, NewCommit,
+            NewPullRequest, NewRepository, PrCommit, PullRequest, Repository, ReviewStatus,
+            UpdatePullRequest,
+        },
+    },
+    gh, git, jj, repo,
 };
-use std::{env, fs, io::{self, Write}, collections::{HashMap, HashSet}};
+use std::{
+    collections::{HashMap, HashSet},
+    env, fs,
+    io::{self, Write},
+};
 use xshell::{Shell, cmd};
 
 /// Show information about a PR
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns an error if:
 /// - Failed to get current repository information
 /// - Database transaction fails
 /// - Repository or PR lookup fails
 pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell)
-        .context("failed to get current repository")?;
+    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
 
-    let tx = db.transaction().await
+    let tx = db
+        .transaction()
+        .await
         .context("failed to start database transaction")?;
 
     // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
+    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
+        .await
         .context("failed to query repository")?
     else {
         println!("Repository not found in database. Please run 'refresh' first to initialize it.");
@@ -38,12 +48,23 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     };
 
     // Look up the PR in the database
-    if let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
+    if let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?)
+        .await
         .context("failed to query pull request")?
     {
-        println!("{} PR #{}: {}", current_repo.project_name, pr.pr_number, pr.title);
+        println!(
+            "{} PR #{}: {}",
+            current_repo.project_name, pr.pr_number, pr.title
+        );
         println!();
-        println!("{}", if pr.body.is_empty() { "(empty)" } else { &pr.body });
+        println!(
+            "{}",
+            if pr.body.is_empty() {
+                "(empty)"
+            } else {
+                &pr.body
+            }
+        );
         println!();
         println!("Merge Status: {:?}", pr.merge_status);
         println!("Review Status: {:?}", pr.review_status);
@@ -55,15 +76,18 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         println!("Last Synced: {}", pr.synced_at);
 
         // Show commits
-        let commits = pr.get_commits(&tx).await
+        let commits = pr
+            .get_commits(&tx)
+            .await
             .context("failed to get PR commits")?;
-        
+
         if !commits.is_empty() {
             println!("\nCommits:");
             for (i, (commit, commit_type)) in commits.iter().enumerate() {
-                println!("  {}. {} ({:?}) - Review: {:?}, CI: {:?}", 
-                    i + 1, 
-                    commit.git_commit_id, 
+                println!(
+                    "  {}. {} ({:?}) - Review: {:?}, CI: {:?}",
+                    i + 1,
+                    commit.git_commit_id,
                     commit_type,
                     commit.review_status,
                     commit.ci_status
@@ -72,9 +96,11 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         }
 
         // Show previous tips
-        let previous_tips = pr.get_previous_tips(&tx).await
+        let previous_tips = pr
+            .get_previous_tips(&tx)
+            .await
             .context("failed to get previous tip commits")?;
-        
+
         if !previous_tips.is_empty() {
             println!("\nPrevious tip commits:");
             for tip in &previous_tips {
@@ -83,7 +109,8 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         }
 
         // Show ACKs
-        let acks = Ack::find_by_pull_request(&tx, pr.id).await
+        let acks = Ack::find_by_pull_request(&tx, pr.id)
+            .await
             .context("failed to find ACKs for PR")?;
 
         if acks.is_empty() {
@@ -91,7 +118,8 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         } else {
             println!("\nACKs:");
             for ack in acks {
-                println!("  {} by {} ({}): {}", 
+                println!(
+                    "  {} by {} ({}): {}",
                     ack.created_at.format("%Y-%m-%d %H:%M:%S"),
                     ack.reviewer_name,
                     ack.status,
@@ -101,16 +129,19 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         }
 
         // Show next action
-        let next_action = determine_next_action_for_pr(&tx, &pr).await
+        let next_action = determine_next_action_for_pr(&tx, &pr)
+            .await
             .context("failed to determine next action")?;
         println!("\nNext action: {}", next_action);
     } else {
         println!("PR #{} not found in database.", pr_number);
-        println!("Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number);
+        println!(
+            "Use 'local-ci refresh pr {}' to download it from GitHub.",
+            pr_number
+        );
     }
 
-    tx.commit().await
-        .context("failed to commit transaction")?;
+    tx.commit().await.context("failed to commit transaction")?;
 
     Ok(())
 }
@@ -121,7 +152,9 @@ async fn determine_next_action_for_pr(
     pr: &PullRequest,
 ) -> anyhow::Result<String> {
     // Get current commits for this PR in sequence order
-    let commits = pr.get_commits(tx).await
+    let commits = pr
+        .get_commits(tx)
+        .await
         .context("failed to get PR commits")?;
 
     // Find the first unreviewed commit
@@ -141,9 +174,9 @@ async fn determine_next_action_for_pr(
 }
 
 /// Execute the next action for a PR
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns an error if:
 /// - Failed to get current repository information
 /// - Database transaction fails
@@ -151,39 +184,50 @@ async fn determine_next_action_for_pr(
 /// - No next action available
 pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell)
-        .context("failed to get current repository")?;
+    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
 
-    let tx = db.transaction().await
+    let tx = db
+        .transaction()
+        .await
         .context("failed to start database transaction")?;
 
     // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
+    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
+        .await
         .context("failed to query repository")?
     else {
-        anyhow::bail!("Repository not found in database. Please run 'refresh' first to initialize it.");
+        anyhow::bail!(
+            "Repository not found in database. Please run 'refresh' first to initialize it."
+        );
     };
 
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
+    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?)
+        .await
         .context("failed to query pull request")?
     else {
-        anyhow::bail!("PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number, pr_number);
+        anyhow::bail!(
+            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
+            pr_number,
+            pr_number
+        );
     };
 
     // Get current commits for this PR in sequence order
-    let commits = pr.get_commits(&tx).await
+    let commits = pr
+        .get_commits(&tx)
+        .await
         .context("failed to get PR commits")?;
 
     // Find the first unreviewed commit
     for (commit, _) in &commits {
         if commit.review_status == ReviewStatus::Unreviewed {
             // Drop the transaction since we're going to call review which will start its own
-            tx.commit().await
-                .context("failed to commit transaction")?;
-            
+            tx.commit().await.context("failed to commit transaction")?;
+
             // Review this commit
-            return crate::commit::review(&shell, &commit.git_commit_id, db).await
+            return crate::commit::review(&shell, &commit.git_commit_id, db)
+                .await
                 .context("failed to review commit");
         }
     }
@@ -191,18 +235,15 @@ pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     // All commits are reviewed, check if PR itself needs review
     if pr.review_status == ReviewStatus::Unreviewed {
         // Drop the transaction since we're going to call review which will start its own
-        tx.commit().await
-            .context("failed to commit transaction")?;
-        
+        tx.commit().await.context("failed to commit transaction")?;
+
         // Review the PR
-        return review(pr_number, db).await
-            .context("failed to review PR");
+        return review(pr_number, db).await.context("failed to review PR");
     }
 
     // Nothing to do
-    tx.commit().await
-        .context("failed to commit transaction")?;
-    
+    tx.commit().await.context("failed to commit transaction")?;
+
     println!("Nothing to do");
     Ok(())
 }
@@ -214,13 +255,15 @@ async fn scan_and_update_acks(
     pr_record: &PullRequest,
     commit_records: &[Commit],
 ) -> anyhow::Result<()> {
-    use std::collections::HashMap;
     use chrono::{DateTime, Utc};
+    use std::collections::HashMap;
 
     // Build a map of commit ID prefixes to commit records for fast lookup
     let mut commit_map = HashMap::new();
     for commit in commit_records {
-        commit.git_commit_id.populate_prefix_map(&mut commit_map, commit.id);
+        commit
+            .git_commit_id
+            .populate_prefix_map(&mut commit_map, commit.id);
     }
 
     // Collect all ACKs from comments and reviews
@@ -231,14 +274,20 @@ async fn scan_and_update_acks(
         if let Some((ack_text, commit_id)) = extract_ack_from_text(&comment.body, &commit_map) {
             let timestamp = parse_github_timestamp(&comment.created_at)?;
             let reviewer = &comment.author.login;
-            
+
             // Keep the latest ACK per reviewer
             if let Some((_, _, existing_timestamp, _)) = found_acks.get(reviewer) {
                 if timestamp > *existing_timestamp {
-                    found_acks.insert(reviewer.clone(), (ack_text, reviewer.clone(), timestamp, commit_id));
+                    found_acks.insert(
+                        reviewer.clone(),
+                        (ack_text, reviewer.clone(), timestamp, commit_id),
+                    );
                 }
             } else {
-                found_acks.insert(reviewer.clone(), (ack_text, reviewer.clone(), timestamp, commit_id));
+                found_acks.insert(
+                    reviewer.clone(),
+                    (ack_text, reviewer.clone(), timestamp, commit_id),
+                );
             }
         }
     }
@@ -248,28 +297,35 @@ async fn scan_and_update_acks(
         if let Some((ack_text, commit_id)) = extract_ack_from_text(&review.body, &commit_map) {
             let timestamp = parse_github_timestamp(&review.submitted_at)?;
             let reviewer = &review.author.login;
-            
+
             // Keep the latest ACK per reviewer
             if let Some((_, _, existing_timestamp, _)) = found_acks.get(reviewer) {
                 if timestamp > *existing_timestamp {
-                    found_acks.insert(reviewer.clone(), (ack_text, reviewer.clone(), timestamp, commit_id));
+                    found_acks.insert(
+                        reviewer.clone(),
+                        (ack_text, reviewer.clone(), timestamp, commit_id),
+                    );
                 }
             } else {
-                found_acks.insert(reviewer.clone(), (ack_text, reviewer.clone(), timestamp, commit_id));
+                found_acks.insert(
+                    reviewer.clone(),
+                    (ack_text, reviewer.clone(), timestamp, commit_id),
+                );
             }
         }
     }
 
     // Get all existing ACKs for this PR
-    let existing_acks = Ack::find_by_pull_request(tx, pr_record.id).await
+    let existing_acks = Ack::find_by_pull_request(tx, pr_record.id)
+        .await
         .context("failed to get existing ACKs")?;
-    
+
     let current_user = "apoelstra"; // FIXME: should use per-repository git configuration
-    
+
     // Separate existing ACKs by reviewer and status
     let mut existing_external_acks = HashMap::new();
     let mut existing_user_acks = HashMap::new();
-    
+
     for ack in existing_acks {
         if ack.reviewer_name == current_user {
             // Group current user's ACKs by message
@@ -286,20 +342,25 @@ async fn scan_and_update_acks(
             // Handle current user's ACKs with special logic
             if let Some(existing_user_ack) = existing_user_acks.get(ack_text) {
                 // If we have a pending/failed ACK with identical text, upgrade it to posted
-                if existing_user_ack.status == AckStatus::Pending || existing_user_ack.status == AckStatus::Failed {
+                if existing_user_ack.status == AckStatus::Pending
+                    || existing_user_ack.status == AckStatus::Failed
+                {
                     let update = lcilib::db::models::UpdateAck {
                         status: Some(AckStatus::Posted),
                         ..Default::default()
                     };
-                    existing_user_ack.update(tx, update).await
+                    existing_user_ack
+                        .update(tx, update)
+                        .await
                         .context("failed to update ACK status to posted")?;
                 }
                 // If text is identical and status is already posted/external, do nothing
             } else {
                 // Check if we have any pending/failed ACK with different text
-                let has_pending_or_failed = existing_user_acks.values()
+                let has_pending_or_failed = existing_user_acks
+                    .values()
                     .any(|ack| ack.status == AckStatus::Pending || ack.status == AckStatus::Failed);
-                
+
                 if !has_pending_or_failed {
                     // No conflicting pending/failed ACK, create new external ACK
                     let new_ack = NewAck {
@@ -309,8 +370,9 @@ async fn scan_and_update_acks(
                         message: ack_text.clone(),
                         status: AckStatus::External,
                     };
-                    
-                    Ack::create(tx, new_ack).await
+
+                    Ack::create(tx, new_ack)
+                        .await
                         .context("failed to create external ACK")?;
                 }
                 // If there is a pending/failed ACK with different text, drop this external one
@@ -326,20 +388,23 @@ async fn scan_and_update_acks(
                     message: ack_text.clone(),
                     status: AckStatus::External,
                 };
-                
-                Ack::create(tx, new_ack).await
+
+                Ack::create(tx, new_ack)
+                    .await
                     .context("failed to create external ACK")?;
             }
         }
     }
 
     // Delete external ACKs that are no longer present in GitHub
-    let found_keys: HashSet<String> = found_acks.values()
+    let found_keys: HashSet<String> = found_acks
+        .values()
         .filter(|(_, reviewer, _, _)| *reviewer != current_user) // Don't delete current user's ACKs
         .map(|(ack_text, reviewer, _, _)| format!("{}:{}", reviewer, ack_text))
         .collect();
-    
-    Ack::delete_external_acks_not_in_set(tx, pr_record.id, &found_keys).await
+
+    Ack::delete_external_acks_not_in_set(tx, pr_record.id, &found_keys)
+        .await
         .context("failed to delete obsolete external ACKs")?;
 
     Ok(())
@@ -353,7 +418,7 @@ fn extract_ack_from_text(text: &str, commit_map: &HashMap<String, i32>) -> Optio
             .split(|c: char| !c.is_alphanumeric())
             .filter(|word| !word.is_empty())
             .collect();
-    
+
         // Look for words ending in "ACK" (case sensitive for ACK part)
         let mut ack_word_pos = None;
 
@@ -363,13 +428,15 @@ fn extract_ack_from_text(text: &str, commit_map: &HashMap<String, i32>) -> Optio
                 break;
             }
         }
-    
+
         let ack_pos = ack_word_pos?;
-    
+
         // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
         for word in words.iter().skip(ack_pos) {
-            if word.len() >= 7 && word.chars().all(|c| c.is_ascii_hexdigit()
-                && !c.is_ascii_uppercase())
+            if word.len() >= 7
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
                 && let Some(commit_id) = commit_map.get(*word)
             {
                 // Found a valid commit ID, construct the ACK text
@@ -394,25 +461,25 @@ fn determine_merge_status_from_github(pr_info: &gh::PrInfo) -> MergeStatus {
     if pr_info.merged_at.is_some() {
         return MergeStatus::Pushed;
     }
-    
+
     // If it is closed, this is merge status 'cancelled'
     if pr_info.closed {
         return MergeStatus::Cancelled;
     }
-    
+
     // Otherwise, if the PR cannot be merged due to conflict, it is 'conflicted'
     if pr_info.mergeable == "CONFLICTING" {
         return MergeStatus::Conflicted;
     }
-    
+
     // Otherwise, it is 'pending'
     MergeStatus::Pending
 }
 
 /// Interactive review of a PR
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns an error if:
 /// - Failed to get current repository information
 /// - Database transaction fails
@@ -421,28 +488,38 @@ fn determine_merge_status_from_github(pr_info: &gh::PrInfo) -> MergeStatus {
 #[allow(clippy::too_many_lines)] // yeah half these are just printlns
 pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell)
-        .context("failed to get current repository")?;
+    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
 
-    let tx = db.transaction().await
+    let tx = db
+        .transaction()
+        .await
         .context("failed to start database transaction")?;
 
     // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
+    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
+        .await
         .context("failed to query repository")?
     else {
-        anyhow::bail!("Repository not found in database. Please run 'refresh' first to initialize it.");
+        anyhow::bail!(
+            "Repository not found in database. Please run 'refresh' first to initialize it."
+        );
     };
 
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
+    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?)
+        .await
         .context("failed to query pull request")?
     else {
-        anyhow::bail!("PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number, pr_number);
+        anyhow::bail!(
+            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
+            pr_number,
+            pr_number
+        );
     };
 
     // Get the tip commit
-    let Some(tip_commit) = Commit::find_by_id(&tx, pr.tip_commit_id).await
+    let Some(tip_commit) = Commit::find_by_id(&tx, pr.tip_commit_id)
+        .await
         .context("failed to find tip commit")?
     else {
         anyhow::bail!("Tip commit not found for PR #{}", pr_number);
@@ -476,34 +553,38 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         match choice {
             "1a" => {
                 if let Some(ack_message) = handle_ack_with_editor(&tip_commit, true)? {
-                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message).await
+                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message)
+                        .await
                         .context("failed to create ACK")?;
-                    
+
                     // Update PR review status to Approved
                     let updates = UpdatePullRequest {
                         review_status: Some(ReviewStatus::Approved),
                         ..Default::default()
                     };
-                    pr.update(&tx, updates).await
+                    pr.update(&tx, updates)
+                        .await
                         .context("failed to update PR review status")?;
-                    
+
                     println!("ACK created successfully and PR marked as approved.");
                     break;
                 }
             }
             "1b" => {
                 if let Some(ack_message) = handle_ack_with_editor(&tip_commit, false)? {
-                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message).await
+                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message)
+                        .await
                         .context("failed to create NACK")?;
-                    
+
                     // Update PR review status to Rejected
                     let updates = UpdatePullRequest {
                         review_status: Some(ReviewStatus::Rejected),
                         ..Default::default()
                     };
-                    pr.update(&tx, updates).await
+                    pr.update(&tx, updates)
+                        .await
                         .context("failed to update PR review status")?;
-                    
+
                     println!("NACK created successfully and PR marked as rejected.");
                     break;
                 }
@@ -512,7 +593,8 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                 show_existing_acks(&tx, pr.id).await?;
             }
             "2b" => {
-                erase_ack(&tx, pr.id, tip_commit.id).await
+                erase_ack(&tx, pr.id, tip_commit.id)
+                    .await
                     .context("failed to erase ACK")?;
                 println!("ACK erased successfully.");
             }
@@ -538,8 +620,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         }
     }
 
-    tx.commit().await
-        .context("failed to commit transaction")?;
+    tx.commit().await.context("failed to commit transaction")?;
 
     Ok(())
 }
@@ -555,9 +636,19 @@ fn show_pr_info(
     let commit_info = git::get_commit_info(shell, &tip_commit.git_commit_id)
         .context("failed to get commit info from git")?;
 
-    println!("{} PR #{}: {}", current_repo.project_name, pr.pr_number, pr.title);
+    println!(
+        "{} PR #{}: {}",
+        current_repo.project_name, pr.pr_number, pr.title
+    );
     println!();
-    println!("{}", if pr.body.is_empty() { "(empty)" } else { &pr.body });
+    println!(
+        "{}",
+        if pr.body.is_empty() {
+            "(empty)"
+        } else {
+            &pr.body
+        }
+    );
     println!();
     println!("Tip commit: {}", tip_commit.git_commit_id);
     println!("Author: {}", commit_info.author);
@@ -579,15 +670,13 @@ fn show_pr_info(
 }
 
 /// Handle ACK/NACK with text editor
-fn handle_ack_with_editor(
-    commit: &Commit,
-    is_ack: bool,
-) -> anyhow::Result<Option<String>> {
+fn handle_ack_with_editor(commit: &Commit, is_ack: bool) -> anyhow::Result<Option<String>> {
     // Create temporary directory and file
     let shell = Shell::new()?;
-    let temp_dir = shell.create_temp_dir()
+    let temp_dir = shell
+        .create_temp_dir()
         .context("failed to create temporary directory")?;
-    
+
     let temp_file_path = temp_dir.path().join("ack.txt");
 
     let action_text = if is_ack { "ACK" } else { "NACK" };
@@ -599,9 +688,7 @@ fn handle_ack_with_editor(
 
     let prefill_content = format!(
         "# Enter your {} message here. Commit: {}\n# Edit the message above. Lines starting with # will be removed.\n{}",
-        action_text,
-        commit.git_commit_id,
-        default_message
+        action_text, commit.git_commit_id, default_message
     );
 
     fs::write(&temp_file_path, prefill_content.as_bytes())
@@ -621,8 +708,7 @@ fn handle_ack_with_editor(
     }
 
     // Read the edited content
-    let content = fs::read_to_string(&temp_file_path)
-        .context("failed to read edited file")?;
+    let content = fs::read_to_string(&temp_file_path).context("failed to read edited file")?;
 
     // Remove lines starting with #
     let ack_message: String = content
@@ -642,14 +728,16 @@ async fn create_or_overwrite_ack(
     message: &str,
 ) -> anyhow::Result<()> {
     let reviewer_name = "apoelstra"; // FIXME: should use per-repository git configuration
-    
+
     // Delete any existing ACKs by this reviewer for this PR
-    let existing_acks = Ack::find_by_pull_request(tx, pull_request_id).await
+    let existing_acks = Ack::find_by_pull_request(tx, pull_request_id)
+        .await
         .context("failed to find existing ACKs for PR")?;
-    
+
     for ack in existing_acks {
         if ack.reviewer_name == reviewer_name {
-            ack.delete(tx).await
+            ack.delete(tx)
+                .await
                 .context("failed to delete existing ACK")?;
         }
     }
@@ -663,7 +751,8 @@ async fn create_or_overwrite_ack(
         status: AckStatus::Pending,
     };
 
-    Ack::create(tx, new_ack).await
+    Ack::create(tx, new_ack)
+        .await
         .context("failed to create ACK record")?;
 
     Ok(())
@@ -674,7 +763,8 @@ async fn show_existing_acks(
     tx: &lcilib::Transaction<'_>,
     pull_request_id: i32,
 ) -> anyhow::Result<()> {
-    let acks = Ack::find_by_pull_request(tx, pull_request_id).await
+    let acks = Ack::find_by_pull_request(tx, pull_request_id)
+        .await
         .context("failed to find ACKs for PR")?;
 
     if acks.is_empty() {
@@ -682,7 +772,8 @@ async fn show_existing_acks(
     } else {
         println!("\nExisting ACKs:");
         for ack in acks {
-            println!("  {} by {} ({}): {}", 
+            println!(
+                "  {} by {} ({}): {}",
                 ack.created_at.format("%Y-%m-%d %H:%M:%S"),
                 ack.reviewer_name,
                 ack.status,
@@ -701,20 +792,23 @@ async fn erase_ack(
     commit_id: i32,
 ) -> anyhow::Result<()> {
     // Find existing ACK by this reviewer for this commit
-    let acks = Ack::find_by_pull_request(tx, pull_request_id).await
+    let acks = Ack::find_by_pull_request(tx, pull_request_id)
+        .await
         .context("failed to find ACKs for PR")?;
 
     let reviewer_name = "apoelstra"; // FIXME: should use per-repository git configuration
-    
-    let matching_ack = acks.iter().find(|ack| 
-        ack.commit_id == commit_id && ack.reviewer_name == reviewer_name
-    );
+
+    let matching_ack = acks
+        .iter()
+        .find(|ack| ack.commit_id == commit_id && ack.reviewer_name == reviewer_name);
 
     if let Some(ack) = matching_ack {
         // For now, we don't have a delete method, so we could update the status to indicate it's been withdrawn
         // or implement a delete method. For simplicity, let's just inform the user.
         println!("Found ACK to erase: {}", ack.message);
-        println!("Note: ACK erasure not yet fully implemented - would need to add delete functionality");
+        println!(
+            "Note: ACK erasure not yet fully implemented - would need to add delete functionality"
+        );
     } else {
         println!("No ACK found by {} for this commit.", reviewer_name);
     }
@@ -723,7 +817,11 @@ async fn erase_ack(
 }
 
 /// Show git diff with specified context
-fn show_diff(shell: &Shell, commit_hash: &git::CommitId, context: Option<u32>) -> anyhow::Result<()> {
+fn show_diff(
+    shell: &Shell,
+    commit_hash: &git::CommitId,
+    context: Option<u32>,
+) -> anyhow::Result<()> {
     if let Some(lines) = context {
         let lines = lines.to_string();
         cmd!(shell, "git show --unified={lines} {commit_hash}")
@@ -748,38 +846,54 @@ fn show_diff_stat(shell: &Shell, commit_hash: &git::CommitId) -> anyhow::Result<
 }
 
 /// Show logs for a PR and its commits
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns an error if:
 /// - Failed to get current repository information
 /// - Database transaction fails
 /// - Repository or PR lookup fails
 /// - Date parsing fails
-pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db: &mut Db) -> anyhow::Result<()> {
+pub async fn log(
+    pr_number: usize,
+    since: Option<&str>,
+    until: Option<&str>,
+    db: &mut Db,
+) -> anyhow::Result<()> {
     let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell)
-        .context("failed to get current repository")?;
+    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
 
-    let tx = db.transaction().await
+    let tx = db
+        .transaction()
+        .await
         .context("failed to start database transaction")?;
 
     // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
+    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
+        .await
         .context("failed to query repository")?
     else {
-        anyhow::bail!("Repository not found in database. Please run 'refresh' first to initialize it.");
+        anyhow::bail!(
+            "Repository not found in database. Please run 'refresh' first to initialize it."
+        );
     };
 
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?).await
+    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?)
+        .await
         .context("failed to query pull request")?
     else {
-        anyhow::bail!("PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.", pr_number, pr_number);
+        anyhow::bail!(
+            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
+            pr_number,
+            pr_number
+        );
     };
 
     // Get all commits associated with this PR
-    let commits = pr.get_commits(&tx).await
+    let commits = pr
+        .get_commits(&tx)
+        .await
         .context("failed to get PR commits")?;
 
     // Build list of entities to query logs for (PR + all its commits)
@@ -789,7 +903,8 @@ pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db:
     }
 
     // Query logs for all entities
-    let logs = Log::query_for_entities(&tx, &entities, since, until).await
+    let logs = Log::query_for_entities(&tx, &entities, since, until)
+        .await
         .context("failed to query logs")?;
 
     // Display the logs
@@ -797,16 +912,15 @@ pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db:
         println!("{}", log.format_for_display());
     }
 
-    tx.commit().await
-        .context("failed to commit transaction")?;
+    tx.commit().await.context("failed to commit transaction")?;
 
     Ok(())
 }
 
 /// Refresh a PR from GitHub (CLI entry point)
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns an error if:
 /// - Failed to get current repository information
 /// - GitHub API call fails or PR not found
@@ -815,16 +929,13 @@ pub async fn log(pr_number: usize, since: Option<&str>, until: Option<&str>, db:
 /// - PR has no commits
 pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell)
-        .context("failed to get current repository")?;
+    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
 
     // Fetch PR info from GitHub
-    let pr_info = gh::get_pr_info(&shell, pr_number)
-        .context("failed to fetch PR from GitHub")?;
+    let pr_info = gh::get_pr_info(&shell, pr_number).context("failed to fetch PR from GitHub")?;
 
     // Fetch the head commit to ensure it's available locally
-    git::fetch_commit(&shell, &pr_info.head_commit)
-        .context("failed to fetch head commit")?;
+    git::fetch_commit(&shell, &pr_info.head_commit).context("failed to fetch head commit")?;
 
     refresh(shell, &current_repo, &pr_info, db).await
 }
@@ -833,22 +944,30 @@ pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<(
 ///
 /// Takes ownership of its shell because `Shell` is `Send` but not `Sync`. We want to hold the shell
 /// across await points without making the whole future non-`Send` so we've gotta do this.
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns an error if:
 /// - Database transaction or operations fail
 /// - PR has no commits
 #[allow(clippy::too_many_lines)] // unsure about this. seems reasonable enough
-pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh::PrInfo, db: &mut Db) -> anyhow::Result<()> {
-
+pub async fn refresh(
+    shell: Shell,
+    current_repo: &repo::Repository,
+    pr_info: &gh::PrInfo,
+    db: &mut Db,
+) -> anyhow::Result<()> {
     // Start database transaction
-    let tx = db.transaction().await
+    let tx = db
+        .transaction()
+        .await
         .context("failed to start database transaction")?;
 
     // Find or create the repository record
-    let repo_record = if let Some(repo) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap()).await
-        .context("failed to query repository")? 
+    let repo_record = if let Some(repo) =
+        Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
+            .await
+            .context("failed to query repository")?
     {
         repo
     } else {
@@ -858,15 +977,18 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
             path: current_repo.repo_root.to_str().unwrap().to_string(),
             nixfile_path: "default.nix".to_string(), // Default, can be configured later
         };
-        Repository::create(&tx, new_repo).await
+        Repository::create(&tx, new_repo)
+            .await
             .context("failed to create repository record")?
     };
 
     // Create or find commits for all commits in the PR
     let mut commit_records = Vec::new();
     for commit_oid in pr_info.commit_ids() {
-        let commit_record = if let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, commit_oid).await
-            .context("failed to query commit")? 
+        let commit_record = if let Some(commit) =
+            Commit::find_by_git_id(&tx, repo_record.id, commit_oid)
+                .await
+                .context("failed to query commit")?
         {
             commit
         } else {
@@ -886,22 +1008,24 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
                 review_text: None,
             };
 
-            Commit::create(&tx, new_commit).await
+            Commit::create(&tx, new_commit)
+                .await
                 .context("failed to create commit record")?
         };
         commit_records.push(commit_record);
     }
 
     // Find the tip commit (last commit in the list)
-    let tip_commit = commit_records.last()
-        .context("PR has no commits")?;
+    let tip_commit = commit_records.last().context("PR has no commits")?;
 
     // Determine merge status from GitHub data
     let merge_status = determine_merge_status_from_github(pr_info);
 
     // Create or update the PR record
-    let pr_record = if let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_info.number).await
-        .context("failed to query pull request")?
+    let pr_record = if let Some(pr) =
+        PullRequest::find_by_number(&tx, repo_record.id, pr_info.number)
+            .await
+            .context("failed to query pull request")?
     {
         // Update existing PR
         let updates = UpdatePullRequest {
@@ -913,7 +1037,8 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
             merge_status: Some(merge_status),
             ..Default::default()
         };
-        pr.update(&tx, updates).await
+        pr.update(&tx, updates)
+            .await
             .context("failed to update pull request")?
     } else {
         // Create new PR
@@ -931,12 +1056,14 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
             ok_to_merge: true,
             required_reviewers: 1,
         };
-        PullRequest::create(&tx, new_pr).await
+        PullRequest::create(&tx, new_pr)
+            .await
             .context("failed to create pull request")?
     };
 
     // Get existing pr_commits for this PR
-    let existing_pr_commits = PrCommit::find_by_pr(&tx, pr_record.id).await
+    let existing_pr_commits = PrCommit::find_by_pr(&tx, pr_record.id)
+        .await
         .context("failed to get existing PR commits")?;
 
     // Build maps for efficient lookup
@@ -948,23 +1075,23 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
     // Build the new state we want
     let mut new_commit_ids = HashSet::new();
     let mut updates_needed = Vec::new();
-    
+
     for (i, commit) in commit_records.iter().enumerate() {
         new_commit_ids.insert(commit.id);
-        
+
         let new_sequence = i32::try_from(i + 1)?;
         let new_commit_type = if i == commit_records.len() - 1 {
             CommitType::Tip
         } else {
             CommitType::Normal
         };
-        
+
         if let Some(existing) = existing_by_commit_id.get(&commit.id) {
             // Check if we need to update this record
             let needs_update = existing.sequence_order != new_sequence
                 || existing.commit_type != new_commit_type
                 || !existing.is_current;
-                
+
             if needs_update {
                 updates_needed.push((
                     existing.id,
@@ -975,7 +1102,8 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
             }
         } else {
             // This is a new commit, insert it
-            PrCommit::create(&tx, pr_record.id, commit.id, new_sequence, new_commit_type).await
+            PrCommit::create(&tx, pr_record.id, commit.id, new_sequence, new_commit_type)
+                .await
                 .context("failed to create new pr_commit record")?;
         }
     }
@@ -989,30 +1117,33 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
 
     // Apply all updates
     for (id, sequence_order, commit_type, is_current) in updates_needed {
-        PrCommit::update_status(&tx, id, sequence_order, commit_type, is_current).await
+        PrCommit::update_status(&tx, id, sequence_order, commit_type, is_current)
+            .await
             .context("failed to update pr_commit record")?;
     }
 
     // Scan for ACKs in GitHub comments and reviews
-    scan_and_update_acks(&tx, pr_info, &pr_record, &commit_records).await
+    scan_and_update_acks(&tx, pr_info, &pr_record, &commit_records)
+        .await
         .context("failed to scan and update ACKs")?;
 
     // Done interacting with the database. Commit.
-    tx.commit().await
-        .context("failed to commit transaction")?;
+    tx.commit().await.context("failed to commit transaction")?;
 
     // If PR was conflicted, check if we need to post a rebase comment
     if merge_status == MergeStatus::Conflicted {
         let rebase_comment = format!("{} needs rebase", tip_commit.git_commit_id);
-        
+
         // Check if this exact comment already exists
-        let comment_exists = pr_info.comments.iter()
+        let comment_exists = pr_info
+            .comments
+            .iter()
             .any(|comment| comment.body.trim() == rebase_comment);
-        
+
         if !comment_exists {
             gh::post_pr_comment(&shell, pr_info.number, &rebase_comment)
                 .context("failed to post rebase comment")?;
-            
+
             println!("Posted rebase comment: {}", rebase_comment);
         }
     }

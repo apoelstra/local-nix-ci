@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use tokio_postgres::{Error, Transaction, Client};
 use std::str::FromStr;
+use tokio_postgres::{Client, Error, Transaction};
 
 /// Entity types that can be logged, matching the database enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, postgres_types::FromSql, postgres_types::ToSql)]
@@ -41,11 +41,13 @@ impl FromStr for EntityType {
             "stack" => Ok(Self::Stack),
             "ack" => Ok(Self::Ack),
             "system" => Ok(Self::System),
-            _ => Err(crate::db::models::ParseEnumError::new("EntityType", s.to_string())),
+            _ => Err(crate::db::models::ParseEnumError::new(
+                "EntityType",
+                s.to_string(),
+            )),
         }
     }
 }
-
 
 /// Log an action to the polymorphic logs table
 ///
@@ -109,10 +111,7 @@ pub async fn log_action_simple(
 /// # Errors
 ///
 /// Errors if the `SELECT` query fails.
-pub async fn table_exists(
-    tx: &Transaction<'_>,
-    table: &str,
-) -> Result<bool, Error> {
+pub async fn table_exists(tx: &Transaction<'_>, table: &str) -> Result<bool, Error> {
     let row = tx
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
@@ -141,10 +140,7 @@ pub async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, Error> {
 /// # Errors
 ///
 /// Errors if the SELECT query fails.
-pub async fn repository_exists_by_path(
-    tx: &Transaction<'_>,
-    path: &str,
-) -> Result<bool, Error> {
+pub async fn repository_exists_by_path(tx: &Transaction<'_>, path: &str) -> Result<bool, Error> {
     let row = tx
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM repositories WHERE path = $1)",
@@ -185,7 +181,7 @@ pub async fn commit_exists_by_git_id(
         .query_one(
             r#"
             SELECT EXISTS (
-                SELECT 1 FROM commits 
+                SELECT 1 FROM commits
                 WHERE repository_id = $1 AND git_commit_id = $2
             )
             "#,
@@ -210,7 +206,7 @@ pub async fn pull_request_exists(
         .query_one(
             r#"
             SELECT EXISTS (
-                SELECT 1 FROM pull_requests 
+                SELECT 1 FROM pull_requests
                 WHERE repository_id = $1 AND pr_number = $2
             )
             "#,

@@ -3,8 +3,8 @@
 mod lexer;
 
 use core::fmt;
-use lexer::{ArgToken, lexed_args};
 use lcilib::db::EntityType;
+use lexer::{ArgToken, lexed_args};
 use std::process;
 use std::sync::OnceLock;
 
@@ -156,14 +156,13 @@ impl std::fmt::Display for ParseError {
                 )
             }
             Self::LogOptionOnNonLogAction(opt) => {
-                write!(
-                    f,
-                    "'{}' is only valid with the 'log' action.",
-                    opt
-                )
+                write!(f, "'{}' is only valid with the 'log' action.", opt)
             }
             Self::MissingAction => {
-                write!(f, "No action specified. Please provide an action (info, log, next, refresh, review, or run).")
+                write!(
+                    f,
+                    "No action specified. Please provide an action (info, log, next, refresh, review, or run)."
+                )
             }
         }
     }
@@ -177,7 +176,8 @@ fn validate_datetime(s: &str) -> bool {
     // YYYY-MM-DD
     if s.len() == 10 {
         let b = s.as_bytes();
-        return b[4] == b'-' && b[7] == b'-'
+        return b[4] == b'-'
+            && b[7] == b'-'
             && b[..4].iter().all(u8::is_ascii_digit)
             && b[5..7].iter().all(u8::is_ascii_digit)
             && b[8..10].iter().all(u8::is_ascii_digit);
@@ -185,8 +185,11 @@ fn validate_datetime(s: &str) -> bool {
     // YYYY-MM-DD HH:MM:SS
     if s.len() == 19 {
         let b = s.as_bytes();
-        return b[4] == b'-' && b[7] == b'-' && b[10] == b' '
-            && b[13] == b':' && b[16] == b':'
+        return b[4] == b'-'
+            && b[7] == b'-'
+            && b[10] == b' '
+            && b[13] == b':'
+            && b[16] == b':'
             && b[..4].iter().all(u8::is_ascii_digit)
             && b[5..7].iter().all(u8::is_ascii_digit)
             && b[8..10].iter().all(u8::is_ascii_digit)
@@ -211,9 +214,14 @@ fn parse_args() -> Result<CliArguments, ParseError> {
         Ok(())
     }
 
-    fn multiple_log_entries_error(existing: Option<EntityType>, new: Option<EntityType>) -> ParseError {
+    fn multiple_log_entries_error(
+        existing: Option<EntityType>,
+        new: Option<EntityType>,
+    ) -> ParseError {
         ParseError::MultipleLogEntityTypes(
-            existing.as_ref().map_or("all".to_owned(), EntityType::to_string),
+            existing
+                .as_ref()
+                .map_or("all".to_owned(), EntityType::to_string),
             new.as_ref().map_or("all".to_owned(), EntityType::to_string),
         )
     }
@@ -253,25 +261,45 @@ fn parse_args() -> Result<CliArguments, ParseError> {
             // Target types
             ArgToken::Pr => {
                 set_once(&mut target_type, "pr", PE::MultipleTargetTypes)?;
-                set_once(&mut log_entity_type, Some(EntityType::PullRequest), multiple_log_entries_error)?;
-            },
+                set_once(
+                    &mut log_entity_type,
+                    Some(EntityType::PullRequest),
+                    multiple_log_entries_error,
+                )?;
+            }
             ArgToken::Commit => {
                 set_once(&mut target_type, "commit", PE::MultipleTargetTypes)?;
-                set_once(&mut log_entity_type, Some(EntityType::Commit), multiple_log_entries_error)?;
+                set_once(
+                    &mut log_entity_type,
+                    Some(EntityType::Commit),
+                    multiple_log_entries_error,
+                )?;
             }
             ArgToken::Stack => {
                 set_once(&mut target_type, "stack", PE::MultipleTargetTypes)?;
-                set_once(&mut log_entity_type, Some(EntityType::Stack), multiple_log_entries_error)?;
+                set_once(
+                    &mut log_entity_type,
+                    Some(EntityType::Stack),
+                    multiple_log_entries_error,
+                )?;
             }
 
             // Log entity type filters (only valid with `log` action)
             ArgToken::Ack => {
                 saw_log_option.get_or_insert("ack");
-                set_once(&mut log_entity_type, Some(EntityType::Ack), multiple_log_entries_error)?;
+                set_once(
+                    &mut log_entity_type,
+                    Some(EntityType::Ack),
+                    multiple_log_entries_error,
+                )?;
             }
             ArgToken::System => {
                 saw_log_option.get_or_insert("system");
-                set_once(&mut log_entity_type, Some(EntityType::System), multiple_log_entries_error)?;
+                set_once(
+                    &mut log_entity_type,
+                    Some(EntityType::System),
+                    multiple_log_entries_error,
+                )?;
             }
             ArgToken::All => {
                 saw_log_option.get_or_insert("all");
@@ -347,7 +375,9 @@ fn parse_args() -> Result<CliArguments, ParseError> {
     };
 
     // Validate that log-specific options are only used with the log action.
-    if action != Action::Log && let Some(opt) = saw_log_option {
+    if action != Action::Log
+        && let Some(opt) = saw_log_option
+    {
         return Err(ParseError::LogOptionOnNonLogAction(opt));
     }
 
@@ -390,7 +420,10 @@ fn parse_args() -> Result<CliArguments, ParseError> {
 
 pub fn usage() {
     let name = PROGRAM_NAME.get().map_or("local-ci", |s| s.as_str());
-    eprintln!("Usage: {} [ACTION] [TARGET_TYPE] [TARGET] [LOG_OPTIONS]", name);
+    eprintln!(
+        "Usage: {} [ACTION] [TARGET_TYPE] [TARGET] [LOG_OPTIONS]",
+        name
+    );
     eprintln!();
     eprintln!("Actions:");
     eprintln!("  help       Show this help message");

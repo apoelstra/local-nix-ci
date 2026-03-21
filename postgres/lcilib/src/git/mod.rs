@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use core::{fmt, str::FromStr};
+use postgres_types::{FromSql, ToSql};
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use postgres_types::{FromSql, ToSql};
 use xshell::{Shell, cmd};
 
 /// Information about a git commit
@@ -217,7 +217,8 @@ pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<CommitId, Er
                 .ignore_stdout()
                 .run()
                 .is_ok()
-            && let Ok(r) = resolve_ref(shell, format!("upstream/{remote_ref}")) {
+                && let Ok(r) = resolve_ref(shell, format!("upstream/{remote_ref}"))
+            {
                 return Ok(r);
             }
             Err(e)
@@ -231,9 +232,12 @@ pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<CommitId, Er
 /// Returns an error if the git command fails to execute.
 pub fn get_commit_info<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<CommitInfo, Error> {
     // Get author and date
-    let author_date = cmd!(shell, "git show --no-patch '--format=%an <%ae>%n%ai' {commit}")
-        .read()
-        .map_err(Error::Shell)?;
+    let author_date = cmd!(
+        shell,
+        "git show --no-patch '--format=%an <%ae>%n%ai' {commit}"
+    )
+    .read()
+    .map_err(Error::Shell)?;
     let mut lines = author_date.lines();
     let author = lines.next().unwrap_or("Unknown").to_string();
     let date = lines.next().unwrap_or("Unknown").to_string();
