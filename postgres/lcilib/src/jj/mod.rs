@@ -124,14 +124,7 @@ pub fn create_merge_commit(shell: &Shell, pr_tip_commit: &str, target_branch: &s
     let change_id = jj_new(shell, &[target_branch, pr_tip_commit])?;
     
     // Set the description
-    jj(shell)
-        .arg("describe")
-        .arg("-r")
-        .arg(&change_id)
-        .arg("-m")
-        .arg(description)
-        .run()
-        .map_err(Error::Shell)?;
+    update_commit_description(shell, &change_id, description)?;
     
     // Check for conflicts
     if has_conflicts(shell, &change_id)? {
@@ -158,10 +151,13 @@ pub fn get_current_git_commit_for_change_id(shell: &Shell, change_id: &str) -> R
 pub fn update_commit_description(shell: &Shell, change_id: &str, description: &str) -> Result<(), Error> {
     jj(shell)
         .arg("describe")
+        .arg("--quiet")
         .arg("-r")
         .arg(change_id)
         .arg("-m")
         .arg(description)
+        .ignore_stdout()
+        .quiet()
         .run()
         .map_err(Error::Shell)?;
     
