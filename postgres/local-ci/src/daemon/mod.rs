@@ -9,7 +9,7 @@ use lcilib::db::models::{Commit, Repository, UpdateCommit, CiStatus};
 use std::path::Path;
 use std::time::Duration;
 use tokio::{time, task};
-use xshell::Shell;
+use xshell::{cmd, Shell};
 
 pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     log::info(format_args!("Starting local-ci daemon..."));
@@ -286,6 +286,7 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
 
     // Use spawn_blocking for the GitHub API calls and shell operations
     let repo_path = repo.path.clone();
+    let repo_name = repo.name.clone();
     let last_synced = repo.last_synced_at;
     
     let data = task::spawn_blocking(move || -> Option<Data> {
@@ -296,6 +297,24 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             return None;
         }
         shell.change_dir(&repo_path);
+        
+        // Fetch latest changes from git remote
+        if let Err(e) = cmd!(shell, "git fetch origin").run() {
+            let error = anyhow::Error::from(e);
+            log::warn(format_args!(
+                "Failed to run 'git fetch origin' in repository {}: {:?}",
+                repo_name, error
+            ));
+        }
+        
+        // Fetch changes into jj
+        if let Err(e) = cmd!(shell, "jj git fetch").run() {
+            let error = anyhow::Error::from(e);
+            log::warn(format_args!(
+                "Failed to run 'jj git fetch' in repository {}: {:?}",
+                repo_name, error
+            ));
+        }
         
         // Get updated PRs from GitHub
         let pr_infos = match lcilib::gh::list_updated_prs(&shell, last_synced)  {
