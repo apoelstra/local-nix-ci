@@ -78,7 +78,7 @@ async fn get_all_prs_for_repo(
     let rows = tx
         .query(
             r#"
-            SELECT id, repository_id, pr_number, title, body, author_login, tip_commit_id, merge_status, review_status, 
+            SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status, 
                    priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
             FROM pull_requests WHERE repository_id = $1 ORDER BY pr_number DESC
             "#,
@@ -94,6 +94,7 @@ async fn get_all_prs_for_repo(
         title: row.get("title"),
         body: row.get("body"),
         author_login: row.get("author_login"),
+        target_branch: row.get("target_branch"),
         tip_commit_id: row.get("tip_commit_id"),
         merge_status: row.get("merge_status"),
         review_status: row.get("review_status"),

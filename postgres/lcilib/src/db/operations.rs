@@ -596,7 +596,7 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login,
+                SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, pr.target_branch,
                        pr.tip_commit_id, pr.merge_status, pr.review_status, pr.priority, pr.ok_to_merge, 
                        pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
                 FROM pull_requests pr
@@ -684,10 +684,10 @@ impl PullRequest {
         let row = tx
             .query_one(
                 r#"
-                INSERT INTO pull_requests (repository_id, pr_number, title, body, author_login, tip_commit_id, 
+                INSERT INTO pull_requests (repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, 
                                          merge_status, review_status, priority, ok_to_merge, required_reviewers)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                RETURNING id, repository_id, pr_number, title, body, author_login, tip_commit_id, merge_status, review_status, 
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                RETURNING id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status, 
                          priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 "#,
                 &[
@@ -696,6 +696,7 @@ impl PullRequest {
                     &new_pr.title,
                     &new_pr.body,
                     &new_pr.author_login,
+                    &new_pr.target_branch,
                     &new_pr.tip_commit_id,
                     &new_pr.merge_status,
                     &new_pr.review_status,
@@ -735,7 +736,7 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, title, body, author_login, tip_commit_id, merge_status, review_status, 
+                SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status, 
                        priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests WHERE id = $1
                 "#,
@@ -756,7 +757,7 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, title, body, author_login, tip_commit_id, merge_status, review_status, 
+                SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status, 
                        priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests WHERE repository_id = $1 AND pr_number = $2
                 "#,
@@ -777,7 +778,7 @@ impl PullRequest {
         let rows = tx
             .query(
                 r#"
-                SELECT id, repository_id, pr_number, title, body, author_login, tip_commit_id, merge_status, review_status, 
+                SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status, 
                        priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests 
                 WHERE review_status = 'approved' AND ok_to_merge = true
@@ -893,6 +894,12 @@ impl PullRequest {
             param_count += 1;
         }
 
+        if let Some(target_branch) = &updates.target_branch {
+            set_clauses.push(format!("target_branch = ${}", param_count));
+            params.push(target_branch);
+            param_count += 1;
+        }
+
         if let Some(tip_commit_id) = &updates.tip_commit_id {
             set_clauses.push(format!("tip_commit_id = ${}", param_count));
             params.push(tip_commit_id);
@@ -938,7 +945,7 @@ impl PullRequest {
             r#"
             UPDATE pull_requests SET {}
             WHERE id = ${}
-            RETURNING id, repository_id, pr_number, title, body, author_login, tip_commit_id, merge_status, review_status, 
+            RETURNING id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status, 
                      priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
             "#,
             set_clauses.join(", "),
@@ -970,6 +977,7 @@ impl PullRequest {
             title: row.get("title"),
             body: row.get("body"),
             author_login: row.get("author_login"),
+            target_branch: row.get("target_branch"),
             tip_commit_id: row.get("tip_commit_id"),
             merge_status: row.get("merge_status"),
             review_status: row.get("review_status"),
@@ -1103,7 +1111,7 @@ impl Stack {
         let rows = tx
             .query(
                 r#"
-                SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login,
+                SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, pr.target_branch,
                        pr.tip_commit_id, pr.merge_status, pr.review_status, pr.priority, pr.ok_to_merge, 
                        pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
                 FROM pull_requests pr

@@ -922,6 +922,7 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
             title: Some(pr_info.title.clone()),
             body: Some(pr_info.body.clone()),
             author_login: Some(pr_info.author.login.clone()),
+            target_branch: Some(pr_info.base_ref.clone()),
             tip_commit_id: Some(tip_commit.id),
             merge_status: Some(merge_status),
             ..Default::default()
@@ -936,6 +937,7 @@ pub async fn refresh(shell: Shell, current_repo: &repo::Repository, pr_info: &gh
             title: pr_info.title.clone(),
             body: pr_info.body.clone(),
             author_login: pr_info.author.login.clone(),
+            target_branch: pr_info.base_ref.clone(),
             tip_commit_id: tip_commit.id,
             merge_status,
             review_status: ReviewStatus::Unreviewed,

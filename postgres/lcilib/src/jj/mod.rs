@@ -93,3 +93,77 @@ pub fn jj_log<R: AsRef<OsStr>>(shell: &Shell, template: &str, revset: R) -> Resu
 pub fn get_change_id_for_commit(shell: &Shell, git_commit_id: &str) -> Result<String, Error> {
     jj_log(shell, "change_id", git_commit_id)
 }
+
+/// Check if a commit is GPG signed using jj
+///
+/// # Errors
+///
+/// Returns an error if the jj command fails or if we can't determine the repository path.
+pub fn is_commit_gpg_signed(shell: &Shell, change_id: &str) -> Result<bool, Error> {
+    let output = jj_log(shell, "if(signature, \"true\", \"false\")", change_id)?;
+    Ok(output.trim() == "true")
+}
+
+/// Check if a commit has conflicts using jj
+///
+/// # Errors
+///
+/// Returns an error if the jj command fails to execute.
+pub fn has_conflicts(shell: &Shell, change_id: &str) -> Result<bool, Error> {
+    let output = jj_log(shell, "if(conflict,\"x\",\"\")", change_id)?;
+    Ok(!output.trim().is_empty())
+}
+
+/// Create a merge commit using jj
+///
+/// # Errors
+///
+/// Returns an error if the jj command fails to execute or if the merge has conflicts.
+pub fn create_merge_commit(shell: &Shell, pr_tip_commit: &str, target_branch: &str, description: &str) -> Result<String, Error> {
+    // Create new merge commit
+    let change_id = jj_new(shell, &[target_branch, pr_tip_commit])?;
+    
+    // Set the description
+    jj(shell)
+        .arg("describe")
+        .arg("-r")
+        .arg(&change_id)
+        .arg("-m")
+        .arg(description)
+        .run()
+        .map_err(Error::Shell)?;
+    
+    // Check for conflicts
+    if has_conflicts(shell, &change_id)? {
+        return Err(Error::ParseOutput(format!("Merge commit {} has conflicts", change_id)));
+    }
+    
+    Ok(change_id)
+}
+
+/// Get the current git commit ID for a jj change ID
+///
+/// # Errors
+///
+/// Returns an error if the jj command fails to execute.
+pub fn get_current_git_commit_for_change_id(shell: &Shell, change_id: &str) -> Result<String, Error> {
+    jj_log(shell, "commit_id", change_id)
+}
+
+/// Update the description of a commit using jj
+///
+/// # Errors
+///
+/// Returns an error if the jj command fails to execute.
+pub fn update_commit_description(shell: &Shell, change_id: &str, description: &str) -> Result<(), Error> {
+    jj(shell)
+        .arg("describe")
+        .arg("-r")
+        .arg(change_id)
+        .arg("-m")
+        .arg(description)
+        .run()
+        .map_err(Error::Shell)?;
+    
+    Ok(())
+}

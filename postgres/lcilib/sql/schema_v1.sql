@@ -50,6 +50,7 @@ CREATE TABLE pull_requests (
     title TEXT NOT NULL DEFAULT '',
     body TEXT NOT NULL DEFAULT '',
     author_login VARCHAR(255) NOT NULL DEFAULT '',
+    target_branch VARCHAR(255) NOT NULL DEFAULT 'master',
     tip_commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE,
     merge_status merge_status NOT NULL DEFAULT 'pending',
     review_status review_status NOT NULL DEFAULT 'unreviewed',
@@ -142,6 +143,8 @@ CREATE INDEX idx_pull_requests_repository_id ON pull_requests(repository_id);
 CREATE INDEX idx_pull_requests_review_status ON pull_requests(review_status);
 CREATE INDEX idx_pull_requests_ok_to_merge ON pull_requests(ok_to_merge);
 CREATE INDEX idx_pull_requests_author_login ON pull_requests(author_login);
+CREATE INDEX idx_pull_requests_target_branch ON pull_requests(target_branch);
+CREATE INDEX idx_pull_requests_repo_target ON pull_requests(repository_id, target_branch);
 
 CREATE INDEX idx_pr_commits_pull_request_id ON pr_commits(pull_request_id);
 CREATE INDEX idx_pr_commits_commit_id ON pr_commits(commit_id);
