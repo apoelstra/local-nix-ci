@@ -97,15 +97,13 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     // Sort by priority (highest first)
     prioritized_stacks.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
-    for (stack, _commits, _priority) in &prioritized_stacks {
-        if let Some(commit) = stack
-            .get_next_untested_commit(&tx)
-            .await
-            .context("getting next untested commit from stack")?
-        {
-            log::info("Found commit from high-priority stack");
-            tx.commit().await.context("committing transaction")?;
-            return Ok(Some(commit.into_commit_to_test(CommitType::Merge)));
+    for (_stack, commits, _priority) in &prioritized_stacks {
+        for commit in *commits {
+            if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
+                log::info("Found commit from high-priority stack");
+                tx.commit().await.context("committing transaction")?;
+                return Ok(Some(commit.clone()));
+            }
         }
     }
 
@@ -159,15 +157,13 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     low_priority_with_scores
         .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
-    for (stack, _commits, _priority) in &low_priority_with_scores {
-        if let Some(commit) = stack
-            .get_next_untested_commit(&tx)
-            .await
-            .context("getting next untested commit from low-priority stack")?
-        {
-            log::info("Found commit from low-priority stack");
-            tx.commit().await.context("committing transaction")?;
-            return Ok(Some(commit.into_commit_to_test(CommitType::Merge)));
+    for (_stack, commits, _priority) in &low_priority_with_scores {
+        for commit in *commits {
+            if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
+                log::info("Found commit from low-priority stack");
+                tx.commit().await.context("committing transaction")?;
+                return Ok(Some(commit.clone()));
+            }
         }
     }
 
@@ -228,11 +224,13 @@ async fn print_work_summary(
                 && commit.ci_status == CiStatus::Unstarted
                 && commit.should_run_ci
             {
+                let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
+                let prs_str = prs.join(", ");
                 log::info(format_args!(
                     "  - {} ({}) ({})",
                     commit.git_commit_id,
                     commit.jj_change_id.prefix8(),
-                    commit.commit_type,
+                    prs_str,
                 ));
             }
         }
@@ -518,7 +516,7 @@ async fn get_or_create_derivation_with_cancellation(
     }
 
     // Build commit JSON for nix-instantiate
-    let is_tip = if commit.commit_type == CommitType::Normal {
+    let is_tip = if commit.prs.iter().all(|(_, commit_type)| *commit_type == CommitType::Normal) {
         "false"
     } else {
         "true"

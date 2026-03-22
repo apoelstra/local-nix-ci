@@ -307,19 +307,6 @@ impl Commit {
         ret
     }
 
-    pub fn into_commit_to_test(self, commit_type: CommitType) -> CommitToTest {
-        CommitToTest {
-            id: self.id,
-            repository_id: self.repository_id,
-            git_commit_id: self.git_commit_id,
-            jj_change_id: self.jj_change_id,
-            review_status: self.review_status,
-            should_run_ci: self.should_run_ci,
-            ci_status: self.ci_status,
-            nix_derivation: self.nix_derivation,
-            commit_type,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -331,14 +318,22 @@ pub struct CommitToTest {
     pub review_status: ReviewStatus,
     pub should_run_ci: bool,
     pub ci_status: CiStatus,
-    pub commit_type: CommitType,
     pub nix_derivation: Option<String>,
+    pub prs: Vec<(super::PullRequest, CommitType)>,
 }
 
 impl CommitToTest {
-    pub(super) fn from_row(row: &tokio_postgres::Row) -> Self {
-        let commit = Commit::from_row(row);
-        let commit_type = row.get("commit_type");
-        commit.into_commit_to_test(commit_type)
+    pub(crate) fn from_row(row: &tokio_postgres::Row) -> Self {
+        Self {
+            id: row.get("id"),
+            repository_id: row.get("repository_id"),
+            git_commit_id: row.get("git_commit_id"),
+            jj_change_id: row.get("jj_change_id"),
+            review_status: row.get("review_status"),
+            should_run_ci: row.get("should_run_ci"),
+            ci_status: row.get("ci_status"),
+            nix_derivation: row.get("nix_derivation"),
+            prs: vec![], // This will be populated by the calling code after grouping rows
+        }
     }
 }

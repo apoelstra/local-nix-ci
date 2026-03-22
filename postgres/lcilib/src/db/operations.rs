@@ -603,9 +603,14 @@ impl PullRequest {
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
                        c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
-                       pc.commit_type
+                       pc.commit_type,
+                       pr.id as pr_id, pr.repository_id as pr_repository_id, pr.pr_number, pr.title, pr.body, 
+                       pr.author_login, pr.target_branch, pr.tip_commit_id, pr.merge_status, pr.review_status as pr_review_status,
+                       pr.priority, pr.ok_to_merge, pr.required_reviewers, pr.created_at as pr_created_at, 
+                       pr.updated_at as pr_updated_at, pr.synced_at as pr_synced_at
                 FROM commits c
                 JOIN pr_commits pc ON c.id = pc.commit_id
+                JOIN pull_requests pr ON pc.pull_request_id = pr.id
                 WHERE pc.pull_request_id = $1
                 AND pc.is_current = true
                 AND c.review_status = 'approved'
@@ -630,9 +635,30 @@ impl PullRequest {
             return Ok(None);
         };
 
-        let commit = Commit::from_row(row);
-        let commit_type = row.get::<_, CommitType>("commit_type");
-        Ok(Some(commit.into_commit_to_test(commit_type)))
+        let commit_type = row.get("commit_type");
+        let pr = Self {
+            id: row.get("pr_id"),
+            repository_id: row.get("pr_repository_id"),
+            pr_number: row.get("pr_number"),
+            title: row.get("title"),
+            body: row.get("body"),
+            author_login: row.get("author_login"),
+            target_branch: row.get("target_branch"),
+            tip_commit_id: row.get("tip_commit_id"),
+            merge_status: row.get("merge_status"),
+            review_status: row.get("pr_review_status"),
+            priority: row.get("priority"),
+            ok_to_merge: row.get("ok_to_merge"),
+            required_reviewers: row.get("required_reviewers"),
+            created_at: row.get("pr_created_at"),
+            updated_at: row.get("pr_updated_at"),
+            synced_at: row.get("pr_synced_at"),
+        };
+
+        let mut commit = CommitToTest::from_row(row);
+        commit.prs.push((pr, commit_type));
+        
+        Ok(Some(commit))
     }
 
     /// Create a new pull request
@@ -881,47 +907,6 @@ impl PullRequest {
 
 /// `Stack` operations
 impl Stack {
-    /// Get the next untested approved commit from this stack
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn get_next_untested_commit(
-        &self,
-        tx: &Transaction<'_>,
-    ) -> Result<Option<Commit>, OperationError> {
-        let rows = tx
-            .query(
-                r#"
-                SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
-                FROM commits c
-                JOIN stack_commits sc ON c.id = sc.commit_id
-                WHERE sc.stack_id = $1
-                AND c.review_status = 'approved'
-                AND c.ci_status = 'unstarted'
-                AND c.should_run_ci = true
-                ORDER BY sc.sequence_order ASC
-                LIMIT 1
-                "#,
-                &[&self.id],
-            )
-            .await
-            .map_err(|e| {
-                OperationError::with_context(
-                    e,
-                    "get_next_untested_commit",
-                    "Stack",
-                    &format!(
-                        "stack_id: {}, target_branch: {}",
-                        self.id, self.target_branch
-                    ),
-                )
-            })?;
-
-        Ok(rows.first().map(Commit::from_row))
-    }
-
     /// Get PRs associated with this stack
     ///
     /// # Errors

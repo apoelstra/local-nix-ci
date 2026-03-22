@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
-use super::{Commit, CommitToTest, CommitType, DbCommitId, DbRepositoryId};
+use super::{CommitToTest, DbCommitId, DbRepositoryId};
 use crate::db::{DbQueryError, EntityType, util::log_action};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
@@ -196,9 +196,16 @@ impl DbStackId {
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
+                       pc.commit_type,
+                       pr.id as pr_id, pr.repository_id as pr_repository_id, pr.pr_number, pr.title, pr.body, 
+                       pr.author_login, pr.target_branch, pr.tip_commit_id, pr.merge_status, pr.review_status as pr_review_status,
+                       pr.priority, pr.ok_to_merge, pr.required_reviewers, pr.created_at as pr_created_at, 
+                       pr.updated_at as pr_updated_at, pr.synced_at as pr_synced_at
                 FROM commits c
                 JOIN stack_commits sc ON c.id = sc.commit_id
+                LEFT JOIN pr_commits pc ON c.id = pc.commit_id AND pc.is_current = true
+                LEFT JOIN pull_requests pr ON pc.pull_request_id = pr.id
                 WHERE sc.stack_id = $1
                 ORDER BY sc.sequence_order ASC
                 "#,
@@ -213,10 +220,48 @@ impl DbStackId {
                 error,
             })?;
 
-        Ok(rows
-            .iter()
-            .map(|row| Commit::from_row(row).into_commit_to_test(CommitType::Merge))
-            .collect())
+        let mut commits_map: std::collections::HashMap<super::DbCommitId, CommitToTest> = std::collections::HashMap::new();
+        
+        for row in &rows {
+            let commit_id = row.get("id");
+            
+            let commit = commits_map.entry(commit_id).or_insert_with(|| CommitToTest::from_row(row));
+            
+            // Add PR association if it exists
+            if let Ok(pr_id) = row.try_get::<_, super::DbPullRequestId>("pr_id") {
+                let commit_type = row.get("commit_type");
+                let pr = super::PullRequest {
+                    id: pr_id,
+                    repository_id: row.get("pr_repository_id"),
+                    pr_number: row.get("pr_number"),
+                    title: row.get("title"),
+                    body: row.get("body"),
+                    author_login: row.get("author_login"),
+                    target_branch: row.get("target_branch"),
+                    tip_commit_id: row.get("tip_commit_id"),
+                    merge_status: row.get("merge_status"),
+                    review_status: row.get("pr_review_status"),
+                    priority: row.get("priority"),
+                    ok_to_merge: row.get("ok_to_merge"),
+                    required_reviewers: row.get("required_reviewers"),
+                    created_at: row.get("pr_created_at"),
+                    updated_at: row.get("pr_updated_at"),
+                    synced_at: row.get("pr_synced_at"),
+                };
+                commit.prs.push((pr, commit_type));
+            }
+        }
+        
+        // Return commits in the original order
+        let mut result = Vec::new();
+        for row in &rows {
+            let commit_id = row.get("id");
+            if let Some(commit) = commits_map.remove(&commit_id) {
+                result.push(commit);
+            }
+        }
+        
+        Ok(result)
     }
 }
 

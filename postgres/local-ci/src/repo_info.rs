@@ -246,16 +246,15 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[A
     if !ci_needed.is_empty() {
         has_pending = true;
         println!("Commits Needing CI ({}):", ci_needed.len());
-        for commit in ci_needed.iter().take(10) {
-            // Limit to first 10
+        for commit in &ci_needed {
+            let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
+            let prs_str = prs.join(", ");
+
             println!(
                 "  {} ({})",
                 commit.git_commit_id.prefix8(),
-                commit.commit_type,
+                prs_str,
             );
-        }
-        if ci_needed.len() > 10 {
-            println!("  ... and {} more", ci_needed.len() - 10);
         }
         println!();
     }
@@ -279,11 +278,14 @@ fn show_ci_status(commits: &[CommitToTest]) {
     if !ci_failed.is_empty() {
         println!("CI Failures ({}):", ci_failed.len());
         for commit in ci_failed.iter().take(10) {
+            let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
+            let prs_str = prs.join(", ");
+
             // Limit to first 10
             println!(
                 "  {} ({})",
                 commit.git_commit_id.prefix8(),
-                commit.commit_type,
+                prs_str,
             );
         }
         if ci_failed.len() > 10 {
@@ -301,10 +303,13 @@ fn show_ci_status(commits: &[CommitToTest]) {
     if !ci_passed.is_empty() {
         println!("Recent CI Passes (showing last 5):");
         for commit in ci_passed.iter().take(5) {
+            let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
+            let prs_str = prs.join(", ");
+
             println!(
                 "  {} ({})",
                 commit.git_commit_id.prefix8(),
-                commit.commit_type,
+                prs_str,
             );
         }
         if ci_passed.len() > 5 {
