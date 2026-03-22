@@ -16,11 +16,8 @@ impl str::FromStr for ChangeId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() != 32 {
-            return Err(Error::WrongLength {
-                expected: 32,
-                got: s.len(),
-            });
+        if s.len() < 8 || s.len() > 32 {
+            return Err(Error::WrongLength { got: s.len() });
         }
         for ch in s.chars() {
             if !('k'..='z').contains(&ch) {
@@ -57,15 +54,15 @@ impl ChangeId {
 
 #[derive(Debug)]
 pub enum Error {
-    WrongLength { expected: usize, got: usize },
+    WrongLength { got: usize },
     InvalidCharacter { ch: char },
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            Self::WrongLength { expected, got } => {
-                write!(f, "jj change ID had length {} (expected {})", got, expected)
+            Self::WrongLength { got } => {
+                write!(f, "jj change ID had length {}", got)
             }
             Self::InvalidCharacter { ch } => {
                 write!(f, "invalid character '{}' in jj change ID", ch)

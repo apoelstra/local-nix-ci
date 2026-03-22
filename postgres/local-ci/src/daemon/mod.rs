@@ -487,7 +487,7 @@ async fn try_extend_stack(
         SELECT 1 FROM stack_commits sc
         JOIN commits c ON sc.commit_id = c.id
         JOIN pr_commits pc ON c.id = pc.commit_id
-        WHERE sc.stack_id = $1 AND pc.pull_request_id = $2 AND pc.commit_type = 'merge'
+        WHERE sc.stack_id = $1 AND pc.pull_request_id = $2 AND pc.commit_type = 'merge' AND pc.is_current = true
         "#,
             &[&stack.id, &pr.id],
         )
