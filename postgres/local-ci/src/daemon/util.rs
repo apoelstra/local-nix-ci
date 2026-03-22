@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
-use lcilib::db::models::{CommitToTest, DbRepositoryId, Repository};
-use std::collections::HashMap;
+use lcilib::db::models::{CommitToTest, Repository};
 use tokio::task;
 use xshell::Shell;
 
@@ -35,12 +34,11 @@ pub async fn is_commit_gpg_signed(commit: &CommitToTest, repo_path: &str) -> any
 pub async fn calculate_stack_priority(
     commits: &[CommitToTest],
     tx: &lcilib::Transaction<'_>,
-    repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<f64> {
     let mut total_priority = 0.0;
 
     for (position, commit) in commits.iter().enumerate() {
-        let commit_priority = calculate_commit_priority(commit, tx, repo_map)
+        let commit_priority = calculate_commit_priority(commit, tx)
             .await
             .context("calculating commit priority")?;
 
@@ -61,7 +59,6 @@ pub async fn calculate_stack_priority(
 async fn calculate_commit_priority(
     commit: &CommitToTest,
     tx: &lcilib::Transaction<'_>,
-    repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<f64> {
     use chrono::Utc;
     use lcilib::db::models::{PrCommit, PullRequest};
@@ -106,17 +103,16 @@ async fn calculate_commit_priority(
     priority += ack_count as f64;
 
     // Add: +0.5 if GPG-signed already
-    if let Some(repo) = repo_map.get(&commit.repository_id) {
-        match is_commit_gpg_signed(commit, &repo.path).await {
-            Ok(true) => priority += 0.5,
-            Ok(false) => {} // No bonus
-            Err(e) => {
-                super::log::info(format_args!(
-                    "Warning: Failed to check GPG signature for commit {}: {}",
-                    commit.jj_change_id, e
-                ));
-                // Assume unsigned
-            }
+    let repo = Repository::get_by_id(tx, commit.repository_id).await?;
+    match is_commit_gpg_signed(commit, &repo.path).await {
+        Ok(true) => priority += 0.5,
+        Ok(false) => {} // No bonus
+        Err(e) => {
+            super::log::info(format_args!(
+                "Warning: Failed to check GPG signature for commit {}: {}",
+                commit.jj_change_id, e
+            ));
+            // Assume unsigned
         }
     }
 

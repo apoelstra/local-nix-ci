@@ -325,6 +325,47 @@ impl DbPullRequestId {
             })?;
         Ok(rows.iter().map(CommitToTest::from_row).collect())
     }
+
+    /// Returns the list of posted ACKs for the tip commit of this PR.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_posted_acks_for_tip(
+        self,
+        tx: &tokio_postgres::Transaction<'_>,
+    ) -> Result<Vec<(String, String)>, DbQueryError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT a.reviewer_name, a.message
+                FROM acks a
+                JOIN pull_requests pr ON a.pull_request_id = pr.id
+                WHERE a.pull_request_id = $1
+                AND a.commit_id = pr.tip_commit_id
+                AND a.status IN ('posted', 'external')
+                ORDER BY a.created_at ASC
+                "#,
+                &[&self],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_posted_acks_for_tip",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let reviewer_name: String = row.get("reviewer_name");
+                let message: String = row.get("message");
+                (reviewer_name, message)
+            })
+            .collect())
+    }
 }
 
 impl PullRequest {

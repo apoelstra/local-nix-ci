@@ -120,4 +120,49 @@ impl Repository {
             last_synced_at: row.get("last_synced_at"),
         }
     }
+
+    /// Find repository by ID
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no repository with the given ID is in the database.
+    pub async fn get_by_id(
+        tx: &tokio_postgres::Transaction<'_>,
+        id: DbRepositoryId,
+    ) -> Result<Self, DbQueryError> {
+        match Self::find_by_id(tx, id).await {
+            Ok(Some(x)) => Ok(x),
+            Ok(None) => panic!("no repository with id {id} in database"),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Find repository by ID
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn find_by_id(
+        tx: &tokio_postgres::Transaction<'_>,
+        id: DbRepositoryId,
+    ) -> Result<Option<Self>, DbQueryError> {
+        let rows = tx
+            .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories WHERE id = $1", &[&id])
+            .await
+            .map_err(|error| {
+                DbQueryError {
+                    action: "find_by_id",
+                    entity_type: EntityType::Repository,
+                    raw_id: Some(id.bare_i32()),
+                    clauses: vec![],
+                    error,
+                }
+            })?;
+
+        Ok(rows.first().map(Self::from_row))
+    }
 }

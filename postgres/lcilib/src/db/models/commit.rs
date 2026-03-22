@@ -225,6 +225,40 @@ impl DbCommitId {
                 }
             })
     }
+
+    /// Gets the pull request associated with this commit via the `pr_commits` table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails, if no PR is found, or if multiple PRs are found.
+    pub async fn get_pull_request(
+        self,
+        tx: &tokio_postgres::Transaction<'_>,
+    ) -> Result<super::PullRequest, DbQueryError> {
+        let row = tx
+            .query_one(
+                r#"
+                SELECT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, 
+                       pr.target_branch, pr.tip_commit_id, pr.merge_status, pr.review_status,
+                       pr.priority, pr.ok_to_merge, pr.required_reviewers, pr.created_at, 
+                       pr.updated_at, pr.synced_at
+                FROM pull_requests pr
+                JOIN pr_commits pc ON pr.id = pc.pull_request_id
+                WHERE pc.commit_id = $1
+                "#,
+                &[&self],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_pull_request",
+                entity_type: EntityType::Commit,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(super::PullRequest::from_row(&row))
+    }
 }
 
 impl Commit {

@@ -45,8 +45,7 @@ async fn find_stacks(
 
     for mut stacks in branch_map.into_values() {
         // TODO: for now just treat the last one as "highest priority"; later we should compute
-        //  the correct prioritization logic. But need to fix calculate_stack_priority to not
-        //  use repo_map first.
+        //  the correct prioritization logic.
         if let Some(stack) = stacks.pop() {
             let id = stack.id;
             high_priority.push((stack, id.get_commits(tx).await?));
@@ -68,12 +67,6 @@ async fn find_stacks(
 async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitToTest>> {
     let tx = db.transaction().await.context("starting transaction")?;
 
-    // Get repository info for GPG checking
-    let repos = Repository::list_all(&tx)
-        .await
-        .context("getting repository list")?;
-    let repo_map: HashMap<DbRepositoryId, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
-
     // Compute lists of available work and print summary.
     let (high_priority_stacks, low_priority_stacks) =
         find_stacks(&tx).await.context("finding stacks")?;
@@ -93,7 +86,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     // 1. Check high-priority stacks first (with positive priority)
     let mut prioritized_stacks = Vec::new();
     for (stack, commits) in &high_priority_stacks {
-        let priority = util::calculate_stack_priority(commits, &tx, &repo_map)
+        let priority = util::calculate_stack_priority(commits, &tx)
             .await
             .context("calculating stack priority")?;
         if priority > 0.0 {
@@ -156,7 +149,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     // 3. Check low-priority stacks (negative priority or conflicting)
     let mut low_priority_with_scores = Vec::new();
     for (stack, commits) in &low_priority_stacks {
-        let priority = util::calculate_stack_priority(commits, &tx, &repo_map)
+        let priority = util::calculate_stack_priority(commits, &tx)
             .await
             .context("calculating low-priority stack priority")?;
         low_priority_with_scores.push((stack, commits, priority));
@@ -189,12 +182,6 @@ async fn print_work_summary(
     prs_needing_testing: &[PullRequest],
     low_priority_stacks: &[(Stack, Vec<CommitToTest>)],
 ) -> anyhow::Result<()> {
-    // Get repository info for display names
-    let repos = Repository::list_all(tx)
-        .await
-        .context("getting repository list")?;
-    let repo_map: HashMap<DbRepositoryId, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
-
     if prs_needing_testing.is_empty()
         && high_priority_stacks.is_empty()
         && low_priority_stacks.is_empty()
@@ -209,9 +196,7 @@ async fn print_work_summary(
 
     // Print PR summary with individual commits
     for pr in prs_needing_testing {
-        let repo_name = repo_map
-            .get(&pr.repository_id)
-            .map_or("unknown", |r| r.name.as_str());
+        let repo = Repository::get_by_id(tx, pr.repository_id).await?;
 
         let counts = pr
             .id
@@ -222,12 +207,12 @@ async fn print_work_summary(
         if counts.unapproved > 0 {
             log::info(format_args!(
                 "{} PR#{} {} commits left to test ({} unapproved) (PR {})",
-                repo_name, pr.pr_number, counts.untested, counts.unapproved, pr.review_status
+                repo.name, pr.pr_number, counts.untested, counts.unapproved, pr.review_status
             ));
         } else {
             log::info(format_args!(
                 "{} PR#{} {} commits left to test (PR {})",
-                repo_name, pr.pr_number, counts.untested, pr.review_status
+                repo.name, pr.pr_number, counts.untested, pr.review_status
             ));
         };
 
@@ -255,10 +240,7 @@ async fn print_work_summary(
 
     // Print high-priority stack summary
     for (stack, _commits) in high_priority_stacks {
-        let repo_name = repo_map
-            .get(&stack.repository_id)
-            .map_or("unknown", |r| r.name.as_str());
-
+        let repo = Repository::get_by_id(tx, stack.repository_id).await?;
         let prs = stack
             .get_associated_prs(tx)
             .await
@@ -271,13 +253,13 @@ async fn print_work_summary(
             .context("getting stack commit counts")?;
 
         // Count signed commits in the stack
-        let signed = count_signed_commits_in_stack(tx, stack, &repo_map)
+        let signed = count_signed_commits_in_stack(tx, stack)
             .await
             .context("counting signed commits in stack")?;
 
         log::info(format_args!(
             "{} {} PRs {} ({} signed, {} left to test)",
-            repo_name,
+            repo.name,
             stack.target_branch,
             pr_numbers.join(", "),
             signed,
@@ -289,9 +271,7 @@ async fn print_work_summary(
     if !low_priority_stacks.is_empty() {
         log::info("=== Low Priority Stacks ===");
         for (stack, _commits) in low_priority_stacks {
-            let repo_name = repo_map
-                .get(&stack.repository_id)
-                .map_or("unknown", |r| r.name.as_str());
+            let repo = Repository::get_by_id(tx, stack.repository_id).await?;
 
             let prs = stack
                 .get_associated_prs(tx)
@@ -306,13 +286,13 @@ async fn print_work_summary(
                 .context("getting low-priority stack commit counts")?;
 
             // Count signed commits in the stack
-            let signed = count_signed_commits_in_stack(tx, stack, &repo_map)
+            let signed = count_signed_commits_in_stack(tx, stack)
                 .await
                 .context("counting signed commits in low-priority stack")?;
 
             log::info(format_args!(
                 "{} {} PRs {} ({} signed, {} left to test)",
-                repo_name,
+                repo.name,
                 stack.target_branch,
                 pr_numbers.join(", "),
                 signed,
@@ -329,7 +309,6 @@ async fn print_work_summary(
 async fn count_signed_commits_in_stack(
     tx: &lcilib::Transaction<'_>,
     stack: &Stack,
-    repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<usize> {
     let commits = stack
         .id
@@ -337,9 +316,7 @@ async fn count_signed_commits_in_stack(
         .await
         .context("getting stack commits")?;
 
-    let Some(repo) = repo_map.get(&stack.repository_id) else {
-        return Ok(0);
-    };
+    let repo = Repository::get_by_id(tx, stack.repository_id).await?;
 
     let mut signed_count = 0;
     for commit in &commits {
@@ -880,6 +857,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
 
     let mut no_work_count = 0u32;
     let mut last_no_work_log = std::time::Instant::now();
+    let mut error_limit = log::BackoffSleepToken::new();
 
     loop {
         if let Some(commit) = find_next_commit_to_test(&mut db)
@@ -895,10 +873,13 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
             let repo = match get_repository_for_commit(&mut db, &commit).await {
                 Ok(repo) => repo,
                 Err(e) => {
-                    log::warn_backoff(format!(
-                        "Failed to get repository for commit {}: {}",
-                        commit.git_commit_id, e
-                    ))
+                    log::warn_backoff(
+                        &mut error_limit,
+                        format!(
+                            "Failed to get repository for commit {}: {}",
+                            commit.git_commit_id, e
+                        ),
+                    )
                     .await;
                     continue;
                 }
@@ -907,7 +888,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
             // Process the commit
             match process_commit_ci(&mut db, &commit, &repo).await {
                 Ok(success) => {
-                    log::reset_error_sleep();
+                    error_limit.reset();
                     if success {
                         log::info(format_args!(
                             "CI SUCCESS for commit: {}",
@@ -915,7 +896,11 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                         ));
                         mark_commit_status(&mut db, commit.id, CiStatus::Passed).await?;
                         // After a commit succeeds, re-scan the database to see if we should make merge commits or something
-                        super::real_run_db_maintenance_cycle(&mut db).await?;
+                        super::real_run_db_maintenance_cycle(
+                            &mut db,
+                            &mut log::RateLimitToken::ok_to_run(),
+                        )
+                        .await?;
                     } else {
                         log::warn(format_args!(
                             "CI FAILED for commit: {}",
@@ -925,10 +910,10 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                     }
                 }
                 Err(e) => {
-                    log::warn_backoff(format!(
-                        "Error processing commit {}: {}",
-                        commit.git_commit_id, e
-                    ))
+                    log::warn_backoff(
+                        &mut error_limit,
+                        format!("Error processing commit {}: {}", commit.git_commit_id, e),
+                    )
                     .await;
                     mark_commit_status(&mut db, commit.id, CiStatus::Failed).await?;
                 }

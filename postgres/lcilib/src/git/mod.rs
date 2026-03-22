@@ -6,6 +6,10 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use xshell::{Shell, cmd};
 
+mod merge_description;
+
+pub use merge_description::{MergeDescriptionError, compute_merge_description};
+
 /// Information about a git commit
 #[derive(Debug, Clone)]
 pub struct CommitInfo {

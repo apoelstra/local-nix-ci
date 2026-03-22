@@ -38,38 +38,53 @@ async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
     let mut db = Db::connect()
         .await
         .context("connecting to database for maintenance cycle")?;
-    real_run_db_maintenance_cycle(&mut db).await
+
+    let mut error_limit = log::BackoffSleepToken::new();
+    let mut info_limit = log::RateLimiter::new(Duration::from_mins(5));
+
+    let idle_time = Duration::from_secs(30);
+    loop {
+        match real_run_db_maintenance_cycle(&mut db, &mut info_limit.token()).await {
+            Ok(true) => {
+                error_limit.reset();
+            }
+            Ok(false) => {
+                time::sleep(idle_time).await;
+                error_limit.reset();
+            }
+            Err(e) => {
+                log::warn_backoff(
+                    &mut error_limit,
+                    format!("Failed to run DB maintenance cycle.\n{e:?}"),
+                )
+                .await;
+            }
+        };
+    }
 }
 
-async fn real_run_db_maintenance_cycle(db: &mut Db) -> anyhow::Result<()> {
-    let mut idle_time = Duration::from_secs(300);
-    loop {
-        let mut had_work = false;
+async fn real_run_db_maintenance_cycle(
+    db: &mut Db,
+    log_limit: &mut log::RateLimitToken,
+) -> anyhow::Result<bool> {
+    let mut had_work = false;
 
-        // Check for pending ACKs that need to be posted
-        if check_pending_acks(db).await? {
-            had_work = true;
-        }
-
-        // Check for approved PRs that need merge commits created
-        if check_approved_prs(db).await? {
-            had_work = true;
-        }
-
-        // Check for signed merge commits that need to be pushed
-        if check_signed_merges(db).await? {
-            had_work = true;
-        }
-
-        if had_work {
-            idle_time = Duration::from_secs(300);
-        } else {
-            if idle_time < Duration::from_hours(2) {
-                idle_time *= 2;
-            }
-            time::sleep(idle_time).await;
-        }
+    // Check for pending ACKs that need to be posted
+    if check_pending_acks(db, log_limit).await? {
+        had_work = true;
     }
+
+    // Check for approved PRs that need merge commits created
+    if check_approved_prs(db).await? {
+        had_work = true;
+    }
+
+    // Check for signed merge commits that need to be pushed
+    if check_signed_merges(db, log_limit).await? {
+        had_work = true;
+    }
+
+    Ok(had_work)
 }
 
 async fn run_pr_sync_cycle() -> anyhow::Result<()> {
@@ -94,7 +109,10 @@ async fn run_pr_sync_cycle() -> anyhow::Result<()> {
     }
 }
 
-async fn check_pending_acks(db: &mut Db) -> anyhow::Result<bool> {
+async fn check_pending_acks(
+    db: &mut Db,
+    log_limit: &mut log::RateLimitToken,
+) -> anyhow::Result<bool> {
     let tx = db.transaction().await.context("starting transaction")?;
 
     // Query for ACKs that are pending or failed and might be ready to post
@@ -157,18 +175,20 @@ async fn check_pending_acks(db: &mut Db) -> anyhow::Result<bool> {
             let ready_commits: i64 = commit_row.get("ready_commits");
 
             if total_commits == 0 {
-                log::info(format_args!(
-                    "ACK for PR #{} not posted: no non-merge commits found",
-                    pr_number
-                ));
+                log_limit.run(|| {
+                    log::info(format_args!(
+                        "ACK for PR #{} not posted: no non-merge commits found",
+                        pr_number
+                    ))
+                });
                 continue;
             }
 
             if ready_commits != total_commits {
-                log::info(format_args!(
+                log_limit.run(|| log::info(format_args!(
                     "ACK for PR #{} not posted: {}/{} non-merge commits are approved and passed CI",
                     pr_number, ready_commits, total_commits
-                ));
+                )));
                 continue;
             }
 
@@ -201,11 +221,10 @@ async fn check_pending_acks(db: &mut Db) -> anyhow::Result<bool> {
                     work_done = true;
                 }
                 Err(e) => {
-                    log::warn_backoff(format!(
+                    log::warn(format_args!(
                         "Failed to post ACK for PR #{} from reviewer {}: {}",
                         pr_number, reviewer_name, e
-                    ))
-                    .await;
+                    ));
 
                     // Update ACK status to 'failed'
                     tx.execute(
@@ -225,20 +244,6 @@ async fn check_pending_acks(db: &mut Db) -> anyhow::Result<bool> {
 
 async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
     let mut work_done = false;
-
-    // Get all repositories for path lookup
-    let tx = db
-        .transaction()
-        .await
-        .context("starting transaction for repositories")?;
-    let repositories = Repository::list_all(&tx)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to get repositories: {}", e))?;
-    let repo_map: HashMap<DbRepositoryId, Repository> =
-        repositories.into_iter().map(|r| (r.id, r)).collect();
-    tx.commit()
-        .await
-        .context("committing repository transaction")?;
 
     // Step 1 & 2: For each approved PR, create merge commits and try to extend stacks
     let tx = db
@@ -287,37 +292,26 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
             synced_at: pr_row.get("synced_at"),
         };
 
-        if process_approved_pr(db, &pr, &repo_map).await? {
+        if process_approved_pr(db, &pr).await? {
             work_done = true;
         }
     }
 
     // Step 3: Process existing stacks for rebasing and updates
-    if process_existing_stacks(db, &repo_map).await? {
+    if process_existing_stacks(db).await? {
         work_done = true;
     }
 
     Ok(work_done)
 }
 
-async fn process_approved_pr(
-    db: &mut Db,
-    pr: &PullRequest,
-    repo_map: &HashMap<DbRepositoryId, Repository>,
-) -> anyhow::Result<bool> {
+async fn process_approved_pr(db: &mut Db, pr: &PullRequest) -> anyhow::Result<bool> {
     use lcilib::db::models::{
         Ack, CiStatus, Commit, CommitType, NewCommit, NewStack, ReviewStatus, Stack,
     };
 
-    let Some(repo) = repo_map.get(&pr.repository_id) else {
-        log::warn(format_args!(
-            "Repository not found for PR #{}",
-            pr.pr_number
-        ));
-        return Ok(false);
-    };
-
     let tx = db.transaction().await.context("starting PR transaction")?;
+    let repo = Repository::get_by_id(&tx, pr.repository_id).await?;
 
     // Step 1: Get all current merge commits associated with this PR
     let existing_merges = tx
@@ -356,8 +350,6 @@ async fn process_approved_pr(
         .collect();
 
     // Calculate priorities and sort stacks
-    let repo_ref_map: HashMap<DbRepositoryId, &Repository> =
-        std::iter::once((pr.repository_id, repo)).collect();
     let mut stack_priorities = Vec::new();
     for stack in &matching_stacks {
         let commits = stack
@@ -365,7 +357,7 @@ async fn process_approved_pr(
             .get_commits(&tx)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
-        let priority = util::calculate_stack_priority(&commits, &tx, &repo_ref_map)
+        let priority = util::calculate_stack_priority(&commits, &tx)
             .await
             .context("calculating stack priority")?;
         stack_priorities.push((stack, priority));
@@ -423,7 +415,7 @@ async fn process_approved_pr(
             }
         } else if !added_to_stack {
             // Try to add PR to this stack
-            if try_extend_stack(&tx, stack, pr, repo).await? {
+            if try_extend_stack(&tx, stack, pr, &repo).await? {
                 added_to_stack = true;
             }
         } else {
@@ -550,6 +542,7 @@ async fn process_approved_pr(
             .map_err(|e| anyhow::anyhow!("Failed to create stack: {}", e))?;
 
         stack
+            .id
             .add_commit(&tx, direct_merge_commit.id, 1)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to add direct merge to stack: {}", e))?;
@@ -704,16 +697,15 @@ async fn try_extend_stack(
                 lcilib::db::models::CommitType::Merge,
             )
             .await
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to create pr_commit record for stack merge: {}", e)
-            })?;
+            .context("failed to create pr_commit record for stack merge")?;
 
             // Add to stack
             let next_order = i32::try_from(stack_commits.len())? + 1;
             stack
+                .id
                 .add_commit(tx, stack_merge_commit.id, next_order)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to add commit to stack: {}", e))?;
+                .context("failed to add commit to stack")?;
 
             log::info(format_args!(
                 "Extended stack {} with PR #{}",
@@ -731,10 +723,7 @@ async fn try_extend_stack(
     }
 }
 
-async fn process_existing_stacks(
-    db: &mut Db,
-    repo_map: &HashMap<DbRepositoryId, Repository>,
-) -> anyhow::Result<bool> {
+async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
     let mut work_done = false;
 
     // Get all stacks grouped by repo/target
@@ -755,17 +744,12 @@ async fn process_existing_stacks(
 
     // Process each group
     for ((repo_id, _target_branch), mut stacks) in stacks_by_repo_target {
-        let Some(repo) = repo_map.get(&repo_id) else {
-            continue;
-        };
-
         // Sort by priority (highest first)
         let tx = db
             .transaction()
             .await
             .context("starting stack priority transaction")?;
-        let repo_ref_map: HashMap<DbRepositoryId, &Repository> =
-            std::iter::once((repo_id, repo)).collect();
+        let repo = Repository::get_by_id(&tx, repo_id).await?;
 
         let mut stack_priorities = Vec::new();
         for stack in &stacks {
@@ -774,7 +758,7 @@ async fn process_existing_stacks(
                 .get_commits(&tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
-            let priority = util::calculate_stack_priority(&commits, &tx, &repo_ref_map)
+            let priority = util::calculate_stack_priority(&commits, &tx)
                 .await
                 .context("calculating stack priority")?;
             stack_priorities.push((stack, priority));
@@ -791,7 +775,7 @@ async fn process_existing_stacks(
 
         // Process each stack
         for stack in stacks {
-            if process_stack_updates(db, &stack, repo).await? {
+            if process_stack_updates(db, &stack, &repo).await? {
                 work_done = true;
             }
         }
@@ -882,12 +866,12 @@ async fn process_stack_updates(
     // Update descriptions and check for commit changes
     let mut work_done = false;
     for commit in &stack_commits {
+        let pr = commit.id.get_pull_request(&tx).await?;
         // Update description (dummy implementation for now)
-        if let Err(e) = lcilib::jj::update_commit_description(
-            &shell,
-            &commit.jj_change_id,
-            &format!("Updated description for {}", commit.jj_change_id),
-        ) {
+        let description = lcilib::git::compute_merge_description(&tx, &pr, commit).await?;
+        if let Err(e) =
+            lcilib::jj::update_commit_description(&shell, &commit.jj_change_id, &description)
+        {
             log::warn(format_args!(
                 "Failed to update description for commit {}: {}",
                 commit.jj_change_id, e
@@ -977,7 +961,10 @@ async fn process_stack_updates(
     Ok(work_done)
 }
 
-async fn check_signed_merges(_db: &mut Db) -> anyhow::Result<bool> {
+async fn check_signed_merges(
+    _db: &mut Db,
+    _log_limit: &mut log::RateLimitToken,
+) -> anyhow::Result<bool> {
     // TODO: Query for signed merge commits that passed CI
     // TODO: Push them
     // Return true if work was done, false if nothing to do

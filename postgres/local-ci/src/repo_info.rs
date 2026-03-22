@@ -154,9 +154,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
     println!("\n=== Merge Stacks ===");
 
     for stack in stacks {
-        let repo = Repository::find_by_id(tx, stack.repository_id)
-            .await?
-            .expect("repo exists");
+        let repo = Repository::get_by_id(tx, stack.repository_id).await?;
 
         let commits = stack.id.get_commits(tx).await?;
         let ids: Vec<_> = commits

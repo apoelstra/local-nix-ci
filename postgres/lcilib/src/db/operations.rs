@@ -202,23 +202,6 @@ impl Repository {
         Ok(Self::from_row(&row))
     }
 
-    /// Find repository by ID
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_by_id(
-        tx: &Transaction<'_>,
-        id: DbRepositoryId,
-    ) -> Result<Option<Self>, OperationError> {
-        let rows = tx
-            .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories WHERE id = $1", &[&id])
-            .await
-            .map_err(|e| OperationError::with_context(e, "find_by_id", "Repository", &format!("id: {}", id)))?;
-
-        Ok(rows.first().map(Self::from_row))
-    }
-
     /// Find repository by path
     ///
     /// # Errors
@@ -1058,45 +1041,6 @@ impl Stack {
             .map_err(|e| OperationError::with_context(e, "find_by_id", "Stack", &format!("id: {}", id)))?;
 
         Ok(rows.first().map(Self::from_row))
-    }
-
-    /// Add commit to stack
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn add_commit(
-        &self,
-        tx: &Transaction<'_>,
-        commit_id: DbCommitId,
-        sequence_order: i32,
-    ) -> Result<(), OperationError> {
-        tx.execute(
-            "INSERT INTO stack_commits (stack_id, commit_id, sequence_order) VALUES ($1, $2, $3)",
-            &[&self.id, &commit_id, &sequence_order],
-        )
-        .await
-        .map_err(|e| {
-            OperationError::with_context(
-                e,
-                "add_commit",
-                "Stack",
-                &format!("stack_id: {}, commit_id: {}", self.id, commit_id),
-            )
-        })?;
-
-        util::log_action(
-            tx,
-            EntityType::Stack,
-            self.id.bare_i32(),
-            "commit_added",
-            Some(&format!("Added commit {} to stack", commit_id)),
-            None,
-        )
-        .await
-        .map_err(OperationError::LogQuery)?;
-
-        Ok(())
     }
 }
 

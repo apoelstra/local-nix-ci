@@ -142,6 +142,47 @@ impl DbStackId {
             })
     }
 
+    /// Add commit to stack
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn add_commit(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        commit_id: DbCommitId,
+        sequence_order: i32,
+    ) -> Result<(), DbQueryError> {
+        tx.execute(
+            "INSERT INTO stack_commits (stack_id, commit_id, sequence_order) VALUES ($1, $2, $3)",
+            &[&self, &commit_id, &sequence_order],
+        )
+        .await
+        .map_err(|error| DbQueryError {
+            action: "insert",
+            entity_type: EntityType::Stack,
+            raw_id: Some(self.bare_i32()),
+            clauses: vec![
+                "stack_id".into(),
+                "commit_id".into(),
+                "sequence_order".into(),
+            ],
+            error,
+        })?;
+
+        log_action(
+            tx,
+            EntityType::Stack,
+            self.bare_i32(),
+            "commit_added",
+            Some(&format!("Added commit {} to stack", commit_id)),
+            None,
+        )
+        .await?;
+
+        Ok(())
+    }
+
     /// Get commits for this stack in order
     ///
     /// # Errors
