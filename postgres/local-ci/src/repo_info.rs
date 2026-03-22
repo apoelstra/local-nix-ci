@@ -251,7 +251,8 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[A
             let prs_str = prs.join(", ");
 
             println!(
-                "  {} ({})",
+                "  {} ({}) ({})",
+                commit.review_status,
                 commit.git_commit_id.prefix8(),
                 prs_str,
             );

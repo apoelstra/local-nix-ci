@@ -184,7 +184,7 @@ pub fn update_commit_description(
         .arg("describe")
         .arg("--quiet")
         .arg("-r")
-        .arg(dbg!(change_id))
+        .arg(change_id)
         .arg("-m")
         .arg(description)
         .ignore_stdout()
