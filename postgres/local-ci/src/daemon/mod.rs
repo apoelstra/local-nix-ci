@@ -179,7 +179,7 @@ async fn check_pending_acks(
                     log::info(format_args!(
                         "ACK for PR #{} not posted: no non-merge commits found",
                         pr_number
-                    ))
+                    ));
                 });
                 continue;
             }
@@ -878,7 +878,10 @@ async fn process_stack_updates(
             ));
         }
 
-        // Check if git commit ID has changed
+        // Check if git commit ID has changed, and if so, if this was a "real" change (tree changed,
+        // which should never happen, but okay, let's check) or just an accounting change (update
+        // description or sign, which may happen externally).
+        let mut stack_poisoned = false;
         match lcilib::jj::get_current_git_commit_for_change_id(&shell, &commit.jj_change_id) {
             Ok(current_git_id) => {
                 if current_git_id != commit.git_commit_id {
@@ -892,32 +895,8 @@ async fn process_stack_updates(
                     )
                     .context("getting original tree hash")?;
 
-                    let current_parents = lcilib::git::list_parents(&shell, &current_git_id)
-                        .context("getting current parents")?;
-                    let original_parents = lcilib::git::list_parents(&shell, &commit.git_commit_id)
-                        .context("getting original parents")?;
-
-                    if current_tree.to_string() != original_tree.to_string()
-                        || current_parents.len() != original_parents.len()
-                        || current_parents
-                            .iter()
-                            .zip(original_parents.iter())
-                            .any(|(a, b)| a.to_string() != b.to_string())
-                    {
-                        // Tree or parents changed - mark as not current
-                        log::warn(format_args!(
-                            "Commit {} tree or parents changed, marking as not current",
-                            commit.jj_change_id
-                        ));
-                        tx.execute(
-                            "UPDATE pr_commits SET is_current = false WHERE commit_id = $1",
-                            &[&commit.id],
-                        )
-                        .await
-                        .context("marking commit as not current")?;
-                        work_done = true;
-                    } else {
-                        // Only commit ID changed - update it
+                    if current_tree == original_tree {
+                        // Tree unchanged -- just update the commit ID in place (lol)
                         tx.execute(
                             "UPDATE commits SET git_commit_id = $1 WHERE id = $2",
                             &[&current_git_id, &commit.id],
@@ -937,13 +916,35 @@ async fn process_stack_updates(
                             )?;
                             if !is_signed {
                                 log::warn(format_args!(
-                                    "Warning: Throwing away GPG signature for commit {} due to description change",
+                                    "Warning: lost GPG signature on change {}",
                                     commit.jj_change_id
                                 ));
                             }
                         }
-                        work_done = true;
+                    } else {
+                        // Tree changed - kill the rest of the stack
+                        log::warn(format_args!(
+                            "Change {} tree changed (commit {} to {}), marking as not current removing remainder of stack.",
+                            commit.jj_change_id, commit.git_commit_id, current_git_id,
+                        ));
+                        stack_poisoned = true;
                     }
+                    work_done = true;
+                }
+
+                if stack_poisoned {
+                    tx.execute(
+                        "UPDATE pr_commits SET is_current = false WHERE commit_id = $1 AND pull_request_id = $2",
+                        &[&commit.id, &pr.id],
+                    )
+                    .await
+                    .context("marking commit as not current")?;
+                    tx.execute(
+                        "DELETE FROM stack_commits WHERE stack_id = $1 AND commit_id = $2",
+                        &[&stack.id, &commit.id],
+                    )
+                    .await
+                    .context("deleting commit from stack")?;
                 }
             }
             Err(e) => {

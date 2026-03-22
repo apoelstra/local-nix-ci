@@ -23,7 +23,7 @@ pub struct CommitInfo {
 ///
 /// When deserialized, validated to be 20 hex digits, but stored
 /// as a string to allow efficient use with xshell and postgres.
-#[derive(Clone, Default, PartialEq, Eq, Debug, Hash, FromSql, ToSql)]
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, FromSql, ToSql)]
 #[postgres(transparent)]
 pub struct CommitId(String);
 
