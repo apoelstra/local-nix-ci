@@ -3,7 +3,7 @@
 use anyhow::Context as _;
 use lcilib::{
     Db,
-    db::models::{Ack, AckStatus, CiStatus, Commit, PullRequest, Repository, ReviewStatus, Stack},
+    db::models::{Ack, AckStatus, CiStatus, CommitToTest, PullRequest, Repository, ReviewStatus, Stack},
     repo,
 };
 use xshell::{Shell, cmd};
@@ -46,10 +46,30 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to get PRs for repository")?;
 
-    // Get all commits for this repository
-    let all_commits = Commit::find_by_repository(&tx, repo_record.id)
+    // Get all stacks for this repository
+    let all_stacks = repo_record
+        .id
+        .get_stacks(&tx)
         .await
-        .context("failed to get commits for repository")?;
+        .context("failed to get stacks for repository")?;
+
+    // Get all commits for this repository
+    let mut all_commits = vec![];
+    // ...all PR commits
+    for pr in &all_prs {
+        let commits = pr.id.get_current_non_merge_commits(&tx)
+            .await
+            .with_context(|| format!("getting commits for PR {}", pr.pr_number))?;
+        all_commits.extend(commits);
+    }
+    // ...all single commits (TODO)
+    // ...all commits from stacks
+    for stack in &all_stacks {
+        let commits = stack.id.get_commits(&tx)
+            .await
+            .with_context(|| format!("getting commits for stack {}", stack.id))?;
+        all_commits.extend(commits);
+    }
 
     // Get all ACKs for PRs in this repository
     let mut all_acks = Vec::new();
@@ -59,13 +79,6 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
             .context("failed to get ACKs for PR")?;
         all_acks.extend(pr_acks);
     }
-
-    // Get all stacks for this repository
-    let all_stacks = repo_record
-        .id
-        .get_stacks(&tx)
-        .await
-        .context("failed to get stacks for repository")?;
 
     show_prs(&all_prs);
     show_stacks(&tx, &all_stacks).await?;
@@ -178,7 +191,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
 }
 
 /// Display pending actions that need attention
-fn show_pending_actions(prs: &[PullRequest], commits: &[Commit], acks: &[Ack]) {
+fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[Ack]) {
     println!("\n=== Pending Actions ===");
 
     let mut has_pending = false;
@@ -236,15 +249,9 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[Commit], acks: &[Ack]) {
         for commit in ci_needed.iter().take(10) {
             // Limit to first 10
             println!(
-                "  {}: {}",
+                "  {} ({})",
                 commit.git_commit_id.prefix8(),
-                commit
-                    .review_text
-                    .as_deref()
-                    .unwrap_or("(no review text)")
-                    .lines()
-                    .next()
-                    .unwrap_or("")
+                commit.commit_type,
             );
         }
         if ci_needed.len() > 10 {
@@ -260,7 +267,7 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[Commit], acks: &[Ack]) {
 }
 
 /// Display CI status overview
-fn show_ci_status(commits: &[Commit]) {
+fn show_ci_status(commits: &[CommitToTest]) {
     println!("\n=== CI Status ===");
 
     // CI failures
@@ -274,15 +281,9 @@ fn show_ci_status(commits: &[Commit]) {
         for commit in ci_failed.iter().take(10) {
             // Limit to first 10
             println!(
-                "  {}: {}",
+                "  {} ({})",
                 commit.git_commit_id.prefix8(),
-                commit
-                    .review_text
-                    .as_deref()
-                    .unwrap_or("(no review text)")
-                    .lines()
-                    .next()
-                    .unwrap_or("")
+                commit.commit_type,
             );
         }
         if ci_failed.len() > 10 {
@@ -301,15 +302,9 @@ fn show_ci_status(commits: &[Commit]) {
         println!("Recent CI Passes (showing last 5):");
         for commit in ci_passed.iter().take(5) {
             println!(
-                "  {}: {}",
+                "  {} ({})",
                 commit.git_commit_id.prefix8(),
-                commit
-                    .review_text
-                    .as_deref()
-                    .unwrap_or("(no review text)")
-                    .lines()
-                    .next()
-                    .unwrap_or("")
+                commit.commit_type,
             );
         }
         if ci_passed.len() > 5 {
