@@ -576,6 +576,7 @@ impl PullRequest {
                 JOIN pr_commits pc ON pr.id = pc.pull_request_id AND pc.is_current = true
                 JOIN commits c ON pc.commit_id = c.id
                 WHERE pr.merge_status = 'pending'
+                AND pc.commit_type != 'merge'
                 AND c.review_status = 'approved'
                 AND c.ci_status = 'unstarted'
                 AND c.should_run_ci = true

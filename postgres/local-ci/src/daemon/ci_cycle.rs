@@ -32,27 +32,33 @@ async fn find_stacks(
     Vec<(Stack, Vec<CommitToTest>)>,
 )> {
     // Find all stacks grouped by DB and branch
-    let mut branch_map = HashMap::<(DbRepositoryId, String), Vec<Stack>>::new();
+    let mut branch_map = HashMap::<(DbRepositoryId, String), Vec<(f64, Stack, Vec<CommitToTest>)>>::new();
     for stack in Stack::get_all(tx).await? {
-        branch_map
-            .entry((stack.repository_id, stack.target_branch.clone()))
-            .or_default()
-            .push(stack);
+        let (_, untested) = stack.get_commit_counts(tx).await?;
+        if untested > 0 {
+            let commits = stack.id.get_commits(tx).await?;
+            let priority = util::calculate_stack_priority(&commits, &tx)
+                .await
+                .context("calculating stack priority")?;
+
+            branch_map
+                .entry((stack.repository_id, stack.target_branch.clone()))
+                .or_default()
+                .push((priority, stack, commits));
+        }
     }
 
     let mut high_priority = vec![];
     let mut low_priority = vec![];
 
     for mut stacks in branch_map.into_values() {
-        // TODO: for now just treat the last one as "highest priority"; later we should compute
-        //  the correct prioritization logic.
+        stacks.sort_by(|a, b| b.0.total_cmp(&a.0)); // reverse order of priority
+
         if let Some(stack) = stacks.pop() {
-            let id = stack.id;
-            high_priority.push((stack, id.get_commits(tx).await?));
+            high_priority.push((stack.1, stack.2));
         }
         for stack in stacks {
-            let id = stack.id;
-            low_priority.push((stack, id.get_commits(tx).await?));
+            low_priority.push((stack.1, stack.2));
         }
     }
 
@@ -84,21 +90,8 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     .context("printing work summary")?;
 
     // 1. Check high-priority stacks first (with positive priority)
-    let mut prioritized_stacks = Vec::new();
-    for (stack, commits) in &high_priority_stacks {
-        let priority = util::calculate_stack_priority(commits, &tx)
-            .await
-            .context("calculating stack priority")?;
-        if priority > 0.0 {
-            prioritized_stacks.push((stack, commits, priority));
-        }
-    }
-
-    // Sort by priority (highest first)
-    prioritized_stacks.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-
-    for (_stack, commits, _priority) in &prioritized_stacks {
-        for commit in *commits {
+    for (_stack, commits) in &high_priority_stacks {
+        for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
                 log::info("Found commit from high-priority stack");
                 tx.commit().await.context("committing transaction")?;
@@ -145,20 +138,8 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     }
 
     // 3. Check low-priority stacks (negative priority or conflicting)
-    let mut low_priority_with_scores = Vec::new();
-    for (stack, commits) in &low_priority_stacks {
-        let priority = util::calculate_stack_priority(commits, &tx)
-            .await
-            .context("calculating low-priority stack priority")?;
-        low_priority_with_scores.push((stack, commits, priority));
-    }
-
-    // Sort by priority (highest first, even if negative)
-    low_priority_with_scores
-        .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-
-    for (_stack, commits, _priority) in &low_priority_with_scores {
-        for commit in *commits {
+    for (_stack, commits) in &low_priority_stacks {
+        for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
                 log::info("Found commit from low-priority stack");
                 tx.commit().await.context("committing transaction")?;
@@ -191,6 +172,10 @@ async fn print_work_summary(
     log::info("=== Available Work Summary ===");
 
     // Print PR summary with individual commits
+    if !prs_needing_testing.is_empty() {
+        log::info("\n");
+        log::info("=== PRs needing testing ===");
+    }
     for pr in prs_needing_testing {
         let repo = Repository::get_by_id(tx, pr.repository_id).await?;
 
@@ -237,6 +222,10 @@ async fn print_work_summary(
     }
 
     // Print high-priority stack summary
+    if !high_priority_stacks.is_empty() {
+        log::info("\n");
+        log::info("=== High Priority Stacks ===");
+    }
     for (stack, _commits) in high_priority_stacks {
         let repo = Repository::get_by_id(tx, stack.repository_id).await?;
         let prs = stack
@@ -267,38 +256,38 @@ async fn print_work_summary(
 
     // Print low-priority stack summary if any
     if !low_priority_stacks.is_empty() {
+        log::info("");
         log::info("=== Low Priority Stacks ===");
-        for (stack, _commits) in low_priority_stacks {
-            let repo = Repository::get_by_id(tx, stack.repository_id).await?;
-
-            let prs = stack
-                .get_associated_prs(tx)
-                .await
-                .context("getting associated PRs for low-priority stack")?;
-            let pr_numbers: Vec<String> =
-                prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
-
-            let (_total, untested) = stack
-                .get_commit_counts(tx)
-                .await
-                .context("getting low-priority stack commit counts")?;
-
-            // Count signed commits in the stack
-            let signed = count_signed_commits_in_stack(tx, stack)
-                .await
-                .context("counting signed commits in low-priority stack")?;
-
-            log::info(format_args!(
-                "{} {} PRs {} ({} signed, {} left to test)",
-                repo.name,
-                stack.target_branch,
-                pr_numbers.join(", "),
-                signed,
-                untested
-            ));
-        }
     }
-    log::info("");
+    for (stack, _commits) in low_priority_stacks {
+        let repo = Repository::get_by_id(tx, stack.repository_id).await?;
+
+        let prs = stack
+            .get_associated_prs(tx)
+            .await
+            .context("getting associated PRs for low-priority stack")?;
+        let pr_numbers: Vec<String> =
+            prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
+
+        let (_total, untested) = stack
+            .get_commit_counts(tx)
+            .await
+            .context("getting low-priority stack commit counts")?;
+
+        // Count signed commits in the stack
+        let signed = count_signed_commits_in_stack(tx, stack)
+            .await
+            .context("counting signed commits in low-priority stack")?;
+
+        log::info(format_args!(
+            "{} {} PRs {} ({} signed, {} left to test)",
+            repo.name,
+            stack.target_branch,
+            pr_numbers.join(", "),
+            signed,
+            untested
+        ));
+    }
 
     Ok(())
 }
