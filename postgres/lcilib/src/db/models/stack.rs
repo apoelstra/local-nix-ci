@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
-use super::{DbCommitId, DbRepositoryId};
+use super::{Commit, CommitToTest, CommitType, DbCommitId, DbRepositoryId};
 use crate::db::{DbQueryError, EntityType, util::log_action};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
@@ -141,6 +141,42 @@ impl DbStackId {
                 error,
             })
     }
+
+    /// Get commits for this stack in order
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_commits(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+    ) -> Result<Vec<CommitToTest>, DbQueryError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
+                FROM commits c
+                JOIN stack_commits sc ON c.id = sc.commit_id
+                WHERE sc.stack_id = $1
+                ORDER BY sc.sequence_order ASC
+                "#,
+                &[&self],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_commits",
+                entity_type: EntityType::Stack,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows
+            .iter()
+            .map(|row| Commit::from_row(row).into_commit_to_test(CommitType::Merge))
+            .collect())
+    }
 }
 
 impl Stack {
@@ -182,5 +218,31 @@ impl Stack {
         )
         .await?;
         ret
+    }
+
+    /// Get all stacks
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_all(tx: &tokio_postgres::Transaction<'_>) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT id, repository_id, target_branch, created_at, updated_at
+                FROM stacks ORDER BY created_at ASC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_all_stacks",
+                entity_type: EntityType::Stack,
+                raw_id: None,
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
     }
 }

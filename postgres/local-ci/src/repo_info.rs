@@ -3,9 +3,7 @@
 use anyhow::Context as _;
 use lcilib::{
     Db,
-    db::models::{
-        Ack, AckStatus, CiStatus, Commit, DbRepositoryId, PullRequest, Repository, ReviewStatus,
-    },
+    db::models::{Ack, AckStatus, CiStatus, Commit, PullRequest, Repository, ReviewStatus, Stack},
     repo,
 };
 use xshell::Shell;
@@ -42,7 +40,9 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
     println!();
 
     // Get all PRs for this repository
-    let all_prs = get_all_prs_for_repo(&tx, repo_record.id)
+    let all_prs = repo_record
+        .id
+        .get_current_pull_requests(&tx)
         .await
         .context("failed to get PRs for repository")?;
 
@@ -60,10 +60,15 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
         all_acks.extend(pr_acks);
     }
 
-    // Display PRs by status
-    show_prs_by_status(&all_prs);
+    // Get all stacks for this repository
+    let all_stacks = repo_record
+        .id
+        .get_stacks(&tx)
+        .await
+        .context("failed to get stacks for repository")?;
 
-    // Display pending actions
+    show_prs(&all_prs);
+    show_stacks(&all_stacks);
     show_pending_actions(&all_prs, &all_commits, &all_acks);
 
     // Display CI status
@@ -74,48 +79,8 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Get all PRs for a repository (helper function since it's not in the operations)
-async fn get_all_prs_for_repo(
-    tx: &lcilib::Transaction<'_>,
-    repository_id: DbRepositoryId,
-) -> anyhow::Result<Vec<PullRequest>> {
-    let rows = tx
-        .query(
-            r#"
-            SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status,
-                   priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
-            FROM pull_requests WHERE repository_id = $1 ORDER BY pr_number DESC
-            "#,
-            &[&repository_id],
-        )
-        .await
-        .context("failed to query pull requests")?;
-
-    Ok(rows
-        .iter()
-        .map(|row| PullRequest {
-            id: row.get("id"),
-            repository_id: row.get("repository_id"),
-            pr_number: row.get("pr_number"),
-            title: row.get("title"),
-            body: row.get("body"),
-            author_login: row.get("author_login"),
-            target_branch: row.get("target_branch"),
-            tip_commit_id: row.get("tip_commit_id"),
-            merge_status: row.get("merge_status"),
-            review_status: row.get("review_status"),
-            priority: row.get("priority"),
-            ok_to_merge: row.get("ok_to_merge"),
-            required_reviewers: row.get("required_reviewers"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-            synced_at: row.get("synced_at"),
-        })
-        .collect())
-}
-
 /// Display PRs organized by status
-fn show_prs_by_status(prs: &[PullRequest]) {
+fn show_prs(prs: &[PullRequest]) {
     println!("=== Pull Requests by Status ===");
 
     // Ready to merge
@@ -179,6 +144,11 @@ fn show_prs_by_status(prs: &[PullRequest]) {
         }
         println!();
     }
+}
+
+/// Display PRs organized by status
+fn show_stacks(stacks: &[Stack]) {
+    dbg!(stacks);
 }
 
 /// Display pending actions that need attention

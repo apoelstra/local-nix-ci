@@ -297,7 +297,7 @@ impl DbPullRequestId {
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn find_current_non_merge_commits(
+    pub async fn get_current_non_merge_commits(
         self,
         tx: &tokio_postgres::Transaction<'_>,
     ) -> Result<Vec<CommitToTest>, DbQueryError> {
@@ -317,7 +317,7 @@ impl DbPullRequestId {
             )
             .await
             .map_err(|error| DbQueryError {
-                action: "find_current_non_merge_commits",
+                action: "get_current_non_merge_commits",
                 entity_type: EntityType::PullRequest,
                 raw_id: Some(self.bare_i32()),
                 clauses: vec![],

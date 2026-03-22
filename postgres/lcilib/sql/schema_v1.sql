@@ -6,7 +6,7 @@ CREATE TYPE merge_status AS ENUM ('pending', 'cancelled', 'conflicted', 'pushed'
 CREATE TYPE review_status AS ENUM ('unreviewed', 'rejected', 'approved');
 
 CREATE TYPE commit_type AS ENUM ('normal', 'single', 'tip', 'merge');
-CREATE TYPE entity_type AS ENUM ('commit', 'pull_request', 'stack', 'ack', 'system'); -- for logs
+CREATE TYPE entity_type AS ENUM ('repository', 'commit', 'pull_request', 'stack', 'ack', 'system'); -- for logs
 
 -- Version
 CREATE TABLE global (

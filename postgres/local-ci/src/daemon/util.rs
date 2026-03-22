@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
-use lcilib::db::models::{Commit, DbRepositoryId, Repository};
+use lcilib::db::models::{CommitToTest, DbRepositoryId, Repository};
 use std::collections::HashMap;
 use tokio::task;
 use xshell::Shell;
@@ -11,7 +11,7 @@ use xshell::Shell;
 /// # Errors
 ///
 /// Returns an error if the jj command fails or if we can't determine the repository path.
-pub async fn is_commit_gpg_signed(commit: &Commit, repo_path: &str) -> anyhow::Result<bool> {
+pub async fn is_commit_gpg_signed(commit: &CommitToTest, repo_path: &str) -> anyhow::Result<bool> {
     let change_id = commit.jj_change_id.clone();
     let repo_path = repo_path.to_string();
 
@@ -33,7 +33,7 @@ pub async fn is_commit_gpg_signed(commit: &Commit, repo_path: &str) -> anyhow::R
 ///
 /// Returns an error if database operations fail.
 pub async fn calculate_stack_priority(
-    commits: &[Commit],
+    commits: &[CommitToTest],
     tx: &lcilib::Transaction<'_>,
     repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<f64> {
@@ -59,7 +59,7 @@ pub async fn calculate_stack_priority(
 /// Returns an error if database operations fail.
 #[expect(clippy::cast_precision_loss)] // fine; we are computing priorities which don't need to be precise
 async fn calculate_commit_priority(
-    commit: &Commit,
+    commit: &CommitToTest,
     tx: &lcilib::Transaction<'_>,
     repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<f64> {

@@ -346,7 +346,7 @@ async fn process_approved_pr(
     }
 
     // Step 2: Get all stacks for this repo/target, sorted by priority
-    let all_stacks = Stack::find_all(&tx)
+    let all_stacks = Stack::get_all(&tx)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to find stacks: {}", e))?;
 
@@ -361,6 +361,7 @@ async fn process_approved_pr(
     let mut stack_priorities = Vec::new();
     for stack in &matching_stacks {
         let commits = stack
+            .id
             .get_commits(&tx)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
@@ -398,6 +399,7 @@ async fn process_approved_pr(
 
             // Check if this PR is the first merge in this stack
             let stack_commits = stack
+                .id
                 .get_commits(&tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
@@ -427,6 +429,7 @@ async fn process_approved_pr(
         } else {
             // We've already added to a stack, just check if we're first in this one
             let stack_commits = stack
+                .id
                 .get_commits(&tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
@@ -614,6 +617,7 @@ async fn try_extend_stack(
 
     // Get current stack commits to find the tip
     let stack_commits = stack
+        .id
         .get_commits(tx)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
@@ -738,7 +742,7 @@ async fn process_existing_stacks(
         .transaction()
         .await
         .context("starting stacks transaction")?;
-    let all_stacks = Stack::find_all(&tx)
+    let all_stacks = Stack::get_all(&tx)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to find stacks: {}", e))?;
     tx.commit().await.context("committing stacks query")?;
@@ -766,6 +770,7 @@ async fn process_existing_stacks(
         let mut stack_priorities = Vec::new();
         for stack in &stacks {
             let commits = stack
+                .id
                 .get_commits(&tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
@@ -806,6 +811,7 @@ async fn process_stack_updates(
         .context("starting stack update transaction")?;
 
     let stack_commits = stack
+        .id
         .get_commits(&tx)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;

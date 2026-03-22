@@ -24,6 +24,42 @@ use tokio::{
 use super::{get_repository_for_commit, mark_commit_status};
 use super::{log, util};
 
+/// Returns all the high-priority and low-priority stacks across all repos.
+async fn find_stacks(
+    tx: &lcilib::Transaction<'_>,
+) -> anyhow::Result<(
+    Vec<(Stack, Vec<CommitToTest>)>,
+    Vec<(Stack, Vec<CommitToTest>)>,
+)> {
+    // Find all stacks grouped by DB and branch
+    let mut branch_map = HashMap::<(DbRepositoryId, String), Vec<Stack>>::new();
+    for stack in Stack::get_all(tx).await? {
+        branch_map
+            .entry((stack.repository_id, stack.target_branch.clone()))
+            .or_default()
+            .push(stack);
+    }
+
+    let mut high_priority = vec![];
+    let mut low_priority = vec![];
+
+    for mut stacks in branch_map.into_values() {
+        // TODO: for now just treat the last one as "highest priority"; later we should compute
+        //  the correct prioritization logic. But need to fix calculate_stack_priority to not
+        //  use repo_map first.
+        if let Some(stack) = stacks.pop() {
+            let id = stack.id;
+            high_priority.push((stack, id.get_commits(tx).await?));
+        }
+        for stack in stacks {
+            let id = stack.id;
+            low_priority.push((stack, id.get_commits(tx).await?));
+        }
+    }
+
+    Ok((high_priority, low_priority))
+}
+
 /// Find the next commit that needs testing, following the priority rules
 ///
 /// # Errors
@@ -39,15 +75,11 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     let repo_map: HashMap<DbRepositoryId, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
 
     // Compute lists of available work and print summary.
-    let high_priority_stacks = Stack::find_highest_priority_by_repo_branch(&tx)
-        .await
-        .context("finding high-priority stacks")?;
+    let (high_priority_stacks, low_priority_stacks) =
+        find_stacks(&tx).await.context("finding stacks")?;
     let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx)
         .await
         .context("finding PRs needing testing")?;
-    let low_priority_stacks = Stack::find_low_priority_stacks(&tx)
-        .await
-        .context("finding low-priority stacks")?;
 
     print_work_summary(
         &tx,
@@ -153,9 +185,9 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
 /// Print a summary of all remaining work
 async fn print_work_summary(
     tx: &lcilib::Transaction<'_>,
-    high_priority_stacks: &[(Stack, Vec<Commit>)],
+    high_priority_stacks: &[(Stack, Vec<CommitToTest>)],
     prs_needing_testing: &[PullRequest],
-    low_priority_stacks: &[(Stack, Vec<Commit>)],
+    low_priority_stacks: &[(Stack, Vec<CommitToTest>)],
 ) -> anyhow::Result<()> {
     // Get repository info for display names
     let repos = Repository::list_all(tx)
@@ -202,7 +234,7 @@ async fn print_work_summary(
         // Get commits that need testing for this PR
         let commits_to_test = pr
             .id
-            .find_current_non_merge_commits(tx)
+            .get_current_non_merge_commits(tx)
             .await
             .context("getting commits needing testing for PR")?;
 
@@ -300,6 +332,7 @@ async fn count_signed_commits_in_stack(
     repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<usize> {
     let commits = stack
+        .id
         .get_commits(tx)
         .await
         .context("getting stack commits")?;

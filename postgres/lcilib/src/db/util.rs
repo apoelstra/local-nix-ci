@@ -9,6 +9,8 @@ use crate::db::DbQueryError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, postgres_types::FromSql, postgres_types::ToSql)]
 #[postgres(name = "entity_type")]
 pub enum EntityType {
+    #[postgres(name = "repository")]
+    Repository,
     #[postgres(name = "commit")]
     Commit,
     #[postgres(name = "pull_request")]
@@ -24,6 +26,7 @@ pub enum EntityType {
 impl std::fmt::Display for EntityType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Repository => write!(f, "repository"),
             Self::Commit => write!(f, "commit"),
             Self::PullRequest => write!(f, "pull_request"),
             Self::Stack => write!(f, "stack"),
