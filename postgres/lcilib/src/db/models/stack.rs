@@ -331,4 +331,36 @@ impl Stack {
 
         Ok(rows.iter().map(Self::from_row).collect())
     }
+
+    /// Get all stacks for a given repository and target branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_all_for_target_branch(
+        tx: &tokio_postgres::Transaction<'_>,
+        repo: DbRepositoryId,
+        target_branch: &str,
+    ) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT id, repository_id, target_branch, created_at, updated_at
+                FROM stacks
+                WHERE repository_id = $1 AND target_branch = $2
+                ORDER BY created_at ASC
+                "#,
+                &[&repo, &target_branch],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_stacks_for_target_branch",
+                entity_type: EntityType::Repository,
+                raw_id: Some(repo.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
 }
