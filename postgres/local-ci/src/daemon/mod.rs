@@ -319,24 +319,11 @@ async fn process_approved_pr(
 
     let tx = db.transaction().await.context("starting PR transaction")?;
 
-    // Get tip commit
-    let Some(tip_commit) = Commit::find_by_id(&tx, pr.tip_commit_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to find tip commit: {}", e))?
-    else {
-        log::warn(format_args!(
-            "Tip commit not found for PR #{}",
-            pr.pr_number
-        ));
-        tx.commit().await.context("committing transaction")?;
-        return Ok(false);
-    };
-
-    // Check if direct merge commit already exists
-    let existing_merge = tx
-        .query_opt(
+    // Step 1: Get all current merge commits associated with this PR
+    let existing_merges = tx
+        .query(
             r#"
-        SELECT c.id, c.jj_change_id
+        SELECT c.id, c.jj_change_id, c.git_commit_id
         FROM commits c
         JOIN pr_commits pc ON c.id = pc.commit_id
         WHERE pc.pull_request_id = $1
@@ -346,17 +333,132 @@ async fn process_approved_pr(
             &[&pr.id],
         )
         .await
-        .context("checking for existing merge commit")?;
+        .context("getting existing merge commits")?;
 
-    let merge_commit = if let Some(row) = existing_merge {
-        // Use existing merge commit
+    let mut existing_merge_commits = Vec::new();
+    for row in existing_merges {
         let commit_id: DbCommitId = row.get("id");
-        Commit::find_by_id(&tx, commit_id)
+        let commit = Commit::find_by_id(&tx, commit_id)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to find existing merge commit: {}", e))?
-            .unwrap()
-    } else {
-        // Create new merge commit
+            .map_err(|e| anyhow::anyhow!("Failed to find merge commit: {}", e))?
+            .unwrap();
+        existing_merge_commits.push(commit);
+    }
+
+    // Step 2: Get all stacks for this repo/target, sorted by priority
+    let all_stacks = Stack::find_all(&tx)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to find stacks: {}", e))?;
+
+    let matching_stacks: Vec<_> = all_stacks
+        .into_iter()
+        .filter(|s| s.repository_id == pr.repository_id && s.target_branch == pr.target_branch)
+        .collect();
+
+    // Calculate priorities and sort stacks
+    let repo_ref_map: HashMap<DbRepositoryId, &Repository> =
+        std::iter::once((pr.repository_id, repo)).collect();
+    let mut stack_priorities = Vec::new();
+    for stack in &matching_stacks {
+        let commits = stack
+            .get_commits(&tx)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
+        let priority = util::calculate_stack_priority(&commits, &tx, &repo_ref_map)
+            .await
+            .context("calculating stack priority")?;
+        stack_priorities.push((stack, priority));
+    }
+    stack_priorities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let sorted_stacks: Vec<&Stack> = stack_priorities.into_iter().map(|(s, _)| s).collect();
+
+    // Step 3: Try to add PR to existing stacks
+    let mut added_to_stack = false;
+    let mut pr_is_first_in_some_stack = false;
+
+    for stack in &sorted_stacks {
+        // Check if this PR already has a merge in this stack
+        let pr_in_stack = tx
+            .query_opt(
+                r#"
+            SELECT 1 FROM stack_commits sc
+            JOIN commits c ON sc.commit_id = c.id
+            JOIN pr_commits pc ON c.id = pc.commit_id
+            WHERE sc.stack_id = $1 AND pc.pull_request_id = $2 
+            AND pc.commit_type = 'merge' AND pc.is_current = true
+            "#,
+                &[&stack.id, &pr.id],
+            )
+            .await
+            .context("checking if PR is in stack")?;
+
+        if pr_in_stack.is_some() {
+            // PR already in this stack
+            added_to_stack = true;
+
+            // Check if this PR is the first merge in this stack
+            let stack_commits = stack
+                .get_commits(&tx)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
+
+            if let Some(first_commit) = stack_commits.first() {
+                let first_is_our_pr = tx
+                    .query_opt(
+                        r#"
+                    SELECT 1 FROM pr_commits pc
+                    WHERE pc.commit_id = $1 AND pc.pull_request_id = $2
+                    AND pc.commit_type = 'merge' AND pc.is_current = true
+                    "#,
+                        &[&first_commit.id, &pr.id],
+                    )
+                    .await
+                    .context("checking if first commit is our PR")?;
+
+                if first_is_our_pr.is_some() {
+                    pr_is_first_in_some_stack = true;
+                }
+            }
+        } else if !added_to_stack {
+            // Try to add PR to this stack
+            if try_extend_stack(&tx, stack, pr, repo).await? {
+                added_to_stack = true;
+            }
+        } else {
+            // We've already added to a stack, just check if we're first in this one
+            let stack_commits = stack
+                .get_commits(&tx)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
+
+            if let Some(first_commit) = stack_commits.first() {
+                let first_is_our_pr = tx
+                    .query_opt(
+                        r#"
+                    SELECT 1 FROM pr_commits pc
+                    WHERE pc.commit_id = $1 AND pc.pull_request_id = $2
+                    AND pc.commit_type = 'merge' AND pc.is_current = true
+                    "#,
+                        &[&first_commit.id, &pr.id],
+                    )
+                    .await
+                    .context("checking if first commit is our PR")?;
+
+                if first_is_our_pr.is_some() {
+                    pr_is_first_in_some_stack = true;
+                }
+            }
+        }
+    }
+
+    // Step 4: If not first in any stack, create direct merge and new stack
+    if !pr_is_first_in_some_stack {
+        let tip_commit = Commit::find_by_id(&tx, pr.tip_commit_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to find tip commit: {}", e))?
+            .ok_or_else(|| anyhow::anyhow!("Tip commit not found"))?;
+
+        // Create direct merge commit
         let acks = Ack::find_by_pull_request(&tx, pr.id)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to get ACKs: {}", e))?;
@@ -383,7 +485,6 @@ async fn process_approved_pr(
             )
         };
 
-        // Create merge commit using jj
         let shell = Shell::new().context("creating shell")?;
         shell.change_dir(&repo.path);
 
@@ -396,7 +497,7 @@ async fn process_approved_pr(
             Ok(id) => id,
             Err(e) => {
                 log::warn(format_args!(
-                    "Failed to create merge commit for PR #{}: {}",
+                    "Failed to create direct merge commit for PR #{}: {}",
                     pr.pr_number, e
                 ));
                 tx.commit().await.context("committing transaction")?;
@@ -405,9 +506,8 @@ async fn process_approved_pr(
         };
 
         let git_commit_id = lcilib::jj::get_current_git_commit_for_change_id(&shell, &jj_change_id)
-            .context("getting git commit ID for merge")?;
+            .context("getting git commit ID for direct merge")?;
 
-        // Create commit record
         let new_commit = NewCommit {
             repository_id: pr.repository_id,
             git_commit_id,
@@ -416,41 +516,27 @@ async fn process_approved_pr(
             should_run_ci: true,
             ci_status: CiStatus::Unstarted,
             nix_derivation: None,
-            review_text: Some(format!("Merge commit for PR #{}", pr.pr_number)),
+            review_text: Some(format!("Direct merge commit for PR #{}", pr.pr_number)),
         };
 
-        let commit = Commit::create(&tx, new_commit)
+        let direct_merge_commit = Commit::create(&tx, new_commit)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create merge commit record: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create direct merge commit record: {}", e))?;
 
         // Add to PR
-        lcilib::db::models::PrCommit::create(&tx, pr.id, commit.id, 999, CommitType::Merge)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create pr_commit record: {}", e))?;
-
-        commit
-    };
-
-    // Try to extend existing stacks
-    let mut extended_stack = false;
-    let stacks = Stack::find_all(&tx)
+        lcilib::db::models::PrCommit::create(
+            &tx,
+            pr.id,
+            direct_merge_commit.id,
+            1000,
+            CommitType::Merge,
+        )
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to find stacks: {}", e))?;
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to create pr_commit record for direct merge: {}", e)
+        })?;
 
-    let matching_stacks: Vec<_> = stacks
-        .into_iter()
-        .filter(|s| s.repository_id == pr.repository_id && s.target_branch == pr.target_branch)
-        .collect();
-
-    for stack in matching_stacks {
-        if try_extend_stack(&tx, &stack, pr, repo).await? {
-            extended_stack = true;
-            break;
-        }
-    }
-
-    // If no stack was extended, create new stack
-    if !extended_stack {
+        // Create new stack with direct merge as first commit
         let new_stack = NewStack {
             repository_id: pr.repository_id,
             target_branch: pr.target_branch.clone(),
@@ -461,11 +547,39 @@ async fn process_approved_pr(
             .map_err(|e| anyhow::anyhow!("Failed to create stack: {}", e))?;
 
         stack
-            .add_commit(&tx, merge_commit.id, 1)
+            .add_commit(&tx, direct_merge_commit.id, 1)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to add commit to stack: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to add direct merge to stack: {}", e))?;
 
-        log::info(format_args!("Created new stack for PR #{}", pr.pr_number));
+        log::info(format_args!(
+            "Created direct merge and new stack for PR #{}",
+            pr.pr_number
+        ));
+    }
+
+    // Step 5: Check for orphaned merge commits and mark them as not current
+    for merge_commit in &existing_merge_commits {
+        let in_any_stack = tx
+            .query_opt(
+                "SELECT 1 FROM stack_commits WHERE commit_id = $1",
+                &[&merge_commit.id],
+            )
+            .await
+            .context("checking if merge commit is in any stack")?;
+
+        if in_any_stack.is_none() {
+            log::warn(format_args!(
+                "Warning: Merge commit {} for PR #{} is not in any stack, marking as not current",
+                merge_commit.jj_change_id, pr.pr_number
+            ));
+
+            tx.execute(
+                "UPDATE pr_commits SET is_current = false WHERE commit_id = $1",
+                &[&merge_commit.id],
+            )
+            .await
+            .context("marking orphaned merge commit as not current")?;
+        }
     }
 
     tx.commit().await.context("committing PR transaction")?;
@@ -944,7 +1058,12 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         shell.change_dir(&repo_path);
 
         // Fetch latest changes from git remote
-        if let Err(e) = cmd!(shell, "git fetch origin").run() {
+        if let Err(e) = cmd!(shell, "git fetch origin")
+            .quiet()
+            .ignore_stdout()
+            .ignore_stderr()
+            .run()
+        {
             let error = anyhow::Error::from(e);
             log::warn(format_args!(
                 "Failed to run 'git fetch origin' in repository {}: {:?}",
@@ -953,7 +1072,12 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         }
 
         // Fetch changes into jj
-        if let Err(e) = cmd!(shell, "jj git fetch").run() {
+        if let Err(e) = cmd!(shell, "jj git fetch")
+            .quiet()
+            .ignore_stdout()
+            .ignore_stderr()
+            .run()
+        {
             let error = anyhow::Error::from(e);
             log::warn(format_args!(
                 "Failed to run 'jj git fetch' in repository {}: {:?}",

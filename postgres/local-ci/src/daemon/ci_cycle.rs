@@ -332,7 +332,7 @@ async fn get_commits_needing_testing_for_pr(
             r#"
             SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
                    c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
-                   pc.commit_type,
+                   pc.commit_type
             FROM commits c
             JOIN pr_commits pc ON c.id = pc.commit_id
             WHERE pc.pull_request_id = $1
@@ -559,7 +559,7 @@ async fn get_or_create_derivation_with_cancellation(
     };
     let commit_str = format!(
         "{{ commit = \"{}\"; isTip = {}; gitUrl = \"{}\"; cargoNixes = {}; }}",
-        is_tip, commit.git_commit_id, repo.path, cargo_nixes
+        commit.git_commit_id, is_tip, repo.path, cargo_nixes
     );
 
     // Instantiate derivation with cancellation checking
