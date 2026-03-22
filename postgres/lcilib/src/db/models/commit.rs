@@ -279,6 +279,9 @@ impl Commit {
             repository_id: self.repository_id,
             git_commit_id: self.git_commit_id,
             jj_change_id: self.jj_change_id,
+            review_status: self.review_status,
+            should_run_ci: self.should_run_ci,
+            ci_status: self.ci_status,
             nix_derivation: self.nix_derivation,
             commit_type,
         }
@@ -291,6 +294,17 @@ pub struct CommitToTest {
     pub repository_id: super::DbRepositoryId,
     pub git_commit_id: CommitId,
     pub jj_change_id: ChangeId,
+    pub review_status: ReviewStatus,
+    pub should_run_ci: bool,
+    pub ci_status: CiStatus,
     pub commit_type: CommitType,
     pub nix_derivation: Option<String>,
+}
+
+impl CommitToTest {
+    pub(super) fn from_row(row: &tokio_postgres::Row) -> Self {
+        let commit = Commit::from_row(row);
+        let commit_type = row.get("commit_type");
+        commit.into_commit_to_test(commit_type)
+    }
 }

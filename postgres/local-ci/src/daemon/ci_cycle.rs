@@ -6,8 +6,8 @@ use lcilib::{
     Db,
     db::CiStatus,
     db::models::{
-        Commit, CommitToTest, CommitType, DbRepositoryId, PullRequest, Repository, Stack,
-        UpdateCommit,
+        Commit, CommitToTest, CommitType, DbRepositoryId, PullRequest, Repository, ReviewStatus,
+        Stack, UpdateCommit,
     },
     git::CommitId,
 };
@@ -87,24 +87,25 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     // 2. Check PRs by priority (user priority, then all approved, then fewer untested, then age)
     let mut prioritized_prs = Vec::new();
     for pr in &prs_needing_testing {
-        let (total_commits, approved_commits, untested_commits) =
-            pr.get_commit_counts(&tx)
-                .await
-                .context("getting PR commit counts")?;
+        let counts = pr
+            .id
+            .get_commit_counts(&tx)
+            .await
+            .context("getting PR commit counts")?;
 
-        let all_approved = approved_commits == total_commits;
+        let all_approved = counts.approved == counts.total;
         let age_days = (Utc::now() - pr.created_at).num_days();
 
-        prioritized_prs.push((pr, all_approved, -untested_commits, age_days));
+        prioritized_prs.push((pr, all_approved, counts.untested, age_days));
     }
 
-    // Sort by: priority DESC, all_approved DESC, fewer untested DESC (negative untested), age DESC (older first)
+    // Sort by: priority DESC, all_approved DESC, untested ASC ("closer to done" first), age DESC (older first)
     prioritized_prs.sort_by(|a, b| {
         a.0.priority
             .cmp(&b.0.priority)
             .reverse()
             .then(a.1.cmp(&b.1).reverse())
-            .then(a.2.cmp(&b.2).reverse())
+            .then(a.2.cmp(&b.2))
             .then(a.3.cmp(&b.3).reverse())
     });
 
@@ -180,44 +181,43 @@ async fn print_work_summary(
             .get(&pr.repository_id)
             .map_or("unknown", |r| r.name.as_str());
 
-        let (total_commits, approved_commits, untested_commits) = pr
+        let counts = pr
+            .id
             .get_commit_counts(tx)
             .await
             .context("getting PR commit counts")?;
 
-        let unapproved = total_commits - approved_commits;
-        let review_status_text = match pr.review_status {
-            lcilib::db::models::ReviewStatus::Approved => "approved".to_string(),
-            lcilib::db::models::ReviewStatus::Unreviewed => "unreviewed".to_string(),
-            lcilib::db::models::ReviewStatus::Rejected => "rejected".to_string(),
-        };
-
-        let pr_line = if unapproved > 0 {
-            format!(
+        if counts.unapproved > 0 {
+            log::info(format_args!(
                 "{} PR#{} {} commits left to test ({} unapproved) (PR {})",
-                repo_name, pr.pr_number, untested_commits, unapproved, review_status_text
-            )
+                repo_name, pr.pr_number, counts.untested, counts.unapproved, pr.review_status
+            ));
         } else {
-            format!(
+            log::info(format_args!(
                 "{} PR#{} {} commits left to test (PR {})",
-                repo_name, pr.pr_number, untested_commits, review_status_text
-            )
+                repo_name, pr.pr_number, counts.untested, pr.review_status
+            ));
         };
-
-        log::info(format_args!("{}", pr_line));
 
         // Get commits that need testing for this PR
-        let commits_to_test = get_commits_needing_testing_for_pr(tx, pr)
+        let commits_to_test = pr
+            .id
+            .find_current_non_merge_commits(tx)
             .await
             .context("getting commits needing testing for PR")?;
 
         for commit in commits_to_test {
-            log::info(format_args!(
-                "  - {} ({}) ({})",
-                commit.git_commit_id,
-                commit.jj_change_id.prefix8(),
-                commit.commit_type,
-            ));
+            if commit.review_status == ReviewStatus::Approved
+                && commit.ci_status == CiStatus::Unstarted
+                && commit.should_run_ci
+            {
+                log::info(format_args!(
+                    "  - {} ({}) ({})",
+                    commit.git_commit_id,
+                    commit.jj_change_id.prefix8(),
+                    commit.commit_type,
+                ));
+            }
         }
     }
 
@@ -316,50 +316,6 @@ async fn count_signed_commits_in_stack(
     }
 
     Ok(signed_count)
-}
-
-/// Get commits that need testing for a specific PR
-///
-/// # Errors
-///
-/// Returns an error if database operations fail.
-async fn get_commits_needing_testing_for_pr(
-    tx: &lcilib::Transaction<'_>,
-    pr: &PullRequest,
-) -> anyhow::Result<Vec<CommitToTest>> {
-    let rows = tx
-        .query(
-            r#"
-            SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                   c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
-                   pc.commit_type
-            FROM commits c
-            JOIN pr_commits pc ON c.id = pc.commit_id
-            WHERE pc.pull_request_id = $1
-            AND pc.is_current = true
-            AND c.review_status = 'approved'
-            AND c.ci_status = 'unstarted'
-            AND c.should_run_ci = true
-            ORDER BY pc.sequence_order ASC
-            "#,
-            &[&pr.id],
-        )
-        .await
-        .context("querying commits needing testing for PR")?;
-
-    let commits = rows
-        .iter()
-        .map(|row| CommitToTest {
-            id: row.get("id"),
-            repository_id: row.get("repository_id"),
-            git_commit_id: row.get("git_commit_id"),
-            jj_change_id: row.get("jj_change_id"),
-            nix_derivation: row.get("nix_derivation"),
-            commit_type: row.get("commit_type"),
-        })
-        .collect();
-
-    Ok(commits)
 }
 
 async fn process_commit_ci(

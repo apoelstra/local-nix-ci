@@ -140,3 +140,38 @@ impl fmt::Display for CommitType {
         }
     }
 }
+
+/// Utility struct to allow parsing numbers as usizes from the database.
+#[derive(FromSql)]
+#[postgres(transparent)]
+struct Count(i64);
+impl From<Count> for usize {
+    fn from(value: Count) -> Self {
+        Self::try_from(value.0).expect("any count from the database fits in i64")
+    }
+}
+
+/// Statistics about a list of commits in the database.
+///
+/// Contains information about what's tested, but not about what's
+/// signed (since the database doesn't track that).
+pub struct CommitCounts {
+    pub total: usize,
+    pub approved: usize,
+    pub unapproved: usize,
+    pub untested: usize,
+}
+
+impl CommitCounts {
+    fn from_row(row: &tokio_postgres::Row) -> Self {
+        let total = row.get::<_, Count>("total").into();
+        let approved = row.get::<_, Count>("approved").into();
+        let untested = row.get::<_, Count>("untested").into();
+        Self {
+            total,
+            approved,
+            unapproved: total - approved,
+            untested,
+        }
+    }
+}

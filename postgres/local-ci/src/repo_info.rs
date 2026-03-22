@@ -37,6 +37,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
     };
 
     println!("Repository: {} ({})", repo_record.name, repo_record.path);
+    println!("Nixfile: {}", repo_record.nixfile_path);
     println!("Created: {}", repo_record.created_at);
     println!();
 
@@ -58,9 +59,6 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
             .context("failed to get ACKs for PR")?;
         all_acks.extend(pr_acks);
     }
-
-    // Display repository summary
-    show_repository_summary(&all_prs, &all_commits, &all_acks);
 
     // Display PRs by status
     show_prs_by_status(&all_prs);
@@ -114,52 +112,6 @@ async fn get_all_prs_for_repo(
             synced_at: row.get("synced_at"),
         })
         .collect())
-}
-
-/// Display repository summary statistics
-fn show_repository_summary(prs: &[PullRequest], commits: &[Commit], acks: &[Ack]) {
-    println!("=== Repository Summary ===");
-    println!("Pull Requests: {}", prs.len());
-    println!("Commits: {}", commits.len());
-    println!("ACKs: {}", acks.len());
-
-    // Count PRs by status
-    let ready_to_merge = prs
-        .iter()
-        .filter(|pr| pr.review_status == ReviewStatus::Approved && pr.ok_to_merge)
-        .count();
-    let needs_review = prs
-        .iter()
-        .filter(|pr| pr.review_status == ReviewStatus::Unreviewed)
-        .count();
-    let rejected = prs
-        .iter()
-        .filter(|pr| pr.review_status == ReviewStatus::Rejected)
-        .count();
-
-    println!("  - Ready to merge: {}", ready_to_merge);
-    println!("  - Needs review: {}", needs_review);
-    println!("  - Rejected: {}", rejected);
-
-    // Count commits by CI status
-    let ci_needed = commits
-        .iter()
-        .filter(|c| c.should_run_ci && c.ci_status == CiStatus::Unstarted)
-        .count();
-    let ci_failed = commits
-        .iter()
-        .filter(|c| c.ci_status == CiStatus::Failed)
-        .count();
-    let ci_passed = commits
-        .iter()
-        .filter(|c| c.ci_status == CiStatus::Passed)
-        .count();
-
-    println!("  - Commits needing CI: {}", ci_needed);
-    println!("  - CI failures: {}", ci_failed);
-    println!("  - CI passed: {}", ci_passed);
-
-    println!();
 }
 
 /// Display PRs organized by status

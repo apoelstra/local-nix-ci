@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
-use super::{DbCommitId, DbRepositoryId, MergeStatus, ReviewStatus};
+use super::{CommitCounts, CommitToTest, DbCommitId, DbRepositoryId, MergeStatus, ReviewStatus};
 use crate::db::{DbQueryError, EntityType, util::log_action};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
@@ -252,6 +252,78 @@ impl DbPullRequestId {
                 clauses,
                 error,
             })
+    }
+
+    /// Count commits in various states for this PR
+    ///
+    /// Returns `(total_commits, approved_commits, untested_commits)`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_commit_counts(
+        self,
+        tx: &tokio_postgres::Transaction<'_>,
+    ) -> Result<CommitCounts, DbQueryError> {
+        let row = tx
+            .query_one(
+                r#"
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN c.review_status = 'approved' THEN 1 END) as approved,
+                    COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'unstarted' AND c.should_run_ci = true THEN 1 END) as untested
+                FROM commits c
+                JOIN pr_commits pc ON c.id = pc.commit_id
+                WHERE pc.pull_request_id = $1 AND pc.is_current = true
+                "#,
+                &[&self],
+            )
+            .await
+            .map_err(|error| {
+                DbQueryError {
+                    action: "get_commit_counts",
+                    entity_type: EntityType::PullRequest,
+                    raw_id: Some(self.bare_i32()),
+                    clauses: vec![],
+                    error,
+                }
+            })?;
+        Ok(CommitCounts::from_row(&row))
+    }
+
+    /// Returns the list of current non-merge commits associated with
+    /// this PR, in sequence order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn find_current_non_merge_commits(
+        self,
+        tx: &tokio_postgres::Transaction<'_>,
+    ) -> Result<Vec<CommitToTest>, DbQueryError> {
+        let rows = tx
+            .query(
+                r#"
+                SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
+                       pc.commit_type
+                FROM commits c
+                JOIN pr_commits pc ON c.id = pc.commit_id
+                WHERE pc.pull_request_id = $1
+                AND pc.is_current = true
+                ORDER BY pc.sequence_order ASC
+                "#,
+                &[&self],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "find_current_non_merge_commits",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+        Ok(rows.iter().map(CommitToTest::from_row).collect())
     }
 }
 

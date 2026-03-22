@@ -652,39 +652,6 @@ impl PullRequest {
         Ok(Some(commit.into_commit_to_test(commit_type)))
     }
 
-    /// Count commits in various states for this PR
-    ///
-    /// Returns `(total_commits, approved_commits, untested_commits)`
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn get_commit_counts(
-        &self,
-        tx: &Transaction<'_>,
-    ) -> Result<(i64, i64, i64), OperationError> {
-        let row = tx
-            .query_one(
-                r#"
-                SELECT
-                    COUNT(*) as total,
-                    COUNT(CASE WHEN c.review_status = 'approved' THEN 1 END) as approved,
-                    COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'unstarted' AND c.should_run_ci = true THEN 1 END) as untested
-                FROM commits c
-                JOIN pr_commits pc ON c.id = pc.commit_id
-                WHERE pc.pull_request_id = $1 AND pc.is_current = true
-                "#,
-                &[&self.id],
-            )
-            .await
-            .map_err(|e| OperationError::with_context(e, "get_commit_counts", "PullRequest", &format!("pr_id: {}, pr_number: {}", self.id, self.pr_number)))?;
-
-        Ok((
-            row.get::<_, i64>("total"),
-            row.get::<_, i64>("approved"),
-            row.get::<_, i64>("untested"),
-        ))
-    }
     /// Create a new pull request
     ///
     /// # Errors
