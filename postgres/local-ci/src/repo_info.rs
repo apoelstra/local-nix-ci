@@ -6,7 +6,7 @@ use lcilib::{
     db::models::{Ack, AckStatus, CiStatus, Commit, PullRequest, Repository, ReviewStatus, Stack},
     repo,
 };
-use xshell::Shell;
+use xshell::{Shell, cmd};
 
 /// Show overview of all PRs and commits in the current repository
 ///
@@ -68,7 +68,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
         .context("failed to get stacks for repository")?;
 
     show_prs(&all_prs);
-    show_stacks(&all_stacks);
+    show_stacks(&tx, &all_stacks).await?;
     show_pending_actions(&all_prs, &all_commits, &all_acks);
 
     // Display CI status
@@ -100,7 +100,7 @@ fn show_prs(prs: &[PullRequest]) {
         println!();
     }
 
-    // Needs review
+    // .await review
     let needs_review: Vec<_> = prs
         .iter()
         .filter(|pr| pr.review_status == ReviewStatus::Unreviewed)
@@ -142,18 +142,46 @@ fn show_prs(prs: &[PullRequest]) {
         for pr in approved_not_ready {
             println!("  PR #{}: {}", pr.pr_number, pr.title);
         }
-        println!();
     }
 }
 
 /// Display PRs organized by status
-fn show_stacks(stacks: &[Stack]) {
-    dbg!(stacks);
+async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::Result<()> {
+    if stacks.is_empty() {
+        println!("\nNo stacks.");
+        return Ok(());
+    }
+    println!("\n=== Merge Stacks ===");
+
+    for stack in stacks {
+        let repo = Repository::find_by_id(tx, stack.repository_id)
+            .await?
+            .expect("repo exists");
+
+        let commits = stack.id.get_commits(tx).await?;
+        let ids: Vec<_> = commits
+            .iter()
+            .map(|commit| commit.git_commit_id.as_str())
+            .collect();
+        let revset = ids.join("|");
+
+        println!("Stack {}: {} commits", stack.id, commits.len());
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let shell = Shell::new()?;
+            let _guard = shell.push_dir(&repo.path);
+
+            cmd!(shell, "jj log --no-pager -r {revset}").quiet().run()?;
+            Ok(())
+        })
+        .await??;
+    }
+
+    Ok(())
 }
 
 /// Display pending actions that need attention
 fn show_pending_actions(prs: &[PullRequest], commits: &[Commit], acks: &[Ack]) {
-    println!("=== Pending Actions ===");
+    println!("\n=== Pending Actions ===");
 
     let mut has_pending = false;
 
@@ -235,7 +263,7 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[Commit], acks: &[Ack]) {
 
 /// Display CI status overview
 fn show_ci_status(commits: &[Commit]) {
-    println!("=== CI Status ===");
+    println!("\n=== CI Status ===");
 
     // CI failures
     let ci_failed: Vec<_> = commits

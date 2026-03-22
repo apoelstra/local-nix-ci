@@ -81,14 +81,11 @@ pub fn jj_new<P: AsRef<OsStr>>(shell: &Shell, parents: &[P]) -> Result<ChangeId,
 ///
 /// Returns an error if the jj command fails to execute.
 pub fn jj_log<R: AsRef<OsStr>>(shell: &Shell, template: &str, revset: R) -> Result<String, Error> {
-    jj(shell)
-        .arg("log")
-        .arg("--no-graph")
-        .arg("-T")
-        .arg(template)
-        .arg("-r")
-        .arg(revset)
-        .read()
+    let mut cmd = jj(shell).arg("log").arg("--no-graph").arg("-r").arg(revset);
+    if !template.is_empty() {
+        cmd = cmd.arg("-T").arg(template);
+    }
+    cmd.read()
         .map_err(Error::Shell)
         .map(|s| s.trim().to_string())
 }
