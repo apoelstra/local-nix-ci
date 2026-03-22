@@ -51,10 +51,17 @@ pub fn jj(shell: &Shell) -> Cmd<'_> {
 ///
 /// Returns an error if the jj command fails to execute or if the output cannot be parsed
 /// to extract the change ID.
-pub fn jj_new<P: AsRef<OsStr>>(shell: &Shell, parents: &[P]) -> Result<ChangeId, Error> {
+fn jj_new<P: AsRef<OsStr>>(
+    shell: &Shell,
+    parents: &[P],
+    description: Option<&str>,
+) -> Result<ChangeId, Error> {
     let mut jj = jj(shell).arg("new").arg("--no-edit");
     for p in parents {
         jj = jj.arg("-r").arg(p);
+    }
+    if let Some(desc) = description{
+        jj = jj.arg("-m").arg(desc);
     }
 
     let jj_new_output = jj.read_stderr().map_err(Error::Shell)?;
@@ -131,14 +138,10 @@ pub fn create_merge_commit(
     shell: &Shell,
     pr_tip_commit: &str,
     target_branch: &str,
-    description: &str,
+    description: Option<&str>,
 ) -> Result<ChangeId, Error> {
     // Create new merge commit
-    let change_id = jj_new(shell, &[target_branch, pr_tip_commit])?;
-
-    // Set the description
-    update_commit_description(shell, &change_id, description)?;
-
+    let change_id = jj_new(shell, &[target_branch, pr_tip_commit], description)?;
     // Check for conflicts
     if has_conflicts(shell, &change_id)? {
         return Err(Error::ParseOutput(format!(
@@ -181,7 +184,7 @@ pub fn update_commit_description(
         .arg("describe")
         .arg("--quiet")
         .arg("-r")
-        .arg(change_id)
+        .arg(dbg!(change_id))
         .arg("-m")
         .arg(description)
         .ignore_stdout()

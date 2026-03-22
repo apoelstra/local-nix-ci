@@ -7,8 +7,8 @@ mod util;
 use anyhow::Context as _;
 use lcilib::Db;
 use lcilib::db::models::{
-    CiStatus, CommitToTest, DbAckId, DbCommitId, DbPullRequestId, DbRepositoryId, DbStackId, PullRequest,
-    NewStack, Repository, Stack, UpdateCommit,
+    CiStatus, Commit, CommitToTest, DbAckId, DbCommitId, DbPullRequestId, DbRepositoryId, DbStackId, PullRequest,
+    NewCommit, NewStack, Repository, ReviewStatus, Stack, UpdateCommit,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -55,7 +55,7 @@ async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
             Err(e) => {
                 log::warn_backoff(
                     &mut error_limit,
-                    format!("Failed to run DB maintenance cycle.\n{e:?}"),
+                    format!("Failed to run DB maintenance cycle.\n{:?}", anyhow::Error::from(e)),
                 )
                 .await;
             }
@@ -70,17 +70,23 @@ async fn real_run_db_maintenance_cycle(
     let mut had_work = false;
 
     // Check for pending ACKs that need to be posted
-    if check_pending_acks(db, log_limit).await? {
+    if check_pending_acks(db, log_limit).await
+        .context("checking pending ACKs")?
+    {
         had_work = true;
     }
 
     // Check for approved PRs that need merge commits created
-    if check_approved_prs(db).await? {
+    if check_approved_prs(db).await
+        .context("checking approved PRs")?
+    {
         had_work = true;
     }
 
     // Check for signed merge commits that need to be pushed
-    if check_signed_merges(db, log_limit).await? {
+    if check_signed_merges(db, log_limit).await
+        .context("checking signed merges")?
+    {
         had_work = true;
     }
 
@@ -292,13 +298,17 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
             synced_at: pr_row.get("synced_at"),
         };
 
-        if process_approved_pr(db, &pr).await? {
+        if process_approved_pr(db, &pr).await
+            .with_context(|| format!("processing approved PR {}", pr.pr_number))?
+        {
             work_done = true;
         }
     }
 
     // Step 3: Process existing stacks for rebasing and updates
-    if process_existing_stacks(db).await? {
+    if process_existing_stacks(db).await
+        .context("processing existing stacks")?
+    {
         work_done = true;
     }
 
@@ -370,8 +380,6 @@ async fn try_extend_stack(
     pr: &PullRequest,
     repo: &Repository,
 ) -> anyhow::Result<bool> {
-    use lcilib::db::models::{CiStatus, Commit, NewCommit, ReviewStatus};
-
     // Get the tip commit of the PR
     let tip_commit = Commit::find_by_id(tx, pr.tip_commit_id)
         .await
@@ -396,13 +404,13 @@ async fn try_extend_stack(
         &shell,
         tip_commit.git_commit_id.as_str(),
         stack_tip,
-        "<placeholder>",
+        None, // description
     ) {
         Ok(jj_change_id) => {
             if lcilib::jj::has_conflicts(&shell, &jj_change_id)? {
                 log::warn(format_args!(
                     "conflict trying to merge PR {} on top of {}",
-                    pr.pr_number, stack_tip
+                    pr.pr_number, stack_tip,
                 ));
                 return Ok(false);
             }
@@ -544,7 +552,9 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
 
         // Process each stack
         for stack in stacks {
-            if process_stack_updates(db, &stack, &repo).await? {
+            if process_stack_updates(db, &stack, &repo).await
+                .with_context(|| format!("processing updates for stack {}", stack.id))?
+            {
                 work_done = true;
             }
         }
@@ -637,7 +647,8 @@ async fn process_stack_updates(
     for commit in &stack_commits {
         let pr = commit.id.get_pull_request(&tx).await?;
         // Update description (dummy implementation for now)
-        let description = lcilib::git::compute_merge_description(&tx, &pr, commit).await?;
+        let description = lcilib::git::compute_merge_description(&tx, &pr, commit).await
+            .with_context(|| format!("computing merge description for merge of PR {} (commit {})", pr.pr_number, commit.git_commit_id))?;
         if let Err(e) =
             lcilib::jj::update_commit_description(&shell, &commit.jj_change_id, &description)
         {
