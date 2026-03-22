@@ -3,7 +3,9 @@
 use anyhow::Context as _;
 use lcilib::{
     Db,
-    db::models::{Ack, AckStatus, CiStatus, Commit, PullRequest, Repository, ReviewStatus},
+    db::models::{
+        Ack, AckStatus, CiStatus, Commit, DbRepositoryId, PullRequest, Repository, ReviewStatus,
+    },
     repo,
 };
 use xshell::Shell;
@@ -77,7 +79,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
 /// Get all PRs for a repository (helper function since it's not in the operations)
 async fn get_all_prs_for_repo(
     tx: &lcilib::Transaction<'_>,
-    repository_id: i32,
+    repository_id: DbRepositoryId,
 ) -> anyhow::Result<Vec<PullRequest>> {
     let rows = tx
         .query(

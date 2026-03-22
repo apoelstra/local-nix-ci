@@ -5,7 +5,7 @@ use chrono::Utc;
 use lcilib::{
     Db,
     db::CiStatus,
-    db::models::{Commit, PullRequest, Repository, Stack, UpdateCommit},
+    db::models::{Commit, DbRepositoryId, PullRequest, Repository, Stack, UpdateCommit},
     git::CommitId,
 };
 use std::collections::HashMap;
@@ -33,7 +33,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Commit>>
     let repos = Repository::list_all(&tx)
         .await
         .context("getting repository list")?;
-    let repo_map: HashMap<i32, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
+    let repo_map: HashMap<DbRepositoryId, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
 
     // Compute lists of available work and print summary.
     let high_priority_stacks = Stack::find_highest_priority_by_repo_branch(&tx)
@@ -157,7 +157,7 @@ async fn print_work_summary(
     let repos = Repository::list_all(tx)
         .await
         .context("getting repository list")?;
-    let repo_map: HashMap<i32, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
+    let repo_map: HashMap<DbRepositoryId, &Repository> = repos.iter().map(|r| (r.id, r)).collect();
 
     if prs_needing_testing.is_empty()
         && high_priority_stacks.is_empty()
@@ -293,7 +293,7 @@ async fn print_work_summary(
 async fn count_signed_commits_in_stack(
     tx: &lcilib::Transaction<'_>,
     stack: &Stack,
-    repo_map: &HashMap<i32, &Repository>,
+    repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<usize> {
     let commits = stack
         .get_commits(tx)
@@ -651,7 +651,7 @@ async fn get_or_create_derivation_with_cancellation(
                             nix_derivation: Some(Some(derivation_path.clone())),
                             ..Default::default()
                         };
-                        commit.update(&tx, updates).await
+                        commit.update(&tx, &updates).await
                             .map_err(|e| anyhow::anyhow!("Failed to update commit with derivation: {}", e))?;
                         tx.commit().await.context("committing transaction")?;
 

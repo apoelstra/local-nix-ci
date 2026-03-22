@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::str::FromStr;
-use tokio_postgres::{Client, Error, Transaction};
+use tokio_postgres::{Error, Transaction};
+
+use crate::db::DbQueryError;
 
 /// Entity types that can be logged, matching the database enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, postgres_types::FromSql, postgres_types::ToSql)]
@@ -69,7 +71,7 @@ pub async fn log_action(
     action: &str,
     description: Option<&str>,
     reason: Option<&str>,
-) -> Result<(), Error> {
+) -> Result<u64, DbQueryError> {
     tx.execute(
         r#"
         INSERT INTO logs (entity_type, entity_id, action, description, reason)
@@ -77,30 +79,20 @@ pub async fn log_action(
         "#,
         &[&entity_type, &entity_id, &action, &description, &reason],
     )
-    .await?;
-
-    Ok(())
-}
-
-/// Log an action using a database client (creates its own transaction)
-///
-/// Convenience wrapper around `log_action` for cases where you don't already have a transaction.
-///
-/// # Errors
-///
-/// Errors if the transaction or INSERT query fails.
-pub async fn log_action_simple(
-    client: &mut Client,
-    entity_type: EntityType,
-    entity_id: i32,
-    action: &str,
-    description: Option<&str>,
-    reason: Option<&str>,
-) -> Result<(), Error> {
-    let tx = client.transaction().await?;
-    log_action(&tx, entity_type, entity_id, action, description, reason).await?;
-    tx.commit().await?;
-    Ok(())
+    .await
+    .map_err(|error| DbQueryError {
+        action: "insert log",
+        entity_type: EntityType::System,
+        raw_id: None,
+        clauses: vec![
+            "entity_type".into(),
+            "entity_id".into(),
+            "action".into(),
+            "description".into(),
+            "reason".into(),
+        ],
+        error,
+    })
 }
 
 /// Determines whether a given table exists.

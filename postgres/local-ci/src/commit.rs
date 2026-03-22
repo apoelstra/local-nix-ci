@@ -61,9 +61,14 @@ pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         show_commit_info(&shell, &tx, &current_repo, &commit_hash, &commit).await?;
 
         // Show recent logs
-        let logs = Log::query_for_entities(&tx, &[(EntityType::Commit, commit.id)], None, None)
-            .await
-            .context("failed to query logs")?;
+        let logs = Log::query_for_entities(
+            &tx,
+            &[(EntityType::Commit, commit.id.bare_i32())],
+            None,
+            None,
+        )
+        .await
+        .context("failed to query logs")?;
 
         if !logs.is_empty() {
             println!(
@@ -228,7 +233,9 @@ pub async fn review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> 
                 if let Some(update) =
                     handle_review_with_editor(&commit, ReviewStatus::Approved).await?
                 {
-                    Commit::apply_update_by_id(&tx, commit.id, update)
+                    commit
+                        .id
+                        .apply_update(&tx, &update)
                         .await
                         .context("failed to update commit with review")?;
                     println!("Commit review updated and approved.");
@@ -239,7 +246,9 @@ pub async fn review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> 
                 if let Some(update) =
                     handle_review_with_editor(&commit, ReviewStatus::Rejected).await?
                 {
-                    Commit::apply_update_by_id(&tx, commit.id, update)
+                    commit
+                        .id
+                        .apply_update(&tx, &update)
                         .await
                         .context("failed to update commit with review")?;
                     println!("Commit review updated and rejected.");
@@ -260,9 +269,16 @@ pub async fn review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> 
                     review_status: Some(ReviewStatus::Unreviewed),
                     ..Default::default()
                 };
-                commit = Commit::apply_update_by_id(&tx, commit.id, update)
+                commit
+                    .id
+                    .apply_update(&tx, &update)
                     .await
-                    .context("failed to erase review")?;
+                    .context("failed to update commit with review")?;
+                commit = Commit::find_by_git_id(&tx, repo_record.id, commit_hash)
+                    .await
+                    .context("failed to query commit")?
+                    .expect("we just updated this ID; the lookup should always succeed");
+
                 println!("Review erased and commit marked as unreviewed.");
             }
             "3a" => {
@@ -507,9 +523,14 @@ pub async fn log(
     };
 
     // Query logs for this commit
-    let logs = Log::query_for_entities(&tx, &[(EntityType::Commit, commit.id)], since, until)
-        .await
-        .context("failed to query logs")?;
+    let logs = Log::query_for_entities(
+        &tx,
+        &[(EntityType::Commit, commit.id.bare_i32())],
+        since,
+        until,
+    )
+    .await
+    .context("failed to query logs")?;
 
     // Display the logs
     for log in logs {

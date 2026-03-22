@@ -5,11 +5,12 @@ pub mod operations;
 mod schema;
 mod util;
 
+use core::fmt;
 use tokio_postgres::{Client, NoTls, Transaction};
 
 pub use self::models::{AckStatus, CiStatus, Log, MergeStatus, ReviewStatus};
 pub use self::schema::SchemaError;
-pub use self::util::{EntityType, log_action_simple};
+pub use self::util::EntityType;
 
 pub struct Db {
     client: Client,
@@ -167,31 +168,6 @@ impl Db {
         tx.commit().await.map_err(Error::Connect)?;
         Ok(exists)
     }
-
-    /// Log an action (convenience method)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the logging fails.
-    pub async fn log_action(
-        &mut self,
-        entity_type: EntityType,
-        entity_id: i32,
-        action: &str,
-        description: Option<&str>,
-        reason: Option<&str>,
-    ) -> Result<(), Error> {
-        log_action_simple(
-            &mut self.client,
-            entity_type,
-            entity_id,
-            action,
-            description,
-            reason,
-        )
-        .await
-        .map_err(Error::Connect)
-    }
 }
 
 #[derive(Debug)]
@@ -215,5 +191,38 @@ impl std::error::Error for Error {
             Self::Connect(e) => Some(e),
             Self::Schema(e) => Some(e),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct DbQueryError {
+    action: &'static str,
+    entity_type: EntityType,
+    raw_id: Option<i32>,
+    clauses: Vec<String>,
+    error: tokio_postgres::Error,
+}
+
+impl fmt::Display for DbQueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(id) = self.raw_id {
+            write!(
+                f,
+                "failed to {} {} {} (clauses {:?}): {}",
+                self.action, self.entity_type, id, self.clauses, self.error
+            )
+        } else {
+            write!(
+                f,
+                "failed to {} {} (clauses {:?}): {}",
+                self.action, self.entity_type, self.clauses, self.error
+            )
+        }
+    }
+}
+
+impl std::error::Error for DbQueryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
     }
 }

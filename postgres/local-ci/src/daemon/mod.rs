@@ -6,7 +6,10 @@ mod util;
 
 use anyhow::Context as _;
 use lcilib::Db;
-use lcilib::db::models::{CiStatus, Commit, PullRequest, Repository, Stack, UpdateCommit};
+use lcilib::db::models::{
+    CiStatus, Commit, DbAckId, DbCommitId, DbPullRequestId, DbRepositoryId, PullRequest,
+    Repository, Stack, UpdateCommit,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -124,8 +127,8 @@ async fn check_pending_acks(db: &mut Db) -> anyhow::Result<bool> {
     let mut work_done = false;
 
     for row in rows {
-        let ack_id: i32 = row.get("ack_id");
-        let pull_request_id: i32 = row.get("pull_request_id");
+        let ack_id: DbAckId = row.get("ack_id");
+        let pull_request_id: DbPullRequestId = row.get("pull_request_id");
         let pr_number: i32 = row.get("pr_number");
         let reviewer_name: String = row.get("reviewer_name");
         let message: String = row.get("message");
@@ -231,7 +234,8 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
     let repositories = Repository::list_all(&tx)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get repositories: {}", e))?;
-    let repo_map: HashMap<i32, Repository> = repositories.into_iter().map(|r| (r.id, r)).collect();
+    let repo_map: HashMap<DbRepositoryId, Repository> =
+        repositories.into_iter().map(|r| (r.id, r)).collect();
     tx.commit()
         .await
         .context("committing repository transaction")?;
@@ -299,7 +303,7 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
 async fn process_approved_pr(
     db: &mut Db,
     pr: &PullRequest,
-    repo_map: &HashMap<i32, Repository>,
+    repo_map: &HashMap<DbRepositoryId, Repository>,
 ) -> anyhow::Result<bool> {
     use lcilib::db::models::{
         Ack, CiStatus, Commit, CommitType, NewCommit, NewStack, ReviewStatus, Stack,
@@ -346,7 +350,7 @@ async fn process_approved_pr(
 
     let merge_commit = if let Some(row) = existing_merge {
         // Use existing merge commit
-        let commit_id: i32 = row.get("id");
+        let commit_id: DbCommitId = row.get("id");
         Commit::find_by_id(&tx, commit_id)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to find existing merge commit: {}", e))?
@@ -611,7 +615,7 @@ async fn try_extend_stack(
 
 async fn process_existing_stacks(
     db: &mut Db,
-    repo_map: &HashMap<i32, Repository>,
+    repo_map: &HashMap<DbRepositoryId, Repository>,
 ) -> anyhow::Result<bool> {
     let mut work_done = false;
 
@@ -625,7 +629,7 @@ async fn process_existing_stacks(
         .map_err(|e| anyhow::anyhow!("Failed to find stacks: {}", e))?;
     tx.commit().await.context("committing stacks query")?;
 
-    let mut stacks_by_repo_target: HashMap<(i32, String), Vec<Stack>> = HashMap::new();
+    let mut stacks_by_repo_target: HashMap<(DbRepositoryId, String), Vec<Stack>> = HashMap::new();
     for stack in all_stacks {
         let key = (stack.repository_id, stack.target_branch.clone());
         stacks_by_repo_target.entry(key).or_default().push(stack);
@@ -642,7 +646,8 @@ async fn process_existing_stacks(
             .transaction()
             .await
             .context("starting stack priority transaction")?;
-        let repo_ref_map: HashMap<i32, &Repository> = std::iter::once((repo_id, repo)).collect();
+        let repo_ref_map: HashMap<DbRepositoryId, &Repository> =
+            std::iter::once((repo_id, repo)).collect();
 
         let mut stack_priorities = Vec::new();
         for stack in &stacks {
@@ -878,7 +883,7 @@ async fn mark_commit_failed(db: &mut Db, commit: &Commit, reason: &str) -> anyho
         ..Default::default()
     };
     commit
-        .update(&tx, updates)
+        .update(&tx, &updates)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to update commit: {}", e))?;
     tx.commit().await.context("committing transaction")?;
@@ -892,7 +897,7 @@ async fn mark_commit_passed(db: &mut Db, commit: &Commit) -> anyhow::Result<()> 
         ..Default::default()
     };
     commit
-        .update(&tx, updates)
+        .update(&tx, &updates)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to update commit: {}", e))?;
     tx.commit().await.context("committing transaction")?;

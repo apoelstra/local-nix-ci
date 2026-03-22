@@ -7,9 +7,9 @@ use lcilib::{
     db::{
         EntityType, Log,
         models::{
-            Ack, AckStatus, CiStatus, Commit, CommitType, MergeStatus, NewAck, NewCommit,
-            NewPullRequest, NewRepository, PrCommit, PullRequest, Repository, ReviewStatus,
-            UpdatePullRequest,
+            Ack, AckStatus, CiStatus, Commit, CommitType, DbCommitId, DbPullRequestId, MergeStatus,
+            NewAck, NewCommit, NewPullRequest, NewRepository, PrCommit, PullRequest, Repository,
+            ReviewStatus, UpdatePullRequest,
         },
     },
     gh, git, jj, repo,
@@ -267,7 +267,8 @@ async fn scan_and_update_acks(
     }
 
     // Collect all ACKs from comments and reviews
-    let mut found_acks: HashMap<String, (String, String, DateTime<Utc>, i32)> = HashMap::new(); // reviewer -> (message, reviewer, timestamp, commit_id)
+    let mut found_acks: HashMap<String, (String, String, DateTime<Utc>, DbCommitId)> =
+        HashMap::new(); // reviewer -> (message, reviewer, timestamp, commit_id)
 
     // Scan comments
     for comment in &pr_info.comments {
@@ -350,7 +351,7 @@ async fn scan_and_update_acks(
                         ..Default::default()
                     };
                     existing_user_ack
-                        .update(tx, update)
+                        .update(tx, &update)
                         .await
                         .context("failed to update ACK status to posted")?;
                 }
@@ -411,7 +412,10 @@ async fn scan_and_update_acks(
 }
 
 /// Extract ACK text and commit ID from a GitHub comment/review body
-fn extract_ack_from_text(text: &str, commit_map: &HashMap<String, i32>) -> Option<(String, i32)> {
+fn extract_ack_from_text(
+    text: &str,
+    commit_map: &HashMap<String, DbCommitId>,
+) -> Option<(String, DbCommitId)> {
     for line in text.lines() {
         // Split line into alphanumeric words (punctuation acts as separator)
         let words: Vec<&str> = line
@@ -562,7 +566,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                         review_status: Some(ReviewStatus::Approved),
                         ..Default::default()
                     };
-                    pr.update(&tx, updates)
+                    pr.update(&tx, &updates)
                         .await
                         .context("failed to update PR review status")?;
 
@@ -581,7 +585,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                         review_status: Some(ReviewStatus::Rejected),
                         ..Default::default()
                     };
-                    pr.update(&tx, updates)
+                    pr.update(&tx, &updates)
                         .await
                         .context("failed to update PR review status")?;
 
@@ -723,8 +727,8 @@ fn handle_ack_with_editor(commit: &Commit, is_ack: bool) -> anyhow::Result<Optio
 /// Create a new ACK record, deleting any existing ACKs by the same reviewer for this PR
 async fn create_or_overwrite_ack(
     tx: &lcilib::Transaction<'_>,
-    pull_request_id: i32,
-    commit_id: i32,
+    pull_request_id: DbPullRequestId,
+    commit_id: DbCommitId,
     message: &str,
 ) -> anyhow::Result<()> {
     let reviewer_name = "apoelstra"; // FIXME: should use per-repository git configuration
@@ -736,7 +740,8 @@ async fn create_or_overwrite_ack(
 
     for ack in existing_acks {
         if ack.reviewer_name == reviewer_name {
-            ack.delete(tx)
+            ack.id
+                .delete(tx)
                 .await
                 .context("failed to delete existing ACK")?;
         }
@@ -761,7 +766,7 @@ async fn create_or_overwrite_ack(
 /// Show existing ACKs for a PR
 async fn show_existing_acks(
     tx: &lcilib::Transaction<'_>,
-    pull_request_id: i32,
+    pull_request_id: DbPullRequestId,
 ) -> anyhow::Result<()> {
     let acks = Ack::find_by_pull_request(tx, pull_request_id)
         .await
@@ -788,8 +793,8 @@ async fn show_existing_acks(
 /// Erase ACK for a specific commit by the current reviewer
 async fn erase_ack(
     tx: &lcilib::Transaction<'_>,
-    pull_request_id: i32,
-    commit_id: i32,
+    pull_request_id: DbPullRequestId,
+    commit_id: DbCommitId,
 ) -> anyhow::Result<()> {
     // Find existing ACK by this reviewer for this commit
     let acks = Ack::find_by_pull_request(tx, pull_request_id)
@@ -897,9 +902,9 @@ pub async fn log(
         .context("failed to get PR commits")?;
 
     // Build list of entities to query logs for (PR + all its commits)
-    let mut entities = vec![(EntityType::PullRequest, pr.id)];
+    let mut entities = vec![(EntityType::PullRequest, pr.id.bare_i32())];
     for (commit, _) in &commits {
-        entities.push((EntityType::Commit, commit.id));
+        entities.push((EntityType::Commit, commit.id.bare_i32()));
     }
 
     // Query logs for all entities
@@ -1037,7 +1042,7 @@ pub async fn refresh(
             merge_status: Some(merge_status),
             ..Default::default()
         };
-        pr.update(&tx, updates)
+        pr.update(&tx, &updates)
             .await
             .context("failed to update pull request")?
     } else {
@@ -1067,7 +1072,7 @@ pub async fn refresh(
         .context("failed to get existing PR commits")?;
 
     // Build maps for efficient lookup
-    let mut existing_by_commit_id: HashMap<i32, PrCommit> = HashMap::new();
+    let mut existing_by_commit_id: HashMap<DbCommitId, PrCommit> = HashMap::new();
     for pr_commit in existing_pr_commits {
         existing_by_commit_id.insert(pr_commit.commit_id, pr_commit);
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
-use lcilib::db::models::{Commit, Repository};
+use lcilib::db::models::{Commit, DbRepositoryId, Repository};
 use std::collections::HashMap;
 use tokio::task;
 use xshell::Shell;
@@ -35,7 +35,7 @@ pub async fn is_commit_gpg_signed(commit: &Commit, repo_path: &str) -> anyhow::R
 pub async fn calculate_stack_priority(
     commits: &[Commit],
     tx: &lcilib::Transaction<'_>,
-    repo_map: &HashMap<i32, &Repository>,
+    repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<f64> {
     let mut total_priority = 0.0;
 
@@ -61,7 +61,7 @@ pub async fn calculate_stack_priority(
 async fn calculate_commit_priority(
     commit: &Commit,
     tx: &lcilib::Transaction<'_>,
-    repo_map: &HashMap<i32, &Repository>,
+    repo_map: &HashMap<DbRepositoryId, &Repository>,
 ) -> anyhow::Result<f64> {
     use chrono::Utc;
     use lcilib::db::models::{PrCommit, PullRequest};
