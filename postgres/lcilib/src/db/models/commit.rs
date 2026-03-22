@@ -5,7 +5,7 @@ use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
 use super::ReviewStatus;
-use crate::db::{DbQueryError, EntityType, util::log_action};
+use crate::db::{DbQueryError, EntityType, models::CommitType, util::log_action};
 use crate::git::CommitId;
 use crate::jj::ChangeId;
 
@@ -272,4 +272,25 @@ impl Commit {
         .await?;
         ret
     }
+
+    pub fn into_commit_to_test(self, commit_type: CommitType) -> CommitToTest {
+        CommitToTest {
+            id: self.id,
+            repository_id: self.repository_id,
+            git_commit_id: self.git_commit_id,
+            jj_change_id: self.jj_change_id,
+            nix_derivation: self.nix_derivation,
+            commit_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitToTest {
+    pub id: DbCommitId,
+    pub repository_id: super::DbRepositoryId,
+    pub git_commit_id: CommitId,
+    pub jj_change_id: ChangeId,
+    pub commit_type: CommitType,
+    pub nix_derivation: Option<String>,
 }

@@ -15,7 +15,7 @@ use std::fmt;
 
 pub use ack::{Ack, DbAckId, NewAck, UpdateAck};
 pub use allowed_approver::{AllowedApprover, DbAllowedApproverId, NewAllowedApprover};
-pub use commit::{CiStatus, Commit, DbCommitId, NewCommit, UpdateCommit};
+pub use commit::{CiStatus, Commit, CommitToTest, DbCommitId, NewCommit, UpdateCommit};
 pub use log::Log;
 pub use log_entry::{DbLogEntryId, LogEntry};
 pub use pr_commit::{DbPrCommitId, PrCommit};

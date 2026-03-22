@@ -4,9 +4,9 @@ use std::collections::HashSet;
 use tokio_postgres::{Error, Transaction};
 
 use super::models::{
-    Ack, AckStatus, AllowedApprover, Commit, CommitType, DbAckId, DbCommitId, DbPrCommitId,
-    DbPullRequestId, DbRepositoryId, DbStackId, LogEntry, NewAck, NewAllowedApprover, NewCommit,
-    NewPullRequest, NewRepository, NewStack, PrCommit, PullRequest, Repository, Stack,
+    Ack, AckStatus, AllowedApprover, Commit, CommitToTest, CommitType, DbAckId, DbCommitId,
+    DbPrCommitId, DbPullRequestId, DbRepositoryId, DbStackId, LogEntry, NewAck, NewAllowedApprover,
+    NewCommit, NewPullRequest, NewRepository, NewStack, PrCommit, PullRequest, Repository, Stack,
     UpdateCommit,
 };
 use super::util::{self, EntityType};
@@ -614,12 +614,13 @@ impl PullRequest {
     pub async fn get_next_untested_commit(
         &self,
         tx: &Transaction<'_>,
-    ) -> Result<Option<Commit>, OperationError> {
+    ) -> Result<Option<CommitToTest>, OperationError> {
         let rows = tx
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
+                       pc.commit_type
                 FROM commits c
                 JOIN pr_commits pc ON c.id = pc.commit_id
                 WHERE pc.pull_request_id = $1
@@ -642,7 +643,13 @@ impl PullRequest {
                 )
             })?;
 
-        Ok(rows.first().map(Commit::from_row))
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+
+        let commit = Commit::from_row(row);
+        let commit_type = row.get::<_, CommitType>("commit_type");
+        Ok(Some(commit.into_commit_to_test(commit_type)))
     }
 
     /// Count commits in various states for this PR

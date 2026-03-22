@@ -7,7 +7,7 @@ mod util;
 use anyhow::Context as _;
 use lcilib::Db;
 use lcilib::db::models::{
-    CiStatus, Commit, DbAckId, DbCommitId, DbPullRequestId, DbRepositoryId, PullRequest,
+    CiStatus, CommitToTest, DbAckId, DbCommitId, DbPullRequestId, DbRepositoryId, PullRequest,
     Repository, Stack, UpdateCommit,
 };
 use std::collections::HashMap;
@@ -865,7 +865,10 @@ async fn check_signed_merges(_db: &mut Db) -> anyhow::Result<bool> {
     Ok(false)
 }
 
-async fn get_repository_for_commit(db: &mut Db, commit: &Commit) -> anyhow::Result<Repository> {
+async fn get_repository_for_commit(
+    db: &mut Db,
+    commit: &CommitToTest,
+) -> anyhow::Result<Repository> {
     let tx = db.transaction().await.context("starting transaction")?;
     let repo = Repository::find_by_id(&tx, commit.repository_id)
         .await
@@ -875,29 +878,18 @@ async fn get_repository_for_commit(db: &mut Db, commit: &Commit) -> anyhow::Resu
     Ok(repo)
 }
 
-async fn mark_commit_failed(db: &mut Db, commit: &Commit, reason: &str) -> anyhow::Result<()> {
+async fn mark_commit_status(
+    db: &mut Db,
+    commit: DbCommitId,
+    new_status: CiStatus,
+) -> anyhow::Result<()> {
     let tx = db.transaction().await.context("starting transaction")?;
     let updates = UpdateCommit {
-        ci_status: Some(CiStatus::Failed),
-        review_text: Some(Some(reason.to_string())),
+        ci_status: Some(new_status),
         ..Default::default()
     };
     commit
-        .update(&tx, &updates)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to update commit: {}", e))?;
-    tx.commit().await.context("committing transaction")?;
-    Ok(())
-}
-
-async fn mark_commit_passed(db: &mut Db, commit: &Commit) -> anyhow::Result<()> {
-    let tx = db.transaction().await.context("starting transaction")?;
-    let updates = UpdateCommit {
-        ci_status: Some(CiStatus::Passed),
-        ..Default::default()
-    };
-    commit
-        .update(&tx, &updates)
+        .apply_update(&tx, &updates)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to update commit: {}", e))?;
     tx.commit().await.context("committing transaction")?;

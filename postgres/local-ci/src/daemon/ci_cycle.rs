@@ -5,7 +5,10 @@ use chrono::Utc;
 use lcilib::{
     Db,
     db::CiStatus,
-    db::models::{Commit, DbRepositoryId, PullRequest, Repository, Stack, UpdateCommit},
+    db::models::{
+        Commit, CommitToTest, CommitType, DbRepositoryId, PullRequest, Repository, Stack,
+        UpdateCommit,
+    },
     git::CommitId,
 };
 use std::collections::HashMap;
@@ -18,7 +21,7 @@ use tokio::{
     time,
 };
 
-use super::{get_repository_for_commit, mark_commit_failed, mark_commit_passed};
+use super::{get_repository_for_commit, mark_commit_status};
 use super::{log, util};
 
 /// Find the next commit that needs testing, following the priority rules
@@ -26,7 +29,7 @@ use super::{log, util};
 /// # Errors
 ///
 /// Returns an error if database operations fail.
-async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Commit>> {
+async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitToTest>> {
     let tx = db.transaction().await.context("starting transaction")?;
 
     // Get repository info for GPG checking
@@ -77,7 +80,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Commit>>
         {
             log::info("Found commit from high-priority stack");
             tx.commit().await.context("committing transaction")?;
-            return Ok(Some(commit));
+            return Ok(Some(commit.into_commit_to_test(CommitType::Merge)));
         }
     }
 
@@ -138,7 +141,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<Commit>>
         {
             log::info("Found commit from low-priority stack");
             tx.commit().await.context("committing transaction")?;
-            return Ok(Some(commit));
+            return Ok(Some(commit.into_commit_to_test(CommitType::Merge)));
         }
     }
 
@@ -322,12 +325,13 @@ async fn count_signed_commits_in_stack(
 async fn get_commits_needing_testing_for_pr(
     tx: &lcilib::Transaction<'_>,
     pr: &PullRequest,
-) -> anyhow::Result<Vec<Commit>> {
+) -> anyhow::Result<Vec<CommitToTest>> {
     let rows = tx
         .query(
             r#"
             SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
-                   c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at
+                   c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
+                   pc.commit_type,
             FROM commits c
             JOIN pr_commits pc ON c.id = pc.commit_id
             WHERE pc.pull_request_id = $1
@@ -344,17 +348,13 @@ async fn get_commits_needing_testing_for_pr(
 
     let commits = rows
         .iter()
-        .map(|row| Commit {
+        .map(|row| CommitToTest {
             id: row.get("id"),
             repository_id: row.get("repository_id"),
             git_commit_id: row.get("git_commit_id"),
             jj_change_id: row.get("jj_change_id"),
-            review_status: row.get("review_status"),
-            should_run_ci: row.get("should_run_ci"),
-            ci_status: row.get("ci_status"),
             nix_derivation: row.get("nix_derivation"),
-            review_text: row.get("review_text"),
-            created_at: row.get("created_at"),
+            commit_type: row.get("commit_type"),
         })
         .collect();
 
@@ -363,7 +363,7 @@ async fn get_commits_needing_testing_for_pr(
 
 async fn process_commit_ci(
     db: &mut Db,
-    commit: &Commit,
+    commit: &CommitToTest,
     repo: &Repository,
 ) -> anyhow::Result<bool> {
     let repo_path = Path::new(&repo.path);
@@ -373,7 +373,7 @@ async fn process_commit_ci(
     if !nixfile_path.exists() {
         let error_msg = format!("Nixfile not found: {}", nixfile_path.display());
         log::warn(format_args!("{}", error_msg));
-        mark_commit_failed(db, commit, &error_msg).await?;
+        mark_commit_status(db, commit.id, CiStatus::Failed).await?;
         return Ok(false);
     }
 
@@ -383,7 +383,7 @@ async fn process_commit_ci(
         Err(e) => {
             let error_msg = format!("Failed to find Cargo.lock files: {}", e);
             log::warn(format_args!("{}", error_msg));
-            mark_commit_failed(db, commit, &error_msg).await?;
+            mark_commit_status(db, commit.id, CiStatus::Failed).await?;
             return Ok(false);
         }
     };
@@ -394,7 +394,7 @@ async fn process_commit_ci(
         Err(e) => {
             let error_msg = format!("Failed to check for Cargo.toml files: {}", e);
             log::warn(format_args!("{}", error_msg));
-            mark_commit_failed(db, commit, &error_msg).await?;
+            mark_commit_status(db, commit.id, CiStatus::Failed).await?;
             return Ok(false);
         }
     };
@@ -402,7 +402,7 @@ async fn process_commit_ci(
     if has_cargo_toml && lockfiles.is_empty() {
         let error_msg = "Found Cargo.toml files but no Cargo.lock files";
         log::warn(format_args!("{}", error_msg));
-        mark_commit_failed(db, commit, error_msg).await?;
+        mark_commit_status(db, commit.id, CiStatus::Failed).await?;
         return Ok(false);
     }
 
@@ -424,7 +424,7 @@ async fn process_commit_ci(
             Err(e) => {
                 let error_msg = format!("Failed to get derivation: {}", e);
                 log::warn(format_args!("{}", error_msg));
-                mark_commit_failed(db, commit, &error_msg).await?;
+                mark_commit_status(db, commit.id, CiStatus::Failed).await?;
                 return Ok(false);
             }
         };
@@ -440,7 +440,7 @@ async fn process_commit_ci(
         Err(e) => {
             let error_msg = format!("Build process error: {}", e);
             log::warn(format_args!("{}", error_msg));
-            mark_commit_failed(db, commit, &error_msg).await?;
+            mark_commit_status(db, commit.id, CiStatus::Failed).await?;
             Ok(false)
         }
     }
@@ -531,7 +531,7 @@ async fn check_has_cargo_toml(repo_path: &Path, commit_id: &CommitId) -> anyhow:
 
 async fn get_or_create_derivation_with_cancellation(
     db: &mut Db,
-    commit: &Commit,
+    commit: &CommitToTest,
     repo: &Repository,
     cargo_nixes: &str,
 ) -> anyhow::Result<String> {
@@ -618,7 +618,7 @@ async fn get_or_create_derivation_with_cancellation(
 
                         if !status.success() {
                             save_error_to_file(&repo.path, &commit.git_commit_id, "instantiate", &stdout, &stderr).await?;
-                            mark_commit_failed(db, commit, "nix-instantiate failed").await?;
+                            mark_commit_status(db, commit.id, CiStatus::Failed).await?;
                             return Err(anyhow::anyhow!("nix-instantiate failed"));
                         }
 
@@ -651,7 +651,7 @@ async fn get_or_create_derivation_with_cancellation(
                             nix_derivation: Some(Some(derivation_path.clone())),
                             ..Default::default()
                         };
-                        commit.update(&tx, &updates).await
+                        commit.id.apply_update(&tx, &updates).await
                             .map_err(|e| anyhow::anyhow!("Failed to update commit with derivation: {}", e))?;
                         tx.commit().await.context("committing transaction")?;
 
@@ -684,7 +684,7 @@ async fn get_or_create_derivation_with_cancellation(
 
                     let error_msg = "CI cancelled by user request";
                     log::warn(format_args!("{}", error_msg));
-                    mark_commit_failed(db, commit, error_msg).await?;
+                    mark_commit_status(db, commit.id, CiStatus::Failed).await?;
                     return Err(anyhow::anyhow!("{}", error_msg));
                 }
             }
@@ -694,7 +694,7 @@ async fn get_or_create_derivation_with_cancellation(
 
 async fn build_derivation_with_cancellation(
     db: &mut Db,
-    commit: &Commit,
+    commit: &CommitToTest,
     repo_path: &Path,
     derivation_path: &str,
 ) -> anyhow::Result<bool> {
@@ -752,13 +752,13 @@ async fn build_derivation_with_cancellation(
                         }
 
                         save_error_to_file(&repo_path.to_string_lossy(), &commit.git_commit_id, "build", &stdout, &stderr).await?;
-                        mark_commit_failed(db, commit, "nix-build failed").await?;
+                        mark_commit_status(db, commit.id, CiStatus::Failed).await?;
                         return Ok(false);
                     }
                     Err(e) => {
                         let error_msg = format!("Failed to check nix-build status: {}", e);
                         log::warn(format_args!("{}", error_msg));
-                        mark_commit_failed(db, commit, &error_msg).await?;
+                        mark_commit_status(db, commit.id, CiStatus::Failed).await?;
                         return Ok(false);
                     }
                 }
@@ -792,7 +792,7 @@ async fn build_derivation_with_cancellation(
     }
 }
 
-async fn check_for_cancellation(db: &mut Db, _commit: &Commit) -> anyhow::Result<()> {
+async fn check_for_cancellation(db: &mut Db, _commit: &CommitToTest) -> anyhow::Result<()> {
     // Just ensure we can still connect to the database
     let tx = db
         .transaction()
@@ -804,7 +804,7 @@ async fn check_for_cancellation(db: &mut Db, _commit: &Commit) -> anyhow::Result
     Ok(())
 }
 
-async fn should_cancel_ci(db: &mut Db, commit: &Commit) -> anyhow::Result<bool> {
+async fn should_cancel_ci(db: &mut Db, commit: &CommitToTest) -> anyhow::Result<bool> {
     let tx = db.transaction().await.context("starting transaction")?;
 
     // Reload the commit to check current status
@@ -918,7 +918,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                             "CI SUCCESS for commit: {}",
                             commit.git_commit_id
                         ));
-                        mark_commit_passed(&mut db, &commit).await?;
+                        mark_commit_status(&mut db, commit.id, CiStatus::Passed).await?;
                         // After a commit succeeds, re-scan the database to see if we should make merge commits or something
                         super::real_run_db_maintenance_cycle(&mut db).await?;
                     } else {
@@ -935,8 +935,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                         commit.git_commit_id, e
                     ))
                     .await;
-                    mark_commit_failed(&mut db, &commit, &format!("Processing error: {}", e))
-                        .await?;
+                    mark_commit_status(&mut db, commit.id, CiStatus::Failed).await?;
                 }
             }
         } else {
