@@ -213,9 +213,10 @@ async fn print_work_summary(
 
         for commit in commits_to_test {
             log::info(format_args!(
-                "  - {} ({})",
+                "  - {} ({}) ({})",
                 commit.git_commit_id,
-                commit.jj_change_id.prefix8()
+                commit.jj_change_id.prefix8(),
+                commit.commit_type,
             ));
         }
     }
@@ -551,9 +552,14 @@ async fn get_or_create_derivation_with_cancellation(
     }
 
     // Build commit JSON for nix-instantiate
+    let is_tip = if commit.commit_type == CommitType::Normal {
+        "false"
+    } else {
+        "true"
+    };
     let commit_str = format!(
-        "{{ commit = \"{}\"; isTip = true; gitUrl = \"{}\"; cargoNixes = {}; }}",
-        commit.git_commit_id, repo.path, cargo_nixes
+        "{{ commit = \"{}\"; isTip = {}; gitUrl = \"{}\"; cargoNixes = {}; }}",
+        is_tip, commit.git_commit_id, repo.path, cargo_nixes
     );
 
     // Instantiate derivation with cancellation checking
