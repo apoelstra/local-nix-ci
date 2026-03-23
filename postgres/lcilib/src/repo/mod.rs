@@ -123,12 +123,14 @@ pub async fn current_repo(db: &mut Db) -> Result<Repository, RepoError> {
 
         // Create repository record
         let new_repo = NewRepository {
+            nixfile_path: format!("/home/apoelstra/code/local-nix-ci/main/{project_name}.check-pr.nix"), // Default, can be configured later
             name: project_name,
             path: repo_root.to_owned(),
-            nixfile_path: "default.nix".to_string(), // Default, can be configured later
         };
-        Repository::create(&tx, new_repo)
+        let ret = Repository::create(&tx, new_repo)
             .await
-            .map_err(RepoError::Database)
+            .map_err(RepoError::Database)?;
+        tx.commit().await.map_err(RepoError::DatabaseTransaction)?;
+        Ok(ret)
     }
 }
