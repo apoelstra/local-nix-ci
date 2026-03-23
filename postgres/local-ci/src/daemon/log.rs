@@ -35,11 +35,6 @@ impl RateLimiter {
 }
 
 impl RateLimitToken {
-    /// Constructs a rate-limit token that won't limit.
-    pub fn ok_to_run() -> Self {
-        Self(true)
-    }
-
     /// Runs a closure if it's been at least `duration` since the last run.
     pub fn run<T>(&mut self, closure: impl FnOnce() -> T) -> Option<T> {
         self.0.then(closure)

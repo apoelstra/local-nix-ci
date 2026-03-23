@@ -6,7 +6,7 @@ use tokio_postgres::{Error, Transaction};
 use super::models::{
     Ack, AckStatus, AllowedApprover, Commit, CommitToTest, CommitType, DbAckId, DbCommitId,
     DbPrCommitId, DbPullRequestId, DbRepositoryId, DbStackId, LogEntry, NewAck, NewAllowedApprover,
-    NewCommit, NewPullRequest, NewRepository, NewStack, PrCommit, PullRequest, Repository, Stack,
+    NewCommit, NewPullRequest, NewStack, PrCommit, PullRequest, Stack,
     UpdateCommit,
 };
 use super::util::{self, EntityType};
@@ -155,110 +155,6 @@ impl std::error::Error for OperationError {
             Self::NotFound { .. } => None,
             Self::Wrapped { inner, .. } => Some(inner.as_ref()),
         }
-    }
-}
-
-/// `Repository` operations
-impl Repository {
-    /// Create a new repository
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn create(
-        tx: &Transaction<'_>,
-        new_repo: NewRepository,
-    ) -> Result<Self, OperationError> {
-        let row = tx
-            .query_one(
-                r#"
-                INSERT INTO repositories (name, path, nixfile_path)
-                VALUES ($1, $2, $3)
-                RETURNING id, name, path, nixfile_path, created_at, last_synced_at
-                "#,
-                &[&new_repo.name, &new_repo.path, &new_repo.nixfile_path],
-            )
-            .await
-            .map_err(|e| {
-                OperationError::with_context(
-                    e,
-                    "create",
-                    "Repository",
-                    &format!("name: {}", new_repo.name),
-                )
-            })?;
-
-        util::log_action(
-            tx,
-            EntityType::System,
-            0,
-            "repository_created",
-            Some(&format!("Created repository: {}", new_repo.name)),
-            None,
-        )
-        .await
-        .map_err(OperationError::LogQuery)?;
-
-        Ok(Self::from_row(&row))
-    }
-
-    /// Find repository by path
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_by_path(
-        tx: &Transaction<'_>,
-        path: &str,
-    ) -> Result<Option<Self>, OperationError> {
-        let rows = tx
-            .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories WHERE path = $1", &[&path])
-            .await
-            .map_err(|e| OperationError::with_context(e, "find_by_path", "Repository", &format!("path: {}", path)))?;
-
-        Ok(rows.first().map(Self::from_row))
-    }
-
-    /// List all repositories
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn list_all(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
-        let rows = tx
-            .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories ORDER BY name", &[])
-            .await
-            .map_err(|e| OperationError::new(e, "list_all", "Repository", None))?;
-
-        Ok(rows.iter().map(Self::from_row).collect())
-    }
-
-    /// Update the last synced timestamp for this repository
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn update_last_synced(&self, tx: &Transaction<'_>) -> Result<Self, OperationError> {
-        let row = tx
-            .query_one(
-                r#"
-                UPDATE repositories SET last_synced_at = NOW()
-                WHERE id = $1
-                RETURNING id, name, path, nixfile_path, created_at, last_synced_at
-                "#,
-                &[&self.id],
-            )
-            .await
-            .map_err(|e| {
-                OperationError::with_context(
-                    e,
-                    "update_last_synced",
-                    "Repository",
-                    &format!("id: {}, name: {}", self.id, self.name),
-                )
-            })?;
-
-        Ok(Self::from_row(&row))
     }
 }
 

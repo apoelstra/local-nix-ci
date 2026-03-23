@@ -2,10 +2,11 @@
 
 use chrono::{DateTime, Utc};
 use core::fmt;
+use std::ops::Deref;
 use postgres_types::{FromSql, ToSql};
 
 use super::{PullRequest, Stack};
-use crate::db::{DbQueryError, EntityType};
+use crate::db::{DbQueryError, EntityType, util::log_action};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
 #[postgres(transparent)]
@@ -33,6 +34,13 @@ pub struct Repository {
     pub nixfile_path: String,
     pub created_at: DateTime<Utc>,
     pub last_synced_at: DateTime<Utc>,
+}
+
+impl Deref for Repository {
+    type Target = DbRepositoryId;
+    fn deref(&self) -> &Self::Target {
+        &self.id
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -107,10 +115,42 @@ impl DbRepositoryId {
             })?;
         Ok(rows.iter().map(Stack::from_row).collect())
     }
+
+    /// Update the last synced timestamp for this repository
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn update_last_synced(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+    ) -> Result<(), DbQueryError> {
+        tx
+            .execute(
+                r#"
+                UPDATE repositories SET last_synced_at = NOW()
+                WHERE id = $1
+                RETURNING id, name, path, nixfile_path, created_at, last_synced_at
+                "#,
+                &[&self],
+            )
+            .await
+            .map_err(|error| {
+                DbQueryError {
+                    action: "update_last_synced",
+                    entity_type: EntityType::Repository,
+                    raw_id: Some(self.bare_i32()),
+                    clauses: vec![],
+                    error,
+                }
+            })?;
+
+        Ok(())
+    }
 }
 
 impl Repository {
-    pub(crate) fn from_row(row: &tokio_postgres::Row) -> Self {
+    fn from_row(row: &tokio_postgres::Row) -> Self {
         Self {
             id: row.get("id"),
             name: row.get("name"),
@@ -119,6 +159,72 @@ impl Repository {
             created_at: row.get("created_at"),
             last_synced_at: row.get("last_synced_at"),
         }
+    }
+
+    /// Create a new repository
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn create(
+        tx: &tokio_postgres::Transaction<'_>,
+        new_repo: NewRepository,
+    ) -> Result<Self, DbQueryError> {
+        let row = tx
+            .query_one(
+                r#"
+                INSERT INTO repositories (name, path, nixfile_path)
+                VALUES ($1, $2, $3)
+                RETURNING id, name, path, nixfile_path, created_at, last_synced_at
+                "#,
+                &[&new_repo.name, &new_repo.path, &new_repo.nixfile_path],
+            )
+            .await
+            .map_err(|error| {
+                DbQueryError {
+                    action: "insert_into_repositories",
+                    entity_type: EntityType::Repository,
+                    raw_id: None,
+                    clauses: vec![],
+                    error,
+                }
+            })?;
+
+        log_action(
+            tx,
+            EntityType::System,
+            0,
+            "repository_created",
+            Some(&format!("Created repository: {}", new_repo.name)),
+            None,
+        )
+        .await?;
+
+        Ok(Self::from_row(&row))
+    }
+
+    /// List all repositories
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn list_all(
+        tx: &tokio_postgres::Transaction<'_>
+    ) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx
+            .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories ORDER BY name", &[])
+            .await
+            .map_err(|error| {
+                DbQueryError {
+                    action: "list_all_repositories",
+                    entity_type: EntityType::Repository,
+                    raw_id: None,
+                    clauses: vec![],
+                    error,
+                }
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
     }
 
     /// Find repository by ID
@@ -164,5 +270,31 @@ impl Repository {
             })?;
 
         Ok(rows.first().map(Self::from_row))
+    }
+
+    /// Find repository by path
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn find_by_path(
+        tx: &tokio_postgres::Transaction<'_>,
+        path: &str,
+    ) -> Result<Option<Self>, DbQueryError> {
+        let rows = tx
+            .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories WHERE path = $1", &[&path])
+            .await
+            .map_err(|error| {
+                DbQueryError {
+                    action: "find_by_path",
+                    entity_type: EntityType::Repository,
+                    raw_id: None,
+                    clauses: vec![path.to_owned()],
+                    error,
+                }
+            })?;
+
+        Ok(rows.first().map(Self::from_row))
+
     }
 }
