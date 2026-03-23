@@ -888,11 +888,14 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                         ));
                         mark_commit_status(&mut db, commit.id, CiStatus::Passed).await?;
                         // After a commit succeeds, re-scan the database to see if we should make merge commits or something
+                        // FIXME simultaneous 'jj describe' commands cause divergent commits; need to have some sort of repo lock here
+                        /*
                         super::real_run_db_maintenance_cycle(
                             &mut db,
                             &mut log::RateLimitToken::ok_to_run(),
                         )
                         .await?;
+                        */
                     } else {
                         // FIXME shouldn't this be an error case?
                         log::info(format_args!(
