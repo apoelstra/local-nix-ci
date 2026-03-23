@@ -188,7 +188,7 @@ impl DbRepositoryId {
 impl Repository {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, RepositoryError> {
         let repo_path = row.get("path");
-        let nixfile_path = row.get("path");
+        let nixfile_path = row.get("nixfile_path");
         if !Path::new(&repo_path).exists() {
             return Err(RepositoryError::RepoPathNotExist(repo_path));
         }

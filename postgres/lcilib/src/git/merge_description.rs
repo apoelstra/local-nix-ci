@@ -98,7 +98,7 @@ pub async fn compute_merge_description(
         let commit_info = crate::jj::jj_log(
             &repository.repo_shell,
             Some("commit_id ++ \" \" ++ description.first_line() ++ \" (\" ++ author.name() ++ \")\""),
-            &commit.jj_change_id,
+            &commit.git_commit_id,
         )
         .await
         .map_err(MergeDescriptionError::GetCommitList)?;

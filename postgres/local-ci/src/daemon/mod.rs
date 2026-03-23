@@ -136,10 +136,10 @@ async fn check_pending_acks(
                 a.reviewer_name,
                 a.message,
                 a.status as ack_status,
-                pr.repository_id
+                pr.repository_id,
                 pr.pr_number,
                 pr.review_status as pr_review_status,
-                pr.author_login,
+                pr.author_login
             FROM acks a
             JOIN pull_requests pr ON a.pull_request_id = pr.id
             WHERE a.status IN ('pending', 'failed')
