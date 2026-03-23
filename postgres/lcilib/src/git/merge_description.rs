@@ -14,6 +14,7 @@ use xshell::{Shell, cmd};
 
 #[derive(Debug)]
 pub enum MergeDescriptionError {
+    GetRepository(crate::db::models::RepositoryError),
     GetCommitList(crate::jj::Error),
     ListTreeContents(CommitId, xshell::Error),
     ReadBlob(String, xshell::Error),
@@ -23,6 +24,7 @@ pub enum MergeDescriptionError {
 impl fmt::Display for MergeDescriptionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
+            Self::GetRepository(_) => write!(f, "failed to get git repository for PR"),
             Self::GetCommitList(_) => write!(f, "failed to get commit list"),
             Self::ListTreeContents(ref commit, _) => {
                 write!(f, "failed to list tree contents for commit {commit}")
@@ -36,6 +38,7 @@ impl fmt::Display for MergeDescriptionError {
 impl std::error::Error for MergeDescriptionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
+            Self::GetRepository(ref e) => Some(e),
             Self::GetCommitList(ref e) => Some(e),
             Self::ListTreeContents(_, ref e) => Some(e),
             Self::ReadBlob(_, ref e) => Some(e),
@@ -66,7 +69,7 @@ pub async fn compute_merge_description(
     // Get repository information
     let repository = Repository::get_by_id(tx, pr.repository_id)
         .await
-        .map_err(|e| MergeDescriptionError::DatabaseQuery("find database", e))?;
+        .map_err(MergeDescriptionError::GetRepository)?;
 
     // Create shell and set working directory to repository path
     let sh = Shell::new().unwrap();

@@ -321,16 +321,6 @@ async fn process_commit_ci(
     repo: &Repository,
 ) -> anyhow::Result<bool> {
     let repo_path = Path::new(&repo.path);
-    let nixfile_path = Path::new(&repo.nixfile_path);
-
-    // Check if nixfile exists
-    if !nixfile_path.exists() {
-        let error_msg = format!("Nixfile not found: {}", nixfile_path.display());
-        // FIXME should also be in the repo constructor as an error
-        log::info(format_args!("{}", error_msg));
-        mark_commit_status(db, commit.id, CiStatus::Failed).await?;
-        return Ok(false);
-    }
 
     // Find Cargo.lock files
     let lockfiles = match find_cargo_lockfiles(repo_path, &commit.git_commit_id).await {

@@ -11,7 +11,6 @@ use lcilib::db::models::{
     NewCommit, NewStack, Repository, ReviewStatus, Stack, UpdateCommit,
 };
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::Duration;
 use tokio::{task, time};
 use xshell::{Shell, cmd};
@@ -788,9 +787,11 @@ async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("starting transaction to get repositories")?;
 
-    let repositories = Repository::list_all(&tx)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to get repositories: {}", e))?;
+    let (repositories, errors) = Repository::list_all(&tx).await;
+
+    for e in errors {
+        log::warn(&e, "failed to load repository (not syncing this repo)");
+    }
 
     tx.commit().await.context("committing transaction")?;
 
@@ -820,14 +821,6 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
     let data = task::spawn_blocking(move || -> Option<Data> {
         // Check if repository path exists
         let shell = Shell::new().ok()?; // just eat shell creation error; this basically cannot happen
-        if !Path::new(&repo_path).exists() {
-            // FIXME should turn this into a warnig and wrap this whole check and shell-construction into a db error
-            log::info(format_args!(
-                "Warning: Repository path does not exist: {}",
-                repo_path
-            ));
-            return None;
-        }
         shell.change_dir(&repo_path);
 
         // Fetch latest changes from git remote

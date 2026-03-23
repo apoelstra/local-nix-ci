@@ -20,7 +20,7 @@ pub use log::Log;
 pub use log_entry::{DbLogEntryId, LogEntry};
 pub use pr_commit::{DbPrCommitId, PrCommit};
 pub use pull_request::{DbPullRequestId, NewPullRequest, PullRequest, UpdatePullRequest};
-pub use repository::{DbRepositoryId, NewRepository, Repository};
+pub use repository::{DbRepositoryId, NewRepository, Repository, RepositoryError, RepoShell, RepoShellLock};
 pub use stack::{DbStackId, NewStack, Stack, StackCommit, UpdateStack};
 
 /// Error type for parsing enum values from strings

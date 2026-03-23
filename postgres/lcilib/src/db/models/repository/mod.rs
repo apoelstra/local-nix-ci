@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+mod shell;
+
 use chrono::{DateTime, Utc};
-use core::fmt;
-use std::ops::Deref;
+use core::{fmt, ops};
 use postgres_types::{FromSql, ToSql};
+use std::path::Path;
 
 use super::{PullRequest, Stack};
 use crate::db::{DbQueryError, EntityType, util::log_action};
+pub use shell::{RepoShell, RepoShellLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
 #[postgres(transparent)]
@@ -26,7 +29,7 @@ impl fmt::Display for DbRepositoryId {
 }
 
 /// Repository model
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Repository {
     pub id: DbRepositoryId,
     pub name: String,
@@ -34,12 +37,45 @@ pub struct Repository {
     pub nixfile_path: String,
     pub created_at: DateTime<Utc>,
     pub last_synced_at: DateTime<Utc>,
+    pub repo_shell: RepoShell,
 }
 
-impl Deref for Repository {
+impl ops::Deref for Repository {
     type Target = DbRepositoryId;
     fn deref(&self) -> &Self::Target {
         &self.id
+    }
+}
+
+#[derive(Debug)]
+pub enum RepositoryError {
+    CreateShell(xshell::Error),
+    Query(DbQueryError),
+    RepoPathNotExist(String),
+    NixfilePathNotExist(String),
+}
+
+impl fmt::Display for RepositoryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::CreateShell(..) => f.write_str("failed to create repository shell"),
+            Self::Query(..) => f.write_str("database query error"),
+            Self::RepoPathNotExist(ref path) => write!(f, "repository path {} does not exist", path),
+            Self::NixfilePathNotExist(ref path) => write!(f, "repository nixfile path {} does not exist", path),
+        }
+        
+    }
+}
+
+impl std::error::Error for RepositoryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::CreateShell(ref e) => Some(e),
+            Self::Query(ref e) => Some(e),
+            Self::RepoPathNotExist(..) => None,
+            Self::NixfilePathNotExist(..) => None,
+        }
+        
     }
 }
 
@@ -150,15 +186,27 @@ impl DbRepositoryId {
 }
 
 impl Repository {
-    fn from_row(row: &tokio_postgres::Row) -> Self {
-        Self {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, RepositoryError> {
+        let repo_path = row.get("path");
+        let nixfile_path = row.get("path");
+        if !Path::new(&repo_path).exists() {
+            return Err(RepositoryError::RepoPathNotExist(repo_path));
+        }
+        if !Path::new(&nixfile_path).exists() {
+            return Err(RepositoryError::NixfilePathNotExist(nixfile_path));
+        }
+        let repo_shell = RepoShell::new(&repo_path)
+            .map_err(RepositoryError::CreateShell)?;
+
+        Ok(Self {
             id: row.get("id"),
             name: row.get("name"),
-            path: row.get("path"),
-            nixfile_path: row.get("nixfile_path"),
+            path: repo_path,
+            nixfile_path,
             created_at: row.get("created_at"),
             last_synced_at: row.get("last_synced_at"),
-        }
+            repo_shell,
+        })
     }
 
     /// Create a new repository
@@ -169,7 +217,15 @@ impl Repository {
     pub async fn create(
         tx: &tokio_postgres::Transaction<'_>,
         new_repo: NewRepository,
-    ) -> Result<Self, DbQueryError> {
+    ) -> Result<Self, RepositoryError> {
+        // Do path checks explicitly before any database operations.
+        if !Path::new(&new_repo.path).exists() {
+            return Err(RepositoryError::RepoPathNotExist(new_repo.path));
+        }
+        if !Path::new(&new_repo.nixfile_path).exists() {
+            return Err(RepositoryError::NixfilePathNotExist(new_repo.nixfile_path));
+        }
+
         let row = tx
             .query_one(
                 r#"
@@ -188,7 +244,8 @@ impl Repository {
                     clauses: vec![],
                     error,
                 }
-            })?;
+            })
+            .map_err(RepositoryError::Query)?;
 
         log_action(
             tx,
@@ -198,20 +255,23 @@ impl Repository {
             Some(&format!("Created repository: {}", new_repo.name)),
             None,
         )
-        .await?;
+        .await
+        .map_err(RepositoryError::Query)?;
 
-        Ok(Self::from_row(&row))
+        Self::from_row(&row)
     }
 
     /// List all repositories
     ///
     /// # Errors
     ///
-    /// Returns an error if the database operation fails.
+    /// If any repository fails the path checks, it is omitted from the list and an error
+    /// is put into the returned error vector. If the database query fails, returns an
+    /// empty result vector and an error vector with a single database query error.
     pub async fn list_all(
         tx: &tokio_postgres::Transaction<'_>
-    ) -> Result<Vec<Self>, DbQueryError> {
-        let rows = tx
+    ) -> (Vec<Self>, Vec<RepositoryError>) {
+        let rows = match tx
             .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories ORDER BY name", &[])
             .await
             .map_err(|error| {
@@ -222,16 +282,28 @@ impl Repository {
                     clauses: vec![],
                     error,
                 }
-            })?;
+            }) {
+            Ok(rows) => rows,
+            Err(e) => return (vec![], vec![RepositoryError::Query(e)]),
+        };
 
-        Ok(rows.iter().map(Self::from_row).collect())
+        let mut ret_res = vec![];
+        let mut ret_err = vec![];
+        for row in &rows {
+            match Self::from_row(row) {
+                Ok(r) => ret_res.push(r),
+                Err(e) => ret_err.push(e),
+            }
+        }
+
+        (ret_res, ret_err)
     }
 
     /// Find repository by ID
     ///
     /// # Errors
     ///
-    /// Returns an error if the database operation fails.
+    /// Returns an error if the database operation fails or if the repository paths do not exist.
     ///
     /// # Panics
     ///
@@ -239,7 +311,7 @@ impl Repository {
     pub async fn get_by_id(
         tx: &tokio_postgres::Transaction<'_>,
         id: DbRepositoryId,
-    ) -> Result<Self, DbQueryError> {
+    ) -> Result<Self, RepositoryError> {
         match Self::find_by_id(tx, id).await {
             Ok(Some(x)) => Ok(x),
             Ok(None) => panic!("no repository with id {id} in database"),
@@ -255,7 +327,7 @@ impl Repository {
     pub async fn find_by_id(
         tx: &tokio_postgres::Transaction<'_>,
         id: DbRepositoryId,
-    ) -> Result<Option<Self>, DbQueryError> {
+    ) -> Result<Option<Self>, RepositoryError> {
         let rows = tx
             .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories WHERE id = $1", &[&id])
             .await
@@ -267,9 +339,10 @@ impl Repository {
                     clauses: vec![],
                     error,
                 }
-            })?;
+            })
+            .map_err(RepositoryError::Query)?;
 
-        Ok(rows.first().map(Self::from_row))
+        rows.first().map(Self::from_row).transpose()
     }
 
     /// Find repository by path
@@ -280,7 +353,7 @@ impl Repository {
     pub async fn find_by_path(
         tx: &tokio_postgres::Transaction<'_>,
         path: &str,
-    ) -> Result<Option<Self>, DbQueryError> {
+    ) -> Result<Option<Self>, RepositoryError> {
         let rows = tx
             .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories WHERE path = $1", &[&path])
             .await
@@ -292,9 +365,9 @@ impl Repository {
                     clauses: vec![path.to_owned()],
                     error,
                 }
-            })?;
+            })
+            .map_err(RepositoryError::Query)?;
 
-        Ok(rows.first().map(Self::from_row))
-
+        rows.first().map(Self::from_row).transpose()
     }
 }
