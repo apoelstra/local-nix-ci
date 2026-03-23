@@ -4,9 +4,9 @@ use core::{fmt, str::FromStr};
 use postgres_types::{FromSql, ToSql};
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use xshell::{Shell, cmd};
+use xshell::cmd;
 
-use crate::db::models::RepoShell;
+use crate::db::models::{RepoShell, RepoShellLock};
 
 mod merge_description;
 
@@ -163,53 +163,57 @@ pub async fn resolve_ref<R: AsRef<OsStr> + Sync>(shell: &RepoShell, git_ref: R) 
 ///
 /// Returns an error if the commit cannot be found locally and all fetch attempts from
 /// origin and upstream remotes fail.
-pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Error> {
-    fn now_have_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> bool {
-        cmd!(shell, "git cat-file -e {commit}")
-            .quiet()
-            .run()
-            .is_ok()
-    }
+pub async fn fetch_commit<C: AsRef<OsStr> + Sync>(shell: &RepoShell, commit: C) -> Result<(), Error> {
+    shell.with_lock_blocking(|shell| {
+        fn now_have_commit<C: AsRef<OsStr>>(shell: &RepoShellLock<'_>, commit: C) -> bool {
+            cmd!(shell, "git cat-file -e {commit}")
+                .quiet()
+                .run()
+                .is_ok()
+        }
 
-    let commit = &commit; // stupid Rust
+        let commit = &commit; // stupid Rust
 
-    // First check if commit is available locally
-    if now_have_commit(shell, commit) {
-        return Ok(());
-    }
+        // First check if commit is available locally
+        if now_have_commit(&shell, commit) {
+            return Ok(());
+        }
 
-    // Then try to fetch it from origin then upstream.
-    if cmd!(
-        shell,
-        "git fetch --force origin +{commit}:refs/heads/local-ci/last-fetch"
-    )
-    .quiet()
-    .ignore_stderr()
-    .run()
-    .is_ok()
-        && now_have_commit(shell, commit)
-    {
-        let _ = cmd!(shell, "jj git import").quiet().run();
-        return Ok(());
-    }
-    if cmd!(
-        shell,
-        "git fetch --force upstream +{commit}:refs/heads/local-ci/last-fetch"
-    )
-    .quiet()
-    .ignore_stderr()
-    .run()
-    .is_ok()
-        && now_have_commit(shell, commit)
-    {
-        let _ = cmd!(shell, "jj git import").quiet().run();
-        return Ok(());
-    }
+        // Then try to fetch it from origin then upstream.
+        if cmd!(
+            shell,
+            "git fetch --force origin +{commit}:refs/heads/local-ci/last-fetch"
+        )
+        .quiet()
+        .ignore_stderr()
+        .run()
+        .is_ok()
+            && now_have_commit(&shell, commit)
+        {
+            let _ = cmd!(shell, "jj git import").quiet().run();
+            return Ok(());
+        }
+        if cmd!(
+            shell,
+            "git fetch --force upstream +{commit}:refs/heads/local-ci/last-fetch"
+        )
+        .quiet()
+        .ignore_stderr()
+        .run()
+        .is_ok()
+            && now_have_commit(&shell, commit)
+        {
+            let _ = cmd!(shell, "jj git import").quiet().run();
+            return Ok(());
+        }
 
-    // All attempts failed
-    Err(Error::CommitNotFound(
-        commit.as_ref().to_string_lossy().to_string(),
-    ))
+        // All attempts failed
+        Err(Error::CommitNotFound(
+            commit.as_ref().to_string_lossy().to_string(),
+        ))
+    })
+    .await
+    .map_err(Error::ShellLock)?
 }
 
 /// Always tries to fetch a commit or ref from Github, regardless if we have it locally.
@@ -244,36 +248,39 @@ pub async fn fetch_resolve_ref(shell: &RepoShell, remote_ref: &str) -> Result<Co
 /// # Errors
 ///
 /// Returns an error if the git command fails to execute.
-pub fn get_commit_info<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<CommitInfo, Error> {
-    // Get author and date
-    let author_date = cmd!(
-        shell,
-        "git show --no-patch '--format=%an <%ae>%n%ai' {commit}"
-    )
-    .read()
-    .map_err(Error::Shell)?;
-    let mut lines = author_date.lines();
-    let author = lines.next().unwrap_or("Unknown").to_string();
-    let date = lines.next().unwrap_or("Unknown").to_string();
-
-    // Get commit message
-    let message = cmd!(shell, "git show --no-patch --format=%B {commit}")
+pub async fn get_commit_info<C: AsRef<OsStr> + Sync>(shell: &RepoShell, commit: C) -> Result<CommitInfo, Error> {
+    shell.with_lock_blocking(|shell| {
+        // Get author and date
+        let author_date = cmd!(
+            shell,
+            "git show --no-patch '--format=%an <%ae>%n%ai' {commit}"
+        )
         .read()
-        .map_err(Error::Shell)?
-        .trim()
-        .to_string();
+        .map_err(Error::Shell)?;
+        let mut lines = author_date.lines();
+        let author = lines.next().unwrap_or("Unknown").to_string();
+        let date = lines.next().unwrap_or("Unknown").to_string();
 
-    // Get diffstat
-    let diffstat = cmd!(shell, "git show --stat --format= {commit}")
-        .read()
-        .map_err(Error::Shell)?
-        .trim()
-        .to_string();
+        // Get commit message
+        let message = cmd!(shell, "git show --no-patch --format=%B {commit}")
+            .read()
+            .map_err(Error::Shell)?
+            .trim()
+            .to_string();
 
-    Ok(CommitInfo {
-        author,
-        date,
-        message,
-        diffstat,
-    })
+        // Get diffstat
+        let diffstat = cmd!(shell, "git show --stat --format= {commit}")
+            .read()
+            .map_err(Error::Shell)?
+            .trim()
+            .to_string();
+
+        Ok(CommitInfo {
+            author,
+            date,
+            message,
+            diffstat,
+        })
+    }).await
+    .map_err(Error::ShellLock)?
 }

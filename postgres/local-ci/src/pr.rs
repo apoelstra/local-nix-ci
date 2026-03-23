@@ -8,7 +8,7 @@ use lcilib::{
         EntityType, Log,
         models::{
             Ack, AckStatus, CiStatus, Commit, CommitType, DbCommitId, DbPullRequestId, MergeStatus,
-            NewAck, NewCommit, NewPullRequest, NewRepository, PrCommit, PullRequest, Repository,
+            NewAck, NewCommit, NewPullRequest, NewRepository, PrCommit, PullRequest, Repository, RepoShell,
             ReviewStatus, UpdatePullRequest,
         },
     },
@@ -530,7 +530,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     };
 
     // Show PR info first
-    show_pr_info(&shell, &current_repo, &pr, &tip_commit)?;
+    show_pr_info(&repo_record.repo_shell, &current_repo, &pr, &tip_commit).await?;
 
     loop {
         // Show menu
@@ -630,14 +630,15 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
 }
 
 /// Show PR information (extracted for reuse)
-fn show_pr_info(
-    shell: &Shell,
+async fn show_pr_info(
+    repo_shell: &RepoShell,
     current_repo: &repo::Repository,
     pr: &PullRequest,
     tip_commit: &Commit,
 ) -> anyhow::Result<()> {
     // Get commit details from git
-    let commit_info = git::get_commit_info(shell, &tip_commit.git_commit_id)
+    let commit_info = git::get_commit_info(repo_shell, &tip_commit.git_commit_id)
+        .await
         .context("failed to get commit info from git")?;
 
     println!(
@@ -935,12 +936,15 @@ pub async fn log(
 pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
     let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo_shell = RepoShell::new(&current_repo.repo_root)
+        .context("failed to create shell in repository")?;
 
     // Fetch PR info from GitHub
     let pr_info = gh::get_pr_info(&shell, pr_number).context("failed to fetch PR from GitHub")?;
 
     // Fetch the head commit to ensure it's available locally
-    git::fetch_commit(&shell, &pr_info.head_commit).context("failed to fetch head commit")?;
+    git::fetch_commit(&repo_shell, &pr_info.head_commit)
+        .await.context("failed to fetch head commit")?;
 
     refresh(shell, &current_repo, &pr_info, db).await
 }

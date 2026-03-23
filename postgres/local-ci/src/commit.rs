@@ -62,7 +62,7 @@ pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to query commit")?
     {
-        show_commit_info(&shell, &tx, &current_repo, &commit_hash, &commit).await?;
+        show_commit_info(&repo_shell, &tx, &current_repo, &commit_hash, &commit).await?;
 
         // Show recent logs
         let logs = Log::query_for_entities(
@@ -240,7 +240,7 @@ pub async fn real_review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db
     };
 
     // Show commit info first
-    show_commit_info(shell, &tx, &current_repo, commit_hash, &commit).await?;
+    show_commit_info(&repo_record.repo_shell, &tx, &current_repo, commit_hash, &commit).await?;
 
     loop {
         // Show menu
@@ -346,7 +346,7 @@ pub async fn real_review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db
 
 /// Show commit information (extracted from info function for reuse)
 async fn show_commit_info(
-    shell: &Shell,
+    repo_shell: &RepoShell,
     tx: &lcilib::Transaction<'_>,
     current_repo: &repo::Repository,
     commit_hash: &git::CommitId,
@@ -354,7 +354,9 @@ async fn show_commit_info(
 ) -> anyhow::Result<()> {
     // Get commit details from git
     let commit_info =
-        git::get_commit_info(shell, commit_hash).context("failed to get commit info from git")?;
+        git::get_commit_info(repo_shell, commit_hash)
+            .await
+            .context("failed to get commit info from git")?;
 
     println!("{} {}", current_repo.project_name, commit_hash);
     println!("Author: {}", commit_info.author);
@@ -604,7 +606,8 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
 
     // Get commit details from git
     let commit_info =
-        git::get_commit_info(&shell, &commit_hash).context("failed to get commit info from git")?;
+        git::get_commit_info(&repo_shell, &commit_hash)
+            .await.context("failed to get commit info from git")?;
 
     // Start database transaction
     let tx = db
