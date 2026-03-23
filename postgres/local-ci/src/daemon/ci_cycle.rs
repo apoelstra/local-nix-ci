@@ -53,8 +53,9 @@ async fn find_stacks(
     let mut low_priority = vec![];
 
     for mut stacks in branch_map.into_values() {
-        stacks.sort_by(|a, b| b.0.total_cmp(&a.0)); // reverse order of priority
-
+        // priority order
+        stacks.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // pop() takes the highest one
         if let Some(stack) = stacks.pop() {
             high_priority.push((stack.1, stack.2));
         }
@@ -91,10 +92,10 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     .context("printing work summary")?;
 
     // 1. Check high-priority stacks first (with positive priority)
-    for (_stack, commits) in &high_priority_stacks {
+    for (stack, commits) in &high_priority_stacks {
         for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
-                log::info("Found commit from high-priority stack");
+                log::info(format_args!("Found commit from high-priority stack {}", stack.id));
                 tx.commit().await.context("committing transaction")?;
                 return Ok(Some(commit.clone()));
             }
@@ -246,7 +247,8 @@ async fn print_work_summary(
             .context("counting signed commits in stack")?;
 
         log::info(format_args!(
-            "{} {} PRs {} ({} signed, {} left to test)",
+            "{} {} {} PRs {} ({} signed, {} left to test)",
+            stack.id,
             repo.name,
             stack.target_branch,
             pr_numbers.join(", "),
@@ -281,7 +283,8 @@ async fn print_work_summary(
             .context("counting signed commits in low-priority stack")?;
 
         log::info(format_args!(
-            "{} {} PRs {} ({} signed, {} left to test)",
+            "{} {} {} PRs {} ({} signed, {} left to test)",
+            stack.id,
             repo.name,
             stack.target_branch,
             pr_numbers.join(", "),
