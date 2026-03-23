@@ -2,9 +2,7 @@
 
 use anyhow::Context as _;
 use lcilib::{
-    Db,
-    db::models::{Ack, AckStatus, CiStatus, CommitToTest, PullRequest, Repository, ReviewStatus, Stack},
-    repo,
+    db::{models::{Ack, AckStatus, CiStatus, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}, MergeStatus}, repo, Db
 };
 use xshell::{Shell, cmd};
 

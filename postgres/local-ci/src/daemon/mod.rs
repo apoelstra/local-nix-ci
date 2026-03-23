@@ -855,7 +855,7 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             let error = anyhow::Error::from(e);
             log::warn(format_args!(
                 "Failed to run 'jj git fetch' in repository {}: {:?}",
-                repo_name, error
+                repo_name, anyhow::Error::from(error)
             ));
         }
 
@@ -864,8 +864,8 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             Ok(prs) => prs,
             Err(e) => {
                 log::warn(format_args!(
-                    "Warning: Failed to get updated PRs for repository {}: {}",
-                    repo_path, e
+                    "Warning: Failed to get updated PRs for repository {}: {:?}",
+                    repo_path, anyhow::Error::from(e)
                 ));
                 return None;
             }
@@ -875,8 +875,8 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             Ok(repo) => repo,
             Err(e) => {
                 log::warn(format_args!(
-                    "Warning: failed to get current repo for repository path {}: {}",
-                    repo_path, e
+                    "Warning: failed to get current repo for repository path {}: {:?}",
+                    repo_path, anyhow::Error::from(e)
                 ));
                 return None;
             }

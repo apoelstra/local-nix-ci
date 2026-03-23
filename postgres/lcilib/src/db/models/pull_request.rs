@@ -316,6 +316,7 @@ impl DbPullRequestId {
                 JOIN pull_requests pr ON pc.pull_request_id = pr.id
                 WHERE pc.pull_request_id = $1
                 AND pc.is_current = true
+                AND pc.commit_type != 'merge'
                 ORDER BY pc.sequence_order ASC
                 "#,
                 &[&self],

@@ -90,7 +90,7 @@ pub async fn compute_merge_description(
         .map_err(|e| MergeDescriptionError::DatabaseQuery("get merge commits", e))?;
 
     let mut commit_lines = Vec::new();
-    for commit in &commits {
+    for commit in commits.iter().rev() {
         // Use jj log to get formatted commit info
         let commit_info = crate::jj::jj_log(
             &sh,

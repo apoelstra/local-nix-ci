@@ -59,7 +59,7 @@ impl DbRepositoryId {
                 SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status,
                        priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
                 FROM pull_requests
-                WHERE repository_id = $1 AND merge_status != 'pushed'
+                WHERE repository_id = $1 AND merge_status != 'pushed' AND merge_status != 'conflicted'
                 ORDER BY pr_number DESC
                 "#,
                 &[&self],
