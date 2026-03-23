@@ -842,85 +842,110 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
     let mut error_limit = log::BackoffSleepToken::new();
 
     loop {
-        if let Some(commit) = find_next_commit_to_test(&mut db)
-            .await
-            .context("finding next commit to test")?
-        {
-            log::info(format_args!(
-                "Starting CI for commit: {} ({})",
-                commit.git_commit_id, commit.jj_change_id
-            ));
+        let commit = match find_next_commit_to_test(&mut db).await {
+            Ok(Some(commit)) => commit,
+            Ok(None) => {
+                // Nothing to do -- just sleep for a second and maybe post a 'nothing to do' message so the
+                // user knows we're still alive.
+                let delay_secs = match no_work_count {
+                    0 => 5,
+                    1 => 60,
+                    2 => 300,
+                    n => 300 * (1u64 << (n - 2)).min(18000), // Cap at 5 hours
+                };
 
-            // Get repository info
-            let repo = match get_repository_for_commit(&mut db, &commit).await {
-                Ok(repo) => repo,
-                Err(e) => {
-                    log::warn_backoff(
-                        &mut error_limit,
-                        &*e.into_boxed_dyn_error(),
-                        format!(
-                            "Failed to get repository for commit {}",
-                            commit.git_commit_id
-                        ),
-                    )
-                    .await;
-                    continue;
+                let now = std::time::Instant::now();
+                if now.duration_since(last_no_work_log).as_secs() >= delay_secs {
+                    log::info(format_args!("Nothing to do."));
+                    no_work_count += 1;
+                    last_no_work_log = now;
                 }
-            };
 
-            // Process the commit
-            match process_commit_ci(&mut db, &commit, &repo).await {
-                Ok(success) => {
-                    error_limit.reset();
-                    if success {
-                        log::info(format_args!(
-                            "CI SUCCESS for commit: {}",
-                            commit.git_commit_id
-                        ));
-                        mark_commit_status(&mut db, commit.id, CiStatus::Passed).await?;
-                        // After a commit succeeds, re-scan the database to see if we should make merge commits or something
-                        super::real_run_db_maintenance_cycle(
-                            &mut db,
-                            &mut log::RateLimitToken::ok_to_run(),
-                        )
-                        .await?;
-                    } else {
-                        // FIXME shouldn't this be an error case?
-                        log::info(format_args!(
-                            "CI FAILED for commit: {}",
-                            commit.git_commit_id
-                        ));
-                        // Error details already logged and commit marked as failed in process_commit_ci
+                time::sleep(Duration::from_secs(1)).await;
+                continue;
+            },
+            Err(e) => {
+                log::warn_backoff(
+                    &mut error_limit,
+                    &*e.into_boxed_dyn_error(),
+                    "Failed to get next commit to test.",
+                ).await;
+                continue;
+            }
+        };
+
+        // Get repository information
+        let repo = match get_repository_for_commit(&mut db, &commit).await {
+            Ok(repo) => repo,
+            Err(e) => {
+                log::warn_backoff(
+                    &mut error_limit,
+                    &*e.into_boxed_dyn_error(),
+                    format!(
+                        "Failed to get repository for commit {}",
+                        commit.git_commit_id
+                    ),
+                )
+                .await;
+                continue;
+            }
+        };
+
+        // If we got a commit, we can reset the error backoff.
+        error_limit.reset();
+
+        log::info("");
+        log::info(format_args!(
+            "Starting CI for commit: {} ({})",
+            commit.git_commit_id, commit.jj_change_id
+        ));
+        for (pr, commit_type) in &commit.prs {
+            log::info(format_args!("    {} PR #{} ({}): {}", repo.name, pr.pr_number, commit_type, pr.title))
+        }
+        log::info("");
+
+        // Process the commit
+        match process_commit_ci(&mut db, &commit, &repo).await {
+            Ok(success) => {
+                if success {
+                    log::info(format_args!(
+                        "CI SUCCESS for commit: {}",
+                        commit.git_commit_id
+                    ));
+                    if let Err(e) = mark_commit_status(&mut db, commit.id, CiStatus::Passed).await {
+                        log::warn(&*e.into_boxed_dyn_error(), "Failed to mark commit passed.");
+                    }
+                    // After a commit succeeds, re-scan the database to see if we should make merge commits or something
+                    // FIXME seems like even with the `RepoShell` abstraction we are still getting
+                    //  concurrent describes with this.
+                    /*
+                    super::real_run_db_maintenance_cycle(
+                        &mut db,
+                        &mut log::RateLimitToken::ok_to_run(),
+                    )
+                    .await?;
+                    */
+                } else {
+                    // FIXME shouldn't this be an error case?
+                    log::info(format_args!(
+                        "CI FAILED for commit: {}",
+                        commit.git_commit_id
+                    ));
+                    // Error details already logged and commit marked as failed in process_commit_ci
+                    if let Err(e) = mark_commit_status(&mut db, commit.id, CiStatus::Failed).await {
+                        log::warn(&*e.into_boxed_dyn_error(), "Failed to mark commit failed.");
                     }
                 }
-                Err(e) => {
-                    log::warn_backoff(
-                        &mut error_limit,
-                        &*e.into_boxed_dyn_error(),
-                        format!("Error processing commit {}", commit.git_commit_id),
-                    )
-                    .await;
-                    mark_commit_status(&mut db, commit.id, CiStatus::Failed).await?;
+            }
+            Err(e) => {
+                log::warn(
+                    &*e.into_boxed_dyn_error(),
+                    format!("Error processing commit {}", commit.git_commit_id),
+                );
+                if let Err(e) = mark_commit_status(&mut db, commit.id, CiStatus::Failed).await {
+                    log::warn(&*e.into_boxed_dyn_error(), "Failed to mark commit failed.");
                 }
             }
-        } else {
-            // Nothing to do -- just sleep for a second and maybe post a 'nothing to do' message so the
-            // user knows we're still alive.
-            let delay_secs = match no_work_count {
-                0 => 5,
-                1 => 60,
-                2 => 300,
-                n => 300 * (1u64 << (n - 2)).min(18000), // Cap at 5 hours
-            };
-
-            let now = std::time::Instant::now();
-            if now.duration_since(last_no_work_log).as_secs() >= delay_secs {
-                log::info(format_args!("Nothing to do."));
-                no_work_count += 1;
-                last_no_work_log = now;
-            }
-
-            time::sleep(Duration::from_secs(1)).await;
         }
     }
 }
