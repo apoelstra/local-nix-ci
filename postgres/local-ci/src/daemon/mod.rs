@@ -55,7 +55,8 @@ async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
             Err(e) => {
                 log::warn_backoff(
                     &mut error_limit,
-                    format!("Failed to run DB maintenance cycle.\n{:?}", anyhow::Error::from(e)),
+                    &*e.into_boxed_dyn_error(),
+                    "Failed to run DB maintenance cycle.",
                 )
                 .await;
             }
@@ -109,7 +110,10 @@ async fn run_pr_sync_cycle() -> anyhow::Result<()> {
                 log::info(format_args!("PR sync cycle completed successfully"));
             }
             Err(e) => {
-                log::warn(format_args!("Error in PR sync cycle: {}", e));
+                log::warn(
+                    &*e.into_boxed_dyn_error(),
+                    "Failed PR sync cycle.",
+                );
             }
         }
     }
@@ -227,7 +231,8 @@ async fn check_pending_acks(
                     work_done = true;
                 }
                 Err(e) => {
-                    log::warn(format_args!(
+                    log::warn(&e,
+                        format_args!(
                         "Failed to post ACK for PR #{} from reviewer {}: {}",
                         pr_number, reviewer_name, e
                     ));
@@ -407,14 +412,6 @@ async fn try_extend_stack(
         None, // description
     ) {
         Ok(jj_change_id) => {
-            if lcilib::jj::has_conflicts(&shell, &jj_change_id)? {
-                log::warn(format_args!(
-                    "conflict trying to merge PR {} on top of {}",
-                    pr.pr_number, stack_tip,
-                ));
-                return Ok(false);
-            }
-            
             // Get the git commit ID for the new merge
             let git_commit_id =
                 lcilib::jj::get_current_git_commit_for_change_id(&shell, &jj_change_id)
@@ -608,8 +605,8 @@ async fn process_stack_updates(
         // Check for GPG signatures before rebasing
         for commit in &stack_commits {
             if util::is_commit_gpg_signed(commit, &repo.path).await? {
-                log::warn(format_args!(
-                    "Warning: Throwing away GPG signature for commit {} due to rebase",
+                log::info(format_args!(
+                    "Throwing away GPG signature for commit {} due to rebase",
                     commit.jj_change_id
                 ));
             }
@@ -652,9 +649,9 @@ async fn process_stack_updates(
         if let Err(e) =
             lcilib::jj::update_commit_description(&shell, &commit.jj_change_id, &description)
         {
-            log::warn(format_args!(
-                "Failed to update description for commit {}: {}",
-                commit.jj_change_id, e
+            log::warn(&e, format_args!(
+                "Failed to update description for commit {}",
+                commit.jj_change_id
             ));
         }
 
@@ -695,15 +692,16 @@ async fn process_stack_updates(
                                 &commit.jj_change_id,
                             )?;
                             if !is_signed {
-                                log::warn(format_args!(
-                                    "Warning: lost GPG signature on change {}",
+                                log::info(format_args!(
+                                    "Throwing away GPG signature on change {} due to commit ID change",
                                     commit.jj_change_id
                                 ));
                             }
                         }
                     } else {
                         // Tree changed - kill the rest of the stack
-                        log::warn(format_args!(
+                        // FIXME this should be a warning and somehow have a std::Error associated to it (by refactoring functions probably)
+                        log::info(format_args!(
                             "Change {} tree changed (commit {} to {}), marking as not current removing remainder of stack.",
                             commit.jj_change_id, commit.git_commit_id, current_git_id,
                         ));
@@ -728,9 +726,9 @@ async fn process_stack_updates(
                 }
             }
             Err(e) => {
-                log::warn(format_args!(
-                    "Failed to get current git commit for {}: {}",
-                    commit.jj_change_id, e
+                log::warn(&e, format_args!(
+                    "Failed to get current git commit for {}",
+                    commit.jj_change_id
                 ));
             }
         }
@@ -798,9 +796,9 @@ async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
 
     for repo in repositories {
         if let Err(e) = sync_repository_prs(db, &repo).await {
-            log::warn(format_args!(
-                "Failed to sync PRs for repository {}: {}",
-                repo.name, e
+            log::warn(&*e.into_boxed_dyn_error(), format_args!(
+                "Failed to sync PRs for repository {}",
+                repo.name
             ));
         }
     }
@@ -823,7 +821,8 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         // Check if repository path exists
         let shell = Shell::new().ok()?; // just eat shell creation error; this basically cannot happen
         if !Path::new(&repo_path).exists() {
-            log::warn(format_args!(
+            // FIXME should turn this into a warnig and wrap this whole check and shell-construction into a db error
+            log::info(format_args!(
                 "Warning: Repository path does not exist: {}",
                 repo_path
             ));
@@ -838,10 +837,9 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             .ignore_stderr()
             .run()
         {
-            let error = anyhow::Error::from(e);
-            log::warn(format_args!(
-                "Failed to run 'git fetch origin' in repository {}: {:?}",
-                repo_name, error
+            log::warn(&e, format_args!(
+                "Failed to run 'git fetch origin' in repository {}",
+                repo_name
             ));
         }
 
@@ -852,10 +850,9 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             .ignore_stderr()
             .run()
         {
-            let error = anyhow::Error::from(e);
-            log::warn(format_args!(
-                "Failed to run 'jj git fetch' in repository {}: {:?}",
-                repo_name, anyhow::Error::from(error)
+            log::warn(&e, format_args!(
+                "Failed to run 'jj git fetch' in repository {}",
+                repo_name,
             ));
         }
 
@@ -863,9 +860,9 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         let pr_infos = match lcilib::gh::list_updated_prs(&shell, last_synced) {
             Ok(prs) => prs,
             Err(e) => {
-                log::warn(format_args!(
-                    "Warning: Failed to get updated PRs for repository {}: {:?}",
-                    repo_path, anyhow::Error::from(e)
+                log::warn(&e, format_args!(
+                    "Warning: Failed to get updated PRs for repository {}",
+                    repo_path,
                 ));
                 return None;
             }
@@ -874,9 +871,9 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         let current_repo = match lcilib::repo::current_repo(&shell) {
             Ok(repo) => repo,
             Err(e) => {
-                log::warn(format_args!(
-                    "Warning: failed to get current repo for repository path {}: {:?}",
-                    repo_path, anyhow::Error::from(e)
+                log::warn(&e, format_args!(
+                    "Warning: failed to get current repo for repository path {}",
+                    repo_path
                 ));
                 return None;
             }
@@ -907,9 +904,9 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             .await
             .with_context(|| format!("failed to refresh PR #{}", pr_info.number))
         {
-            log::warn(format_args!(
-                "Warning: Failed to process PR #{} in repository {}: {}",
-                pr_info.number, repo.name, e
+            log::warn(&*e.into_boxed_dyn_error(), format_args!(
+                "Warning: Failed to process PR #{} in repository {}",
+                pr_info.number, repo.name,
             ));
         } else {
             log::info(format_args!(

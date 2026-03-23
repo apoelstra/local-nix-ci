@@ -15,6 +15,7 @@ pub enum Error {
     Shell(xshell::Error),
     ChangeId(ChangeIdError),
     ParseOutput(String),
+    HasConflicts(ChangeId),
 }
 
 impl fmt::Display for Error {
@@ -23,6 +24,7 @@ impl fmt::Display for Error {
             Self::Shell(_) => f.write_str("failed to invoke jj"),
             Self::ChangeId(_) => f.write_str("failed to parse change ID"),
             Self::ParseOutput(s) => write!(f, "failed to parse output {s}"),
+            Self::HasConflicts(s) => write!(f, "newly created change {s} is conflicted"),
         }
     }
 }
@@ -33,6 +35,7 @@ impl std::error::Error for Error {
             Self::Shell(e) => Some(e),
             Self::ChangeId(e) => Some(e),
             Self::ParseOutput(..) => None,
+            Self::HasConflicts(..) => None,
         }
     }
 }
@@ -144,10 +147,7 @@ pub fn create_merge_commit(
     let change_id = jj_new(shell, &[target_branch, pr_tip_commit], description)?;
     // Check for conflicts
     if has_conflicts(shell, &change_id)? {
-        return Err(Error::ParseOutput(format!(
-            "Merge commit {} has conflicts",
-            change_id
-        )));
+        return Err(Error::HasConflicts(change_id));
     }
 
     Ok(change_id)

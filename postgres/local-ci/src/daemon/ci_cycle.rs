@@ -37,7 +37,7 @@ async fn find_stacks(
         let (_, untested) = stack.get_commit_counts(tx).await?;
         if untested > 0 {
             let commits = stack.id.get_commits(tx).await?;
-            let priority = util::calculate_stack_priority(&commits, &tx)
+            let priority = util::calculate_stack_priority(&commits, tx)
                 .await
                 .context("calculating stack priority")?;
 
@@ -326,7 +326,8 @@ async fn process_commit_ci(
     // Check if nixfile exists
     if !nixfile_path.exists() {
         let error_msg = format!("Nixfile not found: {}", nixfile_path.display());
-        log::warn(format_args!("{}", error_msg));
+        // FIXME should also be in the repo constructor as an error
+        log::info(format_args!("{}", error_msg));
         mark_commit_status(db, commit.id, CiStatus::Failed).await?;
         return Ok(false);
     }
@@ -335,8 +336,10 @@ async fn process_commit_ci(
     let lockfiles = match find_cargo_lockfiles(repo_path, &commit.git_commit_id).await {
         Ok(files) => files,
         Err(e) => {
-            let error_msg = format!("Failed to find Cargo.lock files: {}", e);
-            log::warn(format_args!("{}", error_msg));
+            log::warn(
+                &*e.into_boxed_dyn_error(),
+                "Failed to find Cargo.lock files",
+            );
             mark_commit_status(db, commit.id, CiStatus::Failed).await?;
             return Ok(false);
         }
@@ -346,16 +349,18 @@ async fn process_commit_ci(
     let has_cargo_toml = match check_has_cargo_toml(repo_path, &commit.git_commit_id).await {
         Ok(has_toml) => has_toml,
         Err(e) => {
-            let error_msg = format!("Failed to check for Cargo.toml files: {}", e);
-            log::warn(format_args!("{}", error_msg));
+            log::warn(
+                &*e.into_boxed_dyn_error(),
+                "Failed to check for Cargo.toml files",
+            );
             mark_commit_status(db, commit.id, CiStatus::Failed).await?;
             return Ok(false);
         }
     };
 
     if has_cargo_toml && lockfiles.is_empty() {
-        let error_msg = "Found Cargo.toml files but no Cargo.lock files";
-        log::warn(format_args!("{}", error_msg));
+        // FIXME promote these error checks to an error type, make this a warning
+        log::info("Found Cargo.toml files but no Cargo.lock files");
         mark_commit_status(db, commit.id, CiStatus::Failed).await?;
         return Ok(false);
     }
@@ -376,8 +381,7 @@ async fn process_commit_ci(
         match get_or_create_derivation_with_cancellation(db, commit, repo, &cargo_nixes).await {
             Ok(path) => path,
             Err(e) => {
-                let error_msg = format!("Failed to get derivation: {}", e);
-                log::warn(format_args!("{}", error_msg));
+                log::warn(&*e.into_boxed_dyn_error(), "Failed to get derivation");
                 mark_commit_status(db, commit.id, CiStatus::Failed).await?;
                 return Ok(false);
             }
@@ -392,8 +396,7 @@ async fn process_commit_ci(
             Ok(success)
         }
         Err(e) => {
-            let error_msg = format!("Build process error: {}", e);
-            log::warn(format_args!("{}", error_msg));
+            log::warn(&*e.into_boxed_dyn_error(), "Build failed");
             mark_commit_status(db, commit.id, CiStatus::Failed).await?;
             Ok(false)
         }
@@ -625,7 +628,10 @@ async fn get_or_create_derivation_with_cancellation(
             // Check for cancellation every 10 seconds
             _ = interval.tick() => {
                 if let Err(e) = check_for_cancellation(db, commit).await {
-                    log::warn(format_args!("Error checking for cancellation: {}", e));
+                    log::warn(
+                        &*e.into_boxed_dyn_error(),
+                        "Failed to check for cancellation"
+                    );
                     continue;
                 }
 
@@ -635,16 +641,17 @@ async fn get_or_create_derivation_with_cancellation(
 
                     // Kill the child process
                     if let Err(e) = child.kill().await {
-                        log::warn(format_args!("Failed to kill nix-instantiate process: {}", e));
+                        log::warn(
+                            &e,
+                            "Failed to kill nix-instantiate process",
+                        );
                     }
 
                     // Wait for it to actually exit
                     let _ = child.wait().await;
-
-                    let error_msg = "CI cancelled by user request";
-                    log::warn(format_args!("{}", error_msg));
+                    log::info("Nix instantiation cancelled.");
                     mark_commit_status(db, commit.id, CiStatus::Failed).await?;
-                    return Err(anyhow::anyhow!("{}", error_msg));
+                    return Err(anyhow::anyhow!("instantiation cancelled"));
                 }
             }
         }
@@ -715,8 +722,7 @@ async fn build_derivation_with_cancellation(
                         return Ok(false);
                     }
                     Err(e) => {
-                        let error_msg = format!("Failed to check nix-build status: {}", e);
-                        log::warn(format_args!("{}", error_msg));
+                        log::warn(&e, "Failed to check nix-build status");
                         mark_commit_status(db, commit.id, CiStatus::Failed).await?;
                         return Ok(false);
                     }
@@ -726,7 +732,7 @@ async fn build_derivation_with_cancellation(
             // Check for cancellation every 30 seconds
             _ = interval.tick() => {
                 if let Err(e) = check_for_cancellation(db, commit).await {
-                    log::warn(format_args!("Error checking for cancellation: {}", e));
+                    log::warn(&*e.into_boxed_dyn_error(), "Error checking for cancellation");
                     continue;
                 }
 
@@ -736,14 +742,12 @@ async fn build_derivation_with_cancellation(
 
                     // Kill the child process
                     if let Err(e) = child.kill().await {
-                        log::warn(format_args!("Failed to kill nix-build process: {}", e));
+                        log::warn(&e, "Failed to kill nix-build process");
                     }
 
                     // Wait for it to actually exit
                     let _ = child.wait().await;
-
-                    let error_msg = "CI cancelled by user request";
-                    log::warn(format_args!("{}", error_msg));
+                    log::info("nix-build of derivation cancelled.");
                     return Ok(false);
                 }
             }
@@ -862,9 +866,10 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                 Err(e) => {
                     log::warn_backoff(
                         &mut error_limit,
+                        &*e.into_boxed_dyn_error(),
                         format!(
-                            "Failed to get repository for commit {}: {}",
-                            commit.git_commit_id, e
+                            "Failed to get repository for commit {}",
+                            commit.git_commit_id
                         ),
                     )
                     .await;
@@ -889,7 +894,8 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                         )
                         .await?;
                     } else {
-                        log::warn(format_args!(
+                        // FIXME shouldn't this be an error case?
+                        log::info(format_args!(
                             "CI FAILED for commit: {}",
                             commit.git_commit_id
                         ));
@@ -899,7 +905,8 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                 Err(e) => {
                     log::warn_backoff(
                         &mut error_limit,
-                        format!("Error processing commit {}: {}", commit.git_commit_id, e),
+                        &*e.into_boxed_dyn_error(),
+                        format!("Error processing commit {}", commit.git_commit_id),
                     )
                     .await;
                     mark_commit_status(&mut db, commit.id, CiStatus::Failed).await?;
