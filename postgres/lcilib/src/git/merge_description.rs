@@ -96,10 +96,11 @@ pub async fn compute_merge_description(
     for commit in commits.iter().rev() {
         // Use jj log to get formatted commit info
         let commit_info = crate::jj::jj_log(
-            &sh,
-            "commit_id ++ \" \" ++ description.first_line() ++ \" (\" ++ author.name() ++ \")\"",
+            &repository.repo_shell,
+            Some("commit_id ++ \" \" ++ description.first_line() ++ \" (\" ++ author.name() ++ \")\""),
             &commit.jj_change_id,
         )
+        .await
         .map_err(MergeDescriptionError::GetCommitList)?;
         commit_lines.push(commit_info.trim().to_string());
     }

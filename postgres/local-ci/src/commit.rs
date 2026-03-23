@@ -573,7 +573,7 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to start database transaction")?;
 
     // Find or create the repository record
-    let repo_record = if let Some(repo) =
+    let repo = if let Some(repo) =
         Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
             .await
             .context("failed to query repository")?
@@ -592,7 +592,7 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     };
 
     // Check if commit already exists
-    if let Some(existing_commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_hash)
+    if let Some(existing_commit) = Commit::find_by_git_id(&tx, repo.id, &commit_hash)
         .await
         .context("failed to query commit")?
     {
@@ -603,9 +603,9 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     } else {
         // Create new commit record
         let new_commit = NewCommit {
-            repository_id: repo_record.id,
+            repository_id: repo.id,
             git_commit_id: commit_hash.clone(),
-            jj_change_id: jj::get_change_id_for_commit(&shell, &commit_hash)?,
+            jj_change_id: jj::get_change_id_for_commit(&repo.repo_shell, &commit_hash).await?,
             review_status: ReviewStatus::Unreviewed,
             should_run_ci: true,
             ci_status: CiStatus::Unstarted,

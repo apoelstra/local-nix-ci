@@ -10,6 +10,7 @@ use lcilib::{
         Stack, UpdateCommit,
     },
     git::CommitId,
+    jj::is_commit_gpg_signed,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -307,7 +308,7 @@ async fn count_signed_commits_in_stack(
 
     let mut signed_count = 0;
     for commit in &commits {
-        if util::is_commit_gpg_signed(commit, &repo.path).await? {
+        if is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await? {
             signed_count += 1;
         }
     }
@@ -878,14 +879,11 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                         ));
                         mark_commit_status(&mut db, commit.id, CiStatus::Passed).await?;
                         // After a commit succeeds, re-scan the database to see if we should make merge commits or something
-                        // FIXME simultaneous 'jj describe' commands cause divergent commits; need to have some sort of repo lock here
-                        /*
                         super::real_run_db_maintenance_cycle(
                             &mut db,
                             &mut log::RateLimitToken::ok_to_run(),
                         )
                         .await?;
-                        */
                     } else {
                         // FIXME shouldn't this be an error case?
                         log::info(format_args!(

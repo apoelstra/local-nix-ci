@@ -2,29 +2,7 @@
 
 use anyhow::Context as _;
 use lcilib::db::models::{CommitToTest, Repository};
-use tokio::task;
-use xshell::Shell;
-
-/// Check if a commit is GPG signed using jj
-///
-/// # Errors
-///
-/// Returns an error if the jj command fails or if we can't determine the repository path.
-pub async fn is_commit_gpg_signed(commit: &CommitToTest, repo_path: &str) -> anyhow::Result<bool> {
-    let change_id = commit.jj_change_id.clone();
-    let repo_path = repo_path.to_string();
-
-    let result = task::spawn_blocking(move || {
-        let sh = Shell::new()?;
-        sh.change_dir(&repo_path);
-
-        lcilib::jj::is_commit_gpg_signed(&sh, &change_id).map_err(anyhow::Error::from)
-    })
-    .await
-    .context("spawning blocking task for jj command")??;
-
-    Ok(result)
-}
+use lcilib::jj::is_commit_gpg_signed;
 
 /// Calculate the priority of a stack using the formula from the documentation
 ///
@@ -104,7 +82,7 @@ async fn calculate_commit_priority(
 
     // Add: +0.5 if GPG-signed already
     let repo = Repository::get_by_id(tx, commit.repository_id).await?;
-    match is_commit_gpg_signed(commit, &repo.path).await {
+    match is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await {
         Ok(true) => priority += 0.5,
         Ok(false) => {} // No bonus
         Err(e) => {

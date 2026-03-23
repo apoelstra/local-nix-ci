@@ -969,7 +969,7 @@ pub async fn refresh(
         .context("failed to start database transaction")?;
 
     // Find or create the repository record
-    let repo_record = if let Some(repo) =
+    let repo = if let Some(repo) =
         Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
             .await
             .context("failed to query repository")?
@@ -991,19 +991,20 @@ pub async fn refresh(
     let mut commit_records = Vec::new();
     for commit_oid in pr_info.commit_ids() {
         let commit_record = if let Some(commit) =
-            Commit::find_by_git_id(&tx, repo_record.id, commit_oid)
+            Commit::find_by_git_id(&tx, repo.id, commit_oid)
                 .await
                 .context("failed to query commit")?
         {
             commit
         } else {
             // Get the jj change ID for this commit
-            let jj_change_id = jj::get_change_id_for_commit(&shell, commit_oid)
+            let jj_change_id = jj::get_change_id_for_commit(&repo.repo_shell, commit_oid)
+                .await
                 .with_context(|| format!("failed to get jj change ID for commit {}", commit_oid))?;
 
             // Create new commit record
             let new_commit = NewCommit {
-                repository_id: repo_record.id,
+                repository_id: repo.id,
                 git_commit_id: commit_oid.clone(),
                 jj_change_id,
                 review_status: ReviewStatus::Unreviewed,
@@ -1028,7 +1029,7 @@ pub async fn refresh(
 
     // Create or update the PR record
     let pr_record = if let Some(pr) =
-        PullRequest::find_by_number(&tx, repo_record.id, pr_info.number)
+        PullRequest::find_by_number(&tx, repo.id, pr_info.number)
             .await
             .context("failed to query pull request")?
     {
@@ -1048,7 +1049,7 @@ pub async fn refresh(
     } else {
         // Create new PR
         let new_pr = NewPullRequest {
-            repository_id: repo_record.id,
+            repository_id: repo.id,
             pr_number: pr_info.number,
             title: pr_info.title.clone(),
             body: pr_info.body.clone(),

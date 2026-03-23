@@ -10,6 +10,7 @@ use lcilib::db::models::{
     CiStatus, Commit, CommitToTest, DbAckId, DbCommitId, DbPullRequestId, DbRepositoryId, DbStackId, PullRequest,
     NewCommit, NewStack, Repository, ReviewStatus, Stack, UpdateCommit,
 };
+use lcilib::jj::is_commit_gpg_signed;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::{task, time};
@@ -405,15 +406,16 @@ async fn try_extend_stack(
     // TODO should compute the real merge description rather than using "<placeholder>". This
     //  is okay for now since the db maintenance loop will get it..
     match lcilib::jj::create_merge_commit(
-        &shell,
+        &repo.repo_shell,
         tip_commit.git_commit_id.as_str(),
         stack_tip,
         None, // description
-    ) {
+    ).await {
         Ok(jj_change_id) => {
             // Get the git commit ID for the new merge
             let git_commit_id =
-                lcilib::jj::get_current_git_commit_for_change_id(&shell, &jj_change_id)
+                lcilib::jj::get_current_git_commit_for_change_id(&repo.repo_shell, &jj_change_id)
+                    .await
                     .context("getting git commit ID for stack merge")?;
 
             // Create commit record for the new merge
@@ -603,7 +605,7 @@ async fn process_stack_updates(
 
         // Check for GPG signatures before rebasing
         for commit in &stack_commits {
-            if util::is_commit_gpg_signed(commit, &repo.path).await? {
+            if is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await? {
                 log::info(format_args!(
                     "Throwing away GPG signature for commit {} due to rebase",
                     commit.jj_change_id
@@ -646,7 +648,8 @@ async fn process_stack_updates(
         let description = lcilib::git::compute_merge_description(&tx, &pr, commit).await
             .with_context(|| format!("computing merge description for merge of PR {} (commit {})", pr.pr_number, commit.git_commit_id))?;
         if let Err(e) =
-            lcilib::jj::update_commit_description(&shell, &commit.jj_change_id, &description)
+            lcilib::jj::update_commit_description(&repo.repo_shell, &commit.jj_change_id, &description)
+            .await
         {
             log::warn(&e, format_args!(
                 "Failed to update description for commit {}",
@@ -658,7 +661,7 @@ async fn process_stack_updates(
         // which should never happen, but okay, let's check) or just an accounting change (update
         // description or sign, which may happen externally).
         let mut stack_poisoned = false;
-        match lcilib::jj::get_current_git_commit_for_change_id(&shell, &commit.jj_change_id) {
+        match lcilib::jj::get_current_git_commit_for_change_id(&repo.repo_shell, &commit.jj_change_id).await {
             Ok(current_git_id) => {
                 if current_git_id != commit.git_commit_id {
                     // Get tree hash and parents to check what changed
@@ -681,15 +684,12 @@ async fn process_stack_updates(
                         .context("updating git commit ID")?;
 
                         // Check for lost GPG signature
-                        let was_signed = util::is_commit_gpg_signed(commit, &repo.path).await?;
+                        let was_signed = is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await?;
                         if was_signed {
-                            let shell_for_current =
-                                Shell::new().context("creating shell for current commit")?;
-                            shell_for_current.change_dir(&repo.path);
                             let is_signed = lcilib::jj::is_commit_gpg_signed(
-                                &shell_for_current,
+                                &repo.repo_shell,
                                 &commit.jj_change_id,
-                            )?;
+                            ).await?;
                             if !is_signed {
                                 log::info(format_args!(
                                     "Throwing away GPG signature on change {} due to commit ID change",

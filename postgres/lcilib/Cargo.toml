@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-scoped = { version = "0.9", default-features = false, features = [ "use-tokio" ] }
 bitcoin_hashes = { version = "0.18", default-features = false, features = [ "hex", "serde", "std" ] }
 chrono = { version = "0.4.44", default-features = false, features = [ "now" ] }
 postgres-types = { version = "0.2.12", default-features = false, features = [ "derive" ] }
