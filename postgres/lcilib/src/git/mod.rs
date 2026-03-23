@@ -243,6 +243,31 @@ pub async fn fetch_resolve_ref(shell: &RepoShell, remote_ref: &str) -> Result<Co
     CommitId::from_str(output.trim())
 }
 
+/// Runs `git fetch` to re-sync the repository to upstreams.
+///
+/// # Errors
+///
+/// Returns an error if the fetch operation fails for both origin and upstream remotes,
+/// or if the resolved commit ID cannot be parsed as a valid git commit.
+pub async fn fetch(shell: &RepoShell) -> Result<(), Error> {
+    shell.with_lock_blocking(|shell| {
+            cmd!(shell, "git fetch origin")
+                .quiet()
+                .ignore_stdout()
+                .ignore_stderr()
+                .run()
+                .map_err(Error::Shell)?;
+            cmd!(shell, "jj git fetch")
+                .quiet()
+                .ignore_stdout()
+                .ignore_stderr()
+                .run()
+                .map_err(Error::Shell)?;
+            Ok(())
+    }).await
+    .map_err(Error::ShellLock)?
+}
+
 /// Get detailed information about a commit
 ///
 /// # Errors

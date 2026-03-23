@@ -6,7 +6,7 @@ use lcilib::{
     db::{
         EntityType, Log,
         models::{
-            CiStatus, Commit, CommitType, NewCommit, NewRepository, PrCommit, PullRequest,
+            CiStatus, Commit, CommitType, NewCommit, PrCommit, PullRequest,
             Repository, ReviewStatus, UpdateCommit, RepoShell,
         },
     },
@@ -28,13 +28,12 @@ use xshell::{Shell, cmd};
 /// - Database transaction fails
 /// - Repository lookup fails
 pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
-    let repo_shell = RepoShell::new(&current_repo.repo_root)
-        .context("failed to create shell in repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&repo_shell, commit_ref)
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
         .await
         .with_context(|| {
         format!(
@@ -48,21 +47,12 @@ pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        println!("Repository not found in database. Please run 'refresh' first to initialize it.");
-        return Ok(());
-    };
-
     // Look up the commit in the database
-    if let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_hash)
+    if let Some(commit) = Commit::find_by_git_id(&tx, repo.id, &commit_hash)
         .await
         .context("failed to query commit")?
     {
-        show_commit_info(&repo_shell, &tx, &current_repo, &commit_hash, &commit).await?;
+        show_commit_info(&tx, &repo, &commit_hash, &commit).await?;
 
         // Show recent logs
         let logs = Log::query_for_entities(
@@ -120,28 +110,17 @@ fn determine_next_action_for_commit(commit: &Commit) -> String {
 /// - Repository or commit lookup fails
 /// - No next action available
 pub async fn next(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
-    let repo_shell = RepoShell::new(&current_repo.repo_root)
-        .context("failed to create shell in repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     let tx = db
         .transaction()
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        anyhow::bail!(
-            "Repository not found in database. Please run 'refresh' first to initialize it."
-        );
-    };
-
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&repo_shell, commit_ref)
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
         .await
         .with_context(|| {
         format!(
@@ -151,7 +130,7 @@ pub async fn next(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     })?;
 
     // Look up the commit in the database
-    let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_hash)
+    let Some(commit) = Commit::find_by_git_id(&tx, repo.id, &commit_hash)
         .await
         .context("failed to query commit")?
     else {
@@ -168,7 +147,7 @@ pub async fn next(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         tx.commit().await.context("failed to commit transaction")?;
 
         // Review this commit
-        return real_review(&shell, &commit_hash, db)
+        return real_review(&repo, &commit_hash, db)
             .await
             .context("failed to review commit");
     }
@@ -191,13 +170,12 @@ pub async fn next(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
 /// - Repository or commit lookup fails
 /// - Editor invocation fails
 pub async fn review(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
-    let repo_shell = RepoShell::new(&current_repo.repo_root)
-        .context("failed to create shell in repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&repo_shell, commit_ref)
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
         .await
         .with_context(|| {
         format!(
@@ -206,29 +184,17 @@ pub async fn review(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         )
     })?;
 
-    real_review(&shell, &commit_hash, db).await
+    real_review(&repo, &commit_hash, db).await
 }
 
-pub async fn real_review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> anyhow::Result<()> {
-    let current_repo = repo::current_repo(shell).context("failed to get current repository")?;
-
+pub async fn real_review(repo: &Repository, commit_hash: &git::CommitId, db: &mut Db) -> anyhow::Result<()> {
     let tx = db
         .transaction()
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        anyhow::bail!(
-            "Repository not found in database. Please run 'refresh' first to initialize it."
-        );
-    };
-
     // Look up the commit in the database
-    let Some(mut commit) = Commit::find_by_git_id(&tx, repo_record.id, commit_hash)
+    let Some(mut commit) = Commit::find_by_git_id(&tx, repo.id, commit_hash)
         .await
         .context("failed to query commit")?
     else {
@@ -240,7 +206,7 @@ pub async fn real_review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db
     };
 
     // Show commit info first
-    show_commit_info(&repo_record.repo_shell, &tx, &current_repo, commit_hash, &commit).await?;
+    show_commit_info(&tx, repo, commit_hash, &commit).await?;
 
     loop {
         // Show menu
@@ -310,7 +276,7 @@ pub async fn real_review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db
                     .apply_update(&tx, &update)
                     .await
                     .context("failed to update commit with review")?;
-                commit = Commit::find_by_git_id(&tx, repo_record.id, commit_hash)
+                commit = Commit::find_by_git_id(&tx, repo.id, commit_hash)
                     .await
                     .context("failed to query commit")?
                     .expect("we just updated this ID; the lookup should always succeed");
@@ -318,16 +284,16 @@ pub async fn real_review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db
                 println!("Review erased and commit marked as unreviewed.");
             }
             "3a" => {
-                show_diff(shell, commit_hash, Some(50))?;
+                show_diff(&repo.repo_shell, commit_hash, Some(50)).await?;
             }
             "3b" => {
-                show_diff(shell, commit_hash, Some(3))?;
+                show_diff(&repo.repo_shell, commit_hash, Some(3)).await?;
             }
             "3c" => {
-                show_diff(shell, commit_hash, Some(5000))?;
+                show_diff(&repo.repo_shell, commit_hash, Some(5000)).await?;
             }
             "3d" => {
-                show_diff_stat(shell, commit_hash)?;
+                show_diff_stat(&repo.repo_shell, commit_hash).await?;
             }
             "4" => {
                 println!("Cancelled.");
@@ -346,19 +312,18 @@ pub async fn real_review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db
 
 /// Show commit information (extracted from info function for reuse)
 async fn show_commit_info(
-    repo_shell: &RepoShell,
     tx: &lcilib::Transaction<'_>,
-    current_repo: &repo::Repository,
+    repo: &Repository,
     commit_hash: &git::CommitId,
     commit: &Commit,
 ) -> anyhow::Result<()> {
     // Get commit details from git
     let commit_info =
-        git::get_commit_info(repo_shell, commit_hash)
+        git::get_commit_info(&repo.repo_shell, commit_hash)
             .await
             .context("failed to get commit info from git")?;
 
-    println!("{} {}", current_repo.project_name, commit_hash);
+    println!("{} {}", repo.name, commit_hash);
     println!("Author: {}", commit_info.author);
     println!("Date: {}", commit_info.date);
     println!();
@@ -478,32 +443,32 @@ async fn handle_review_with_editor(
 }
 
 /// Show git diff with specified context
-fn show_diff(
-    shell: &Shell,
+async fn show_diff(
+    shell: &RepoShell,
     commit_hash: &git::CommitId,
     context: Option<u32>,
 ) -> anyhow::Result<()> {
-    if let Some(lines) = context {
-        let lines = lines.to_string();
-        cmd!(shell, "git show --unified={lines} {commit_hash}")
-            .run()
-            .context("failed to run git show")?;
-    } else {
-        cmd!(shell, "git show {commit_hash}")
-            .run()
-            .context("failed to run git show")?;
-    }
-
-    Ok(())
+    shell.with_lock_blocking(|shell| {
+        if let Some(lines) = context {
+            let lines = lines.to_string();
+            cmd!(shell, "git show --unified={lines} {commit_hash}")
+                .run()
+                .context("failed to run git show")
+        } else {
+            cmd!(shell, "git show {commit_hash}")
+                .run()
+                .context("failed to run git show")
+        }
+    }).await?
 }
 
 /// Show git diff stat
-fn show_diff_stat(shell: &Shell, commit_hash: &git::CommitId) -> anyhow::Result<()> {
-    cmd!(shell, "git show --stat {commit_hash}")
-        .run()
-        .context("failed to run git show --stat")?;
-
-    Ok(())
+async fn show_diff_stat(shell: &RepoShell, commit_hash: &git::CommitId) -> anyhow::Result<()> {
+    shell.with_lock_blocking(|shell| {
+        cmd!(shell, "git show --stat {commit_hash}")
+            .run()
+            .context("failed to run git show --stat")
+    }).await?
 }
 
 /// Show logs for a commit
@@ -522,13 +487,12 @@ pub async fn log(
     until: Option<&str>,
     db: &mut Db,
 ) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
-    let repo_shell = RepoShell::new(&current_repo.repo_root)
-        .context("failed to create shell in repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&repo_shell, commit_ref).await.with_context(|| {
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref).await.with_context(|| {
         format!(
             "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
             commit_ref
@@ -540,18 +504,8 @@ pub async fn log(
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        anyhow::bail!(
-            "Repository not found in database. Please run 'refresh' first to initialize it."
-        );
-    };
-
     // Look up the commit in the database
-    let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_hash)
+    let Some(commit) = Commit::find_by_git_id(&tx, repo.id, &commit_hash)
         .await
         .context("failed to query commit")?
     else {
@@ -591,13 +545,12 @@ pub async fn log(
 /// - Git reference resolution fails
 /// - Database transaction or operations fail
 pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
-    let repo_shell = RepoShell::new(&current_repo.repo_root)
-        .context("failed to create shell in repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&repo_shell, commit_ref).await.with_context(|| {
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref).await.with_context(|| {
         format!(
             "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
             commit_ref
@@ -606,7 +559,7 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
 
     // Get commit details from git
     let commit_info =
-        git::get_commit_info(&repo_shell, &commit_hash)
+        git::get_commit_info(&repo.repo_shell, &commit_hash)
             .await.context("failed to get commit info from git")?;
 
     // Start database transaction
@@ -614,25 +567,6 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         .transaction()
         .await
         .context("failed to start database transaction")?;
-
-    // Find or create the repository record
-    let repo = if let Some(repo) =
-        Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-            .await
-            .context("failed to query repository")?
-    {
-        repo
-    } else {
-        // Create repository record
-        let new_repo = NewRepository {
-            name: current_repo.project_name.clone(),
-            path: current_repo.repo_root.to_str().unwrap().to_string(),
-            nixfile_path: "default.nix".to_string(), // Default, can be configured later
-        };
-        Repository::create(&tx, new_repo)
-            .await
-            .context("failed to create repository record")?
-    };
 
     // Check if commit already exists
     if let Some(existing_commit) = Commit::find_by_git_id(&tx, repo.id, &commit_hash)

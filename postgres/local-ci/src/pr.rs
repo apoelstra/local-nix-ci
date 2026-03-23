@@ -8,7 +8,7 @@ use lcilib::{
         EntityType, Log,
         models::{
             Ack, AckStatus, CiStatus, Commit, CommitType, DbCommitId, DbPullRequestId, MergeStatus,
-            NewAck, NewCommit, NewPullRequest, NewRepository, PrCommit, PullRequest, Repository, RepoShell,
+            NewAck, NewCommit, NewPullRequest, PrCommit, PullRequest, Repository,
             ReviewStatus, UpdatePullRequest,
         },
     },
@@ -30,31 +30,23 @@ use xshell::{Shell, cmd};
 /// - Database transaction fails
 /// - Repository or PR lookup fails
 pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     let tx = db
         .transaction()
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        println!("Repository not found in database. Please run 'refresh' first to initialize it.");
-        return Ok(());
-    };
-
     // Look up the PR in the database
-    if let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?)
+    if let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
         .await
         .context("failed to query pull request")?
     {
         println!(
             "{} PR #{}: {}",
-            current_repo.project_name, pr.pr_number, pr.title
+            repo.name, pr.pr_number, pr.title
         );
         println!();
         println!(
@@ -183,26 +175,17 @@ async fn determine_next_action_for_pr(
 /// - Repository or PR lookup fails
 /// - No next action available
 pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     let tx = db
         .transaction()
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        anyhow::bail!(
-            "Repository not found in database. Please run 'refresh' first to initialize it."
-        );
-    };
-
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?)
+    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
         .await
         .context("failed to query pull request")?
     else {
@@ -226,7 +209,7 @@ pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             tx.commit().await.context("failed to commit transaction")?;
 
             // Review this commit
-            return crate::commit::real_review(&shell, &commit.git_commit_id, db)
+            return crate::commit::real_review(&repo, &commit.git_commit_id, db)
                 .await
                 .context("failed to review commit");
         }
@@ -491,26 +474,17 @@ fn determine_merge_status_from_github(pr_info: &gh::PrInfo) -> MergeStatus {
 /// - Editor invocation fails
 #[allow(clippy::too_many_lines)] // yeah half these are just printlns
 pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     let tx = db
         .transaction()
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        anyhow::bail!(
-            "Repository not found in database. Please run 'refresh' first to initialize it."
-        );
-    };
-
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?)
+    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
         .await
         .context("failed to query pull request")?
     else {
@@ -530,7 +504,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     };
 
     // Show PR info first
-    show_pr_info(&repo_record.repo_shell, &current_repo, &pr, &tip_commit).await?;
+    show_pr_info(&repo, &pr, &tip_commit).await?;
 
     loop {
         // Show menu
@@ -541,10 +515,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         println!("2a) View existing ACKs");
         println!("2b) Erase ACK");
         println!();
-        println!("3a) View diff (50-line context)");
-        println!("3b) View diff (3-line context)");
-        println!("3c) View diff (5000-line context)");
-        println!("3d) View diff (stat)");
+        println!("3x) View total diff (not implemented)");
         println!();
         println!("4) Cancel");
         print!("Choice (1a-4): ");
@@ -602,24 +573,12 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                     .context("failed to erase ACK")?;
                 println!("ACK erased successfully.");
             }
-            "3a" => {
-                show_diff(&shell, &tip_commit.git_commit_id, Some(50))?;
-            }
-            "3b" => {
-                show_diff(&shell, &tip_commit.git_commit_id, Some(3))?;
-            }
-            "3c" => {
-                show_diff(&shell, &tip_commit.git_commit_id, Some(5000))?;
-            }
-            "3d" => {
-                show_diff_stat(&shell, &tip_commit.git_commit_id)?;
-            }
             "4" => {
                 println!("Cancelled.");
                 break;
             }
             _ => {
-                println!("Invalid choice. Please enter 1a, 1b, 2a, 2b, 3a, 3b, 3c, 3d, or 4.");
+                println!("Invalid choice. Please enter 1a, 1b, 2a, 2b, or 4.");
             }
         }
     }
@@ -631,19 +590,18 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
 
 /// Show PR information (extracted for reuse)
 async fn show_pr_info(
-    repo_shell: &RepoShell,
-    current_repo: &repo::Repository,
+    repo: &Repository,
     pr: &PullRequest,
     tip_commit: &Commit,
 ) -> anyhow::Result<()> {
     // Get commit details from git
-    let commit_info = git::get_commit_info(repo_shell, &tip_commit.git_commit_id)
+    let commit_info = git::get_commit_info(&repo.repo_shell, &tip_commit.git_commit_id)
         .await
         .context("failed to get commit info from git")?;
 
     println!(
         "{} PR #{}: {}",
-        current_repo.project_name, pr.pr_number, pr.title
+        repo.name, pr.pr_number, pr.title
     );
     println!();
     println!(
@@ -822,35 +780,6 @@ async fn erase_ack(
     Ok(())
 }
 
-/// Show git diff with specified context
-fn show_diff(
-    shell: &Shell,
-    commit_hash: &git::CommitId,
-    context: Option<u32>,
-) -> anyhow::Result<()> {
-    if let Some(lines) = context {
-        let lines = lines.to_string();
-        cmd!(shell, "git show --unified={lines} {commit_hash}")
-            .run()
-            .context("failed to run git show")?;
-    } else {
-        cmd!(shell, "git show {commit_hash}")
-            .run()
-            .context("failed to run git show")?;
-    }
-
-    Ok(())
-}
-
-/// Show git diff stat
-fn show_diff_stat(shell: &Shell, commit_hash: &git::CommitId) -> anyhow::Result<()> {
-    cmd!(shell, "git show --stat {commit_hash}")
-        .run()
-        .context("failed to run git show --stat")?;
-
-    Ok(())
-}
-
 /// Show logs for a PR and its commits
 ///
 /// # Errors
@@ -866,26 +795,17 @@ pub async fn log(
     until: Option<&str>,
     db: &mut Db,
 ) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     let tx = db
         .transaction()
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        anyhow::bail!(
-            "Repository not found in database. Please run 'refresh' first to initialize it."
-        );
-    };
-
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo_record.id, pr_number.try_into()?)
+    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
         .await
         .context("failed to query pull request")?
     else {
@@ -934,19 +854,20 @@ pub async fn log(
 /// - Database transaction or operations fail
 /// - PR has no commits
 pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
-    let repo_shell = RepoShell::new(&current_repo.repo_root)
-        .context("failed to create shell in repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     // Fetch PR info from GitHub
-    let pr_info = gh::get_pr_info(&shell, pr_number).context("failed to fetch PR from GitHub")?;
+    let pr_info = gh::get_pr_info(&repo.repo_shell, pr_number)
+        .await
+        .context("failed to fetch PR from GitHub")?;
 
     // Fetch the head commit to ensure it's available locally
-    git::fetch_commit(&repo_shell, &pr_info.head_commit)
+    git::fetch_commit(&repo.repo_shell, &pr_info.head_commit)
         .await.context("failed to fetch head commit")?;
 
-    refresh(shell, &current_repo, &pr_info, db).await
+    refresh(&repo, &pr_info, db).await
 }
 
 /// Refresh a PR from GitHub
@@ -961,8 +882,7 @@ pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<(
 /// - PR has no commits
 #[allow(clippy::too_many_lines)] // unsure about this. seems reasonable enough
 pub async fn refresh(
-    shell: Shell,
-    current_repo: &repo::Repository,
+    repo: &Repository,
     pr_info: &gh::PrInfo,
     db: &mut Db,
 ) -> anyhow::Result<()> {
@@ -971,25 +891,6 @@ pub async fn refresh(
         .transaction()
         .await
         .context("failed to start database transaction")?;
-
-    // Find or create the repository record
-    let repo = if let Some(repo) =
-        Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-            .await
-            .context("failed to query repository")?
-    {
-        repo
-    } else {
-        // Create repository record
-        let new_repo = NewRepository {
-            name: current_repo.project_name.clone(),
-            path: current_repo.repo_root.to_str().unwrap().to_string(),
-            nixfile_path: "default.nix".to_string(), // Default, can be configured later
-        };
-        Repository::create(&tx, new_repo)
-            .await
-            .context("failed to create repository record")?
-    };
 
     // Create or find commits for all commits in the PR
     let mut commit_records = Vec::new();
@@ -1151,7 +1052,8 @@ pub async fn refresh(
             .any(|comment| comment.body.trim() == rebase_comment);
 
         if !comment_exists {
-            gh::post_pr_comment(&shell, pr_info.number, &rebase_comment)
+            gh::post_pr_comment(&repo.repo_shell, pr_info.number, &rebase_comment)
+                .await
                 .context("failed to post rebase comment")?;
 
             println!("Posted rebase comment: {}", rebase_comment);

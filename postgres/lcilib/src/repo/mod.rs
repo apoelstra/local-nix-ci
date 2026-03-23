@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use core::marker::PhantomData;
-use std::path::PathBuf;
+use crate::db::Db;
+use crate::db::models::{self, NewRepository, Repository};
 use xshell::{Shell, cmd};
 
 #[derive(Debug, Clone)]
@@ -10,16 +10,11 @@ pub enum Upstream {
     GiteaBitcoinNinja,
 }
 
-#[derive(Debug, Clone)]
-pub struct Repository {
-    pub project_name: String,
-    pub repo_root: PathBuf,
-    pub upstream: Upstream,
-    _marker: PhantomData<()>,
-}
-
 #[derive(Debug)]
 pub enum RepoError {
+    CreateShell(xshell::Error),
+    DatabaseTransaction(tokio_postgres::Error),
+    Database(models::RepositoryError),
     GitCommandFailed(xshell::Error),
     UnknownProjectName,
     UnknownUpstream,
@@ -28,7 +23,10 @@ pub enum RepoError {
 impl std::fmt::Display for RepoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GitCommandFailed(e) => write!(f, "Failed to get repository root: {e}"),
+            Self::CreateShell(..) => write!(f, "failed to create shell"),
+            Self::GitCommandFailed(..) => write!(f, "failed to get repository root"),
+            Self::DatabaseTransaction(..) => write!(f, "database transaction error"),
+            Self::Database(..) => write!(f, "database error"),
             Self::UnknownProjectName => {
                 write!(f, "Failed to get project name from upstream/origin URLs")
             }
@@ -40,7 +38,19 @@ impl std::fmt::Display for RepoError {
     }
 }
 
-impl std::error::Error for RepoError {}
+impl std::error::Error for RepoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::CreateShell(ref e) => Some(e),
+            Self::GitCommandFailed(ref e) => Some(e),
+            Self::DatabaseTransaction(ref e) => Some(e),
+            Self::Database(ref e) => Some(e),
+            Self::UnknownProjectName => None,
+            Self::UnknownUpstream => None,
+        }
+        
+    }
+}
 
 fn parse_github_url(url: &str) -> Option<String> {
     for prefix in [
@@ -67,39 +77,58 @@ fn parse_github_url(url: &str) -> Option<String> {
 /// Returns an error if the git command to get the repository root fails, if no project name
 /// can be determined from the origin/upstream remote URLs, or if the upstream type cannot
 /// be determined from the remote URLs.
-pub fn current_repo(sh: &Shell) -> Result<Repository, RepoError> {
+pub async fn current_repo(db: &mut Db) -> Result<Repository, RepoError> {
+    let sh = Shell::new()
+        .map_err(RepoError::CreateShell)?;
+
     // Get repository root using git
-    let repo_root_str = cmd!(sh, "git rev-parse --show-toplevel")
+    let repo_root = cmd!(sh, "git rev-parse --show-toplevel")
         .read()
         .map_err(RepoError::GitCommandFailed)?;
+    let repo_root = repo_root.trim();
 
-    let repo_root = PathBuf::from(repo_root_str.trim());
+    // Find or create the repository record
+    let tx = db
+        .transaction()
+        .await
+        .map_err(RepoError::DatabaseTransaction)?;
 
-    let mut project_name = None;
-    let mut upstream = None;
-    // Try to get project name from git remotes first
-    for remote in ["origin", "upstream"] {
-        if let Ok(origin_url) = cmd!(sh, "git remote get-url {remote}").read()
-            && let Some(project) = parse_github_url(origin_url.trim())
-        {
-            project_name = Some(project);
-            if origin_url.contains("github.com") {
-                upstream = Some(Upstream::Github);
+    let existing_model = Repository::find_by_path(&tx, repo_root)
+        .await
+        .map_err(RepoError::Database)?;
+    if let Some(model) = existing_model {
+        Ok(model)
+    } else {
+        let mut project_name = None;
+        let mut upstream = None;
+        // Try to get project name from git remotes first
+        for remote in ["origin", "upstream"] {
+            if let Ok(origin_url) = cmd!(sh, "git remote get-url {remote}").read()
+                && let Some(project) = parse_github_url(origin_url.trim())
+            {
+                project_name = Some(project);
+                if origin_url.contains("github.com") {
+                    upstream = Some(Upstream::Github);
+                }
+                if origin_url.contains("gitea.bitcoin.ninja") {
+                    upstream = Some(Upstream::GiteaBitcoinNinja);
+                }
+                break;
             }
-            if origin_url.contains("gitea.bitcoin.ninja") {
-                upstream = Some(Upstream::GiteaBitcoinNinja);
-            }
-            break;
         }
+
+        let project_name = project_name.ok_or(RepoError::UnknownProjectName)?;
+        // TODO we will want to store the upstream in the database so we can switch on github/gitea.
+        let _upstream = upstream.ok_or(RepoError::UnknownUpstream)?;
+
+        // Create repository record
+        let new_repo = NewRepository {
+            name: project_name,
+            path: repo_root.to_owned(),
+            nixfile_path: "default.nix".to_string(), // Default, can be configured later
+        };
+        Repository::create(&tx, new_repo)
+            .await
+            .map_err(RepoError::Database)
     }
-
-    let project_name = project_name.ok_or(RepoError::UnknownProjectName)?;
-    let upstream = upstream.ok_or(RepoError::UnknownUpstream)?;
-
-    Ok(Repository {
-        project_name,
-        repo_root,
-        upstream,
-        _marker: PhantomData,
-    })
 }

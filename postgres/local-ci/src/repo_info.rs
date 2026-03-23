@@ -15,37 +15,29 @@ use xshell::{Shell, cmd};
 /// - Database transaction fails
 /// - Repository lookup fails
 pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
-    let shell = Shell::new()?;
-    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
 
     let tx = db
         .transaction()
         .await
         .context("failed to start database transaction")?;
 
-    // Find the repository in the database
-    let Some(repo_record) = Repository::find_by_path(&tx, current_repo.repo_root.to_str().unwrap())
-        .await
-        .context("failed to query repository")?
-    else {
-        println!("Repository not found in database. Please run 'refresh' first to initialize it.");
-        return Ok(());
-    };
-
-    println!("Repository: {} ({})", repo_record.name, repo_record.path);
-    println!("Nixfile: {}", repo_record.nixfile_path);
-    println!("Created: {}", repo_record.created_at);
+    println!("Repository: {} ({})", repo.name, repo.path);
+    println!("Nixfile: {}", repo.nixfile_path);
+    println!("Created: {}", repo.created_at);
     println!();
 
     // Get all PRs for this repository
-    let all_prs = repo_record
+    let all_prs = repo
         .id
         .get_current_pull_requests(&tx)
         .await
         .context("failed to get PRs for repository")?;
 
     // Get all stacks for this repository
-    let all_stacks = repo_record
+    let all_stacks = repo
         .id
         .get_stacks(&tx)
         .await

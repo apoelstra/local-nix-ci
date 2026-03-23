@@ -10,11 +10,11 @@ use lcilib::db::models::{
     CiStatus, Commit, CommitToTest, DbAckId, DbCommitId, DbPullRequestId, DbRepositoryId, DbStackId, PullRequest,
     NewCommit, NewStack, Repository, ReviewStatus, Stack, UpdateCommit,
 };
+use lcilib::{gh, git, jj};
 use lcilib::jj::is_commit_gpg_signed;
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::{task, time};
-use xshell::{Shell, cmd};
+use tokio::time;
 
 pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     log::info(format_args!("Starting local-ci daemon..."));
@@ -136,13 +136,12 @@ async fn check_pending_acks(
                 a.reviewer_name,
                 a.message,
                 a.status as ack_status,
+                pr.repository_id
                 pr.pr_number,
                 pr.review_status as pr_review_status,
                 pr.author_login,
-                r.path as repo_path
             FROM acks a
             JOIN pull_requests pr ON a.pull_request_id = pr.id
-            JOIN repositories r ON pr.repository_id = r.id
             WHERE a.status IN ('pending', 'failed')
             AND pr.review_status = 'approved'
             ORDER BY a.created_at ASC
@@ -160,8 +159,12 @@ async fn check_pending_acks(
         let pr_number: i32 = row.get("pr_number");
         let reviewer_name: String = row.get("reviewer_name");
         let message: String = row.get("message");
-        let repo_path: String = row.get("repo_path");
+        let repo_id: DbRepositoryId = row.get("repository_id");
         let author_login: String = row.get("author_login");
+
+        let repo = Repository::get_by_id(&tx, repo_id)
+            .await
+            .context("looking up repository for ACK")?;
 
         // Check if all non-merge commits in this PR are approved and passed CI
         let commit_check_rows = tx
@@ -203,15 +206,12 @@ async fn check_pending_acks(
             }
 
             // All conditions met, post the ACK
-            let shell = Shell::new().context("creating shell")?;
-            shell.change_dir(&repo_path);
-
             let post_result = if author_login == "apoelstra" {
                 // Post comment instead of approval for own PRs
-                lcilib::gh::post_pr_comment(&shell, pr_number, &message)
+                gh::post_pr_comment(&repo.repo_shell, pr_number, &message).await
             } else {
                 // Post approval review
-                lcilib::gh::post_pr_approval(&shell, pr_number, &message)
+                gh::post_pr_approval(&repo.repo_shell, pr_number, &message).await
             };
 
             match post_result {
@@ -391,10 +391,6 @@ async fn try_extend_stack(
         .with_context(|| format!("failed to find tip commit for PR {}", pr.pr_number))?
         .expect("commit is in database");
 
-    // Try to create merge on top of stack
-    let shell = Shell::new().context("creating shell")?;
-    shell.change_dir(&repo.path);
-
     // The parent for the merge is either the last commit in the stack or the target branch
     let stack_tip = if let Some(last_commit) = commits.last() {
         last_commit.jj_change_id.as_str()
@@ -405,7 +401,7 @@ async fn try_extend_stack(
     // Create merge commit: merge PR tip into stack tip.
     // TODO should compute the real merge description rather than using "<placeholder>". This
     //  is okay for now since the db maintenance loop will get it..
-    match lcilib::jj::create_merge_commit(
+    match jj::create_merge_commit(
         &repo.repo_shell,
         tip_commit.git_commit_id.as_str(),
         stack_tip,
@@ -414,7 +410,7 @@ async fn try_extend_stack(
         Ok(jj_change_id) => {
             // Get the git commit ID for the new merge
             let git_commit_id =
-                lcilib::jj::get_current_git_commit_for_change_id(&repo.repo_shell, &jj_change_id)
+                jj::get_current_git_commit_for_change_id(&repo.repo_shell, &jj_change_id)
                     .await
                     .context("getting git commit ID for stack merge")?;
 
@@ -584,16 +580,13 @@ async fn process_stack_updates(
         return Ok(false);
     }
 
-    let shell = Shell::new().context("creating shell")?;
-    shell.change_dir(&repo.path);
-
     // Check if first commit's first parent matches target
     let first_commit = &stack_commits[0];
-    let parents = lcilib::git::list_parents(&repo.repo_shell, &first_commit.git_commit_id)
+    let parents = git::list_parents(&repo.repo_shell, &first_commit.git_commit_id)
         .await
         .context("getting commit parents")?;
 
-    let target_commit = lcilib::git::resolve_ref(&repo.repo_shell, &stack.target_branch)
+    let target_commit = git::resolve_ref(&repo.repo_shell, &stack.target_branch)
         .await
         .context("resolving target branch")?;
 
@@ -647,10 +640,10 @@ async fn process_stack_updates(
     for commit in &stack_commits {
         let pr = commit.id.get_pull_request(&tx).await?;
         // Update description (dummy implementation for now)
-        let description = lcilib::git::compute_merge_description(&tx, &pr, commit).await
+        let description = git::compute_merge_description(&tx, &pr, commit).await
             .with_context(|| format!("computing merge description for merge of PR {} (commit {})", pr.pr_number, commit.git_commit_id))?;
         if let Err(e) =
-            lcilib::jj::update_commit_description(&repo.repo_shell, &commit.jj_change_id, &description)
+            jj::update_commit_description(&repo.repo_shell, &commit.jj_change_id, &description)
             .await
         {
             log::warn(&e, format_args!(
@@ -663,15 +656,15 @@ async fn process_stack_updates(
         // which should never happen, but okay, let's check) or just an accounting change (update
         // description or sign, which may happen externally).
         let mut stack_poisoned = false;
-        match lcilib::jj::get_current_git_commit_for_change_id(&repo.repo_shell, &commit.jj_change_id).await {
+        match jj::get_current_git_commit_for_change_id(&repo.repo_shell, &commit.jj_change_id).await {
             Ok(current_git_id) => {
                 if current_git_id != commit.git_commit_id {
                     // Get tree hash and parents to check what changed
                     let current_tree =
-                        lcilib::git::resolve_ref(&repo.repo_shell, format!("{}^{{tree}}", current_git_id))
+                        git::resolve_ref(&repo.repo_shell, format!("{}^{{tree}}", current_git_id))
                             .await
                             .context("getting current tree hash")?;
-                    let original_tree = lcilib::git::resolve_ref(
+                    let original_tree = git::resolve_ref(
                         &repo.repo_shell,
                         format!("{}^{{tree}}", commit.git_commit_id),
                     )
@@ -690,7 +683,7 @@ async fn process_stack_updates(
                         // Check for lost GPG signature
                         let was_signed = is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await?;
                         if was_signed {
-                            let is_signed = lcilib::jj::is_commit_gpg_signed(
+                            let is_signed = jj::is_commit_gpg_signed(
                                 &repo.repo_shell,
                                 &commit.jj_change_id,
                             ).await?;
@@ -812,92 +805,28 @@ async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
 }
 
 async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<()> {
-    struct Data {
-        current_repo: lcilib::repo::Repository,
-        pr_infos: Vec<lcilib::gh::PrInfo>,
-    }
-
     // Use spawn_blocking for the GitHub API calls and shell operations
-    let repo_path = repo.path.clone();
-    let repo_name = repo.name.clone();
     let last_synced = repo.last_synced_at;
 
-    let data = task::spawn_blocking(move || -> Option<Data> {
-        // Check if repository path exists
-        let shell = Shell::new().ok()?; // just eat shell creation error; this basically cannot happen
-        shell.change_dir(&repo_path);
+    // Do a 'git fetch'
+    git::fetch(&repo.repo_shell)
+        .await
+        .context("failed git or jj fetch")?;
 
-        // Fetch latest changes from git remote
-        if let Err(e) = cmd!(shell, "git fetch origin")
-            .quiet()
-            .ignore_stdout()
-            .ignore_stderr()
-            .run()
-        {
-            log::warn(&e, format_args!(
-                "Failed to run 'git fetch origin' in repository {}",
-                repo_name
-            ));
-        }
+    // Get updated PRs from GitHub
+    let pr_infos = gh::list_updated_prs(&repo.repo_shell, last_synced)
+        .await
+        .context("failed sync of recent activity via 'gh' utility")?;
 
-        // Fetch changes into jj
-        if let Err(e) = cmd!(shell, "jj git fetch")
-            .quiet()
-            .ignore_stdout()
-            .ignore_stderr()
-            .run()
-        {
-            log::warn(&e, format_args!(
-                "Failed to run 'jj git fetch' in repository {}",
-                repo_name,
-            ));
-        }
-
-        // Get updated PRs from GitHub
-        let pr_infos = match lcilib::gh::list_updated_prs(&shell, last_synced) {
-            Ok(prs) => prs,
-            Err(e) => {
-                log::warn(&e, format_args!(
-                    "Warning: Failed to get updated PRs for repository {}",
-                    repo_path,
-                ));
-                return None;
-            }
-        };
-
-        let current_repo = match lcilib::repo::current_repo(&shell) {
-            Ok(repo) => repo,
-            Err(e) => {
-                log::warn(&e, format_args!(
-                    "Warning: failed to get current repo for repository path {}",
-                    repo_path
-                ));
-                return None;
-            }
-        };
-
-        Some(Data {
-            current_repo,
-            pr_infos,
-        })
-    })
-    .await
-    .context("spawning blocking task for GitHub API calls")?;
-
-    let Some(data) = data else { return Ok(()) };
-    if !data.pr_infos.is_empty() {
+    if !pr_infos.is_empty() {
         log::info(format_args!(
             "Found {} updated PRs for repository {}",
-            data.pr_infos.len(),
+            pr_infos.len(),
             repo.name
         ));
     }
-    for pr_info in &data.pr_infos {
-        // A shell cannot live across await points so we have to recreate it on every iteration
-        // and hand ownership to the refresh function.
-        let shell = Shell::new().expect("this just worked above..");
-        shell.change_dir(&repo.path);
-        if let Err(e) = crate::pr::refresh(shell, &data.current_repo, pr_info, db)
+    for pr_info in &pr_infos {
+        if let Err(e) = crate::pr::refresh(repo, pr_info, db)
             .await
             .with_context(|| format!("failed to refresh PR #{}", pr_info.number))
         {
@@ -913,16 +842,14 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         }
     }
 
-    // Update last synced time
+    // Update last synced time -- FIXME we should compute the time before invoking gh.
     let tx = db
         .transaction()
         .await
         .context("starting transaction to update last synced time")?;
-
     repo.update_last_synced(&tx)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to update last synced time: {}", e))?;
-
     tx.commit().await.context("committing transaction")?;
 
     Ok(())
