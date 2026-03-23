@@ -589,10 +589,12 @@ async fn process_stack_updates(
 
     // Check if first commit's first parent matches target
     let first_commit = &stack_commits[0];
-    let parents = lcilib::git::list_parents(&shell, &first_commit.git_commit_id)
+    let parents = lcilib::git::list_parents(&repo.repo_shell, &first_commit.git_commit_id)
+        .await
         .context("getting commit parents")?;
 
-    let target_commit = lcilib::git::resolve_ref(&shell, &stack.target_branch)
+    let target_commit = lcilib::git::resolve_ref(&repo.repo_shell, &stack.target_branch)
+        .await
         .context("resolving target branch")?;
 
     let needs_rebase = parents.is_empty() || parents[0].to_string() != target_commit.to_string();
@@ -666,12 +668,14 @@ async fn process_stack_updates(
                 if current_git_id != commit.git_commit_id {
                     // Get tree hash and parents to check what changed
                     let current_tree =
-                        lcilib::git::resolve_ref(&shell, format!("{}^{{tree}}", current_git_id))
+                        lcilib::git::resolve_ref(&repo.repo_shell, format!("{}^{{tree}}", current_git_id))
+                            .await
                             .context("getting current tree hash")?;
                     let original_tree = lcilib::git::resolve_ref(
-                        &shell,
+                        &repo.repo_shell,
                         format!("{}^{{tree}}", commit.git_commit_id),
                     )
+                    .await
                     .context("getting original tree hash")?;
 
                     if current_tree == original_tree {

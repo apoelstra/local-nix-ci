@@ -226,7 +226,7 @@ pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             tx.commit().await.context("failed to commit transaction")?;
 
             // Review this commit
-            return crate::commit::review(&shell, &commit.git_commit_id, db)
+            return crate::commit::real_review(&shell, &commit.git_commit_id, db)
                 .await
                 .context("failed to review commit");
         }

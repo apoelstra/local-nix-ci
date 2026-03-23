@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use xshell::{Shell, cmd};
 
+use crate::db::models::RepoShell;
+
 mod merge_description;
 
 pub use merge_description::{MergeDescriptionError, compute_merge_description};
@@ -86,6 +88,7 @@ impl CommitId {
 #[derive(Debug)]
 pub enum Error {
     Shell(xshell::Error),
+    ShellLock(tokio::task::JoinError),
     CommitParse(String, bitcoin_hashes::hex::HexToArrayError),
     CommitNotFound(String),
 }
@@ -94,6 +97,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Shell(_) => f.write_str("failed to invoke git"),
+            Self::ShellLock(_) => f.write_str("panic while holding shell lock"),
             Self::CommitParse(s, _) => write!(f, "failed to parse {s} as git commit"),
             Self::CommitNotFound(commit) => write!(
                 f,
@@ -107,6 +111,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Shell(e) => Some(e),
+            Self::ShellLock(e) => Some(e),
             Self::CommitParse(_, e) => Some(e),
             Self::CommitNotFound(..) => None,
         }
@@ -119,10 +124,13 @@ impl std::error::Error for Error {
 ///
 /// Returns an error if the git command fails to execute or if any of the parent commit IDs
 /// cannot be parsed as valid git commits.
-pub fn list_parents<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<Vec<CommitId>, Error> {
-    let output = cmd!(shell, "git rev-list --parents -n 1 {commit}")
-        .read()
-        .map_err(Error::Shell)?;
+pub async fn list_parents<C: AsRef<OsStr> + Sync>(shell: &RepoShell, commit: C) -> Result<Vec<CommitId>, Error> {
+    let output = shell.with_lock_blocking(|shell| {
+        cmd!(shell, "git rev-list --parents -n 1 {commit}")
+            .read()
+            .map_err(Error::Shell)
+    }).await
+    .map_err(Error::ShellLock)??;
 
     output
         .split_whitespace()
@@ -137,10 +145,13 @@ pub fn list_parents<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<Vec<Com
 ///
 /// Returns an error if the git command fails to execute or if the resolved commit ID
 /// cannot be parsed as a valid git commit.
-pub fn resolve_ref<R: AsRef<OsStr>>(shell: &Shell, git_ref: R) -> Result<CommitId, Error> {
-    let output = cmd!(shell, "git rev-parse {git_ref}")
-        .read()
-        .map_err(Error::Shell)?;
+pub async fn resolve_ref<R: AsRef<OsStr> + Sync>(shell: &RepoShell, git_ref: R) -> Result<CommitId, Error> {
+    let output = shell.with_lock_blocking(|shell| {
+        cmd!(shell, "git rev-parse {git_ref}")
+            .read()
+            .map_err(Error::Shell)
+    }).await
+    .map_err(Error::ShellLock)??;
 
     CommitId::from_str(output.trim())
 }
@@ -207,26 +218,25 @@ pub fn fetch_commit<C: AsRef<OsStr>>(shell: &Shell, commit: C) -> Result<(), Err
 ///
 /// Returns an error if the fetch operation fails for both origin and upstream remotes,
 /// or if the resolved commit ID cannot be parsed as a valid git commit.
-pub fn fetch_resolve_ref(shell: &Shell, remote_ref: &str) -> Result<CommitId, Error> {
-    cmd!(shell, "git fetch origin {remote_ref}")
-        .quiet()
-        .ignore_stderr()
-        .run()
-        .map_err(Error::Shell)
-        .and_then(|()| resolve_ref(shell, format!("origin/{remote_ref}")))
-        .or_else(|e| {
-            // Attempt 'upstream' on error, but failing that just return the error we got for 'origin'
-            if cmd!(shell, "git fetch upstream {remote_ref}")
-                .quiet()
-                .ignore_stdout()
-                .run()
-                .is_ok()
-                && let Ok(r) = resolve_ref(shell, format!("upstream/{remote_ref}"))
-            {
-                return Ok(r);
-            }
-            Err(e)
-        })
+pub async fn fetch_resolve_ref(shell: &RepoShell, remote_ref: &str) -> Result<CommitId, Error> {
+    let output = shell.with_lock_blocking(|shell| {
+        cmd!(shell, "git fetch origin {remote_ref}")
+            .quiet()
+            .ignore_stderr()
+            .run()
+            .map_err(Error::Shell)?;
+        if let Ok(output) = cmd!(shell, "git rev-parse origin/{remote_ref}")
+            .read()
+            .map_err(Error::Shell) {
+            return Ok(output)
+        }
+        cmd!(shell, "git rev-parse upstream/{remote_ref}")
+            .read()
+            .map_err(Error::Shell)
+    }).await
+    .map_err(Error::ShellLock)??;
+
+    CommitId::from_str(output.trim())
 }
 
 /// Get detailed information about a commit

@@ -7,7 +7,7 @@ use lcilib::{
         EntityType, Log,
         models::{
             CiStatus, Commit, CommitType, NewCommit, NewRepository, PrCommit, PullRequest,
-            Repository, ReviewStatus, UpdateCommit,
+            Repository, ReviewStatus, UpdateCommit, RepoShell,
         },
     },
     git, jj, repo,
@@ -30,9 +30,13 @@ use xshell::{Shell, cmd};
 pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
     let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo_shell = RepoShell::new(&current_repo.repo_root)
+        .context("failed to create shell in repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&shell, commit_ref).with_context(|| {
+    let commit_hash = git::resolve_ref(&repo_shell, commit_ref)
+        .await
+        .with_context(|| {
         format!(
             "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
             commit_ref
@@ -115,8 +119,11 @@ fn determine_next_action_for_commit(commit: &Commit) -> String {
 /// - Database transaction fails
 /// - Repository or commit lookup fails
 /// - No next action available
-pub async fn next(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> anyhow::Result<()> {
-    let current_repo = repo::current_repo(shell).context("failed to get current repository")?;
+pub async fn next(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
+    let shell = Shell::new()?;
+    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo_shell = RepoShell::new(&current_repo.repo_root)
+        .context("failed to create shell in repository")?;
 
     let tx = db
         .transaction()
@@ -133,8 +140,18 @@ pub async fn next(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> an
         );
     };
 
+    // Resolve the reference to a commit hash
+    let commit_hash = git::resolve_ref(&repo_shell, commit_ref)
+        .await
+        .with_context(|| {
+        format!(
+            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+            commit_ref
+        )
+    })?;
+
     // Look up the commit in the database
-    let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, commit_hash)
+    let Some(commit) = Commit::find_by_git_id(&tx, repo_record.id, &commit_hash)
         .await
         .context("failed to query commit")?
     else {
@@ -151,7 +168,7 @@ pub async fn next(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> an
         tx.commit().await.context("failed to commit transaction")?;
 
         // Review this commit
-        return review(shell, commit_hash, db)
+        return real_review(&shell, &commit_hash, db)
             .await
             .context("failed to review commit");
     }
@@ -173,7 +190,26 @@ pub async fn next(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> an
 /// - Database transaction fails
 /// - Repository or commit lookup fails
 /// - Editor invocation fails
-pub async fn review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> anyhow::Result<()> {
+pub async fn review(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
+    let shell = Shell::new()?;
+    let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo_shell = RepoShell::new(&current_repo.repo_root)
+        .context("failed to create shell in repository")?;
+
+    // Resolve the reference to a commit hash
+    let commit_hash = git::resolve_ref(&repo_shell, commit_ref)
+        .await
+        .with_context(|| {
+        format!(
+            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+            commit_ref
+        )
+    })?;
+
+    real_review(&shell, &commit_hash, db).await
+}
+
+pub async fn real_review(shell: &Shell, commit_hash: &git::CommitId, db: &mut Db) -> anyhow::Result<()> {
     let current_repo = repo::current_repo(shell).context("failed to get current repository")?;
 
     let tx = db
@@ -486,9 +522,11 @@ pub async fn log(
 ) -> anyhow::Result<()> {
     let shell = Shell::new()?;
     let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo_shell = RepoShell::new(&current_repo.repo_root)
+        .context("failed to create shell in repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&shell, commit_ref).with_context(|| {
+    let commit_hash = git::resolve_ref(&repo_shell, commit_ref).await.with_context(|| {
         format!(
             "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
             commit_ref
@@ -553,9 +591,11 @@ pub async fn log(
 pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     let shell = Shell::new()?;
     let current_repo = repo::current_repo(&shell).context("failed to get current repository")?;
+    let repo_shell = RepoShell::new(&current_repo.repo_root)
+        .context("failed to create shell in repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&shell, commit_ref).with_context(|| {
+    let commit_hash = git::resolve_ref(&repo_shell, commit_ref).await.with_context(|| {
         format!(
             "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
             commit_ref

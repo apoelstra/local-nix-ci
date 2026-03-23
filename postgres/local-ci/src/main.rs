@@ -8,8 +8,7 @@ mod repo_info;
 
 use anyhow::Context as _;
 use args::{Action, Target};
-use lcilib::{Db, git};
-use xshell::Shell;
+use lcilib::Db;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -65,11 +64,7 @@ async fn main() -> anyhow::Result<()> {
             .context("getting commit logs")?;
         }
         (Action::Review, Target::Commit(commit_ref)) => {
-            let shell = Shell::new()?;
-            let commit_hash = git::resolve_ref(&shell, &commit_ref)
-                .with_context(|| format!("failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.", commit_ref))?;
-
-            commit::review(&shell, &commit_hash, &mut db)
+            commit::review(&commit_ref, &mut db)
                 .await
                 .context("reviewing commit")?;
         }
@@ -84,10 +79,7 @@ async fn main() -> anyhow::Result<()> {
                 .context("finding next action for PR")?;
         }
         (Action::Next, Target::Commit(commit_ref)) => {
-            let shell = Shell::new()?;
-            let commit_hash = git::resolve_ref(&shell, &commit_ref)
-                .with_context(|| format!("failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.", commit_ref))?;
-            commit::next(&shell, &commit_hash, &mut db)
+            commit::next(&commit_ref, &mut db)
                 .await
                 .context("finding next action for commit")?;
         }

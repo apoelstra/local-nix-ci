@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use core::ops;
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A shell which enforces exclusive access and which is constructed
@@ -22,7 +23,7 @@ impl RepoShell {
     /// Errors if `std::env::current_dir` fails, because
     /// `xshell::Shell::new` calls this, even though
     /// we don't actually need the current directory. :/
-    pub fn new(path: &str) -> Result<Self, xshell::Error> {
+    pub fn new(path: impl AsRef<Path>) -> Result<Self, xshell::Error> {
         let shell = xshell::Shell::new()?;
         shell .change_dir(path);
         Ok(Self {

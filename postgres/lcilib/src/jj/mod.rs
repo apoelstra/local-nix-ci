@@ -58,7 +58,7 @@ fn jj<'sh>(shell: &'sh RepoShellLock<'_>) -> Cmd<'sh> {
 ///
 /// Returns an error if the jj command fails to execute or if the output cannot be parsed
 /// to extract the change ID.
-async fn jj_new<P: AsRef<OsStr> + Send + Sync>(
+async fn jj_new<P: AsRef<OsStr> + Sync>(
     shell: &RepoShell,
     parents: &[P],
     description: Option<&str>,
