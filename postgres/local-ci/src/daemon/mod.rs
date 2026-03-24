@@ -8,7 +8,7 @@ mod util;
 use anyhow::Context as _;
 use lcilib::Db;
 use lcilib::db::models::{
-    Ack, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack, PullRequest, Repository, ReviewStatus, Stack, UpdateCommit
+    Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack, PullRequest, Repository, ReviewStatus, Stack, UpdateAck, UpdateCommit
 };
 use lcilib::{gh, git, jj};
 use lcilib::jj::is_commit_gpg_signed;
@@ -140,88 +140,65 @@ async fn check_pending_acks(
         let repo = Repository::get_by_id(&tx, pr.repository_id)
             .await
             .context("looking up repository for ACK")?;
-
-        // Check if all non-merge commits in this PR are approved and passed CI
-        let commit_check_rows = tx
-            .query(
-                r#"
-                SELECT COUNT(*) as total_commits,
-                       COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'passed' THEN 1 END) as ready_commits
-                FROM commits c
-                JOIN pr_commits pc ON c.id = pc.commit_id
-                WHERE pc.pull_request_id = $1
-                AND pc.is_current = true
-                AND pc.commit_type != 'merge'
-                "#,
-                &[&ack.pull_request_id],
-            )
+        let counts = pr.get_commit_counts(&tx)
             .await
-            .context("checking commit status for PR")?;
+            .context("getting commit counts for PR")?;
 
-        if let Some(commit_row) = commit_check_rows.first() {
-            let total_commits: i64 = commit_row.get("total_commits");
-            let ready_commits: i64 = commit_row.get("ready_commits");
-
-            if total_commits == 0 {
-                log_limit.run(|| {
-                    log::info(format_args!(
-                        "ACK for PR #{} not posted: no non-merge commits found",
-                        pr.pr_number
-                    ));
-                });
-                continue;
-            }
-
-            if ready_commits != total_commits {
-                log_limit.run(|| log::info(format_args!(
-                    "ACK for PR #{} not posted: {}/{} non-merge commits are approved and passed CI",
-                    pr.pr_number, ready_commits, total_commits
-                )));
-                continue;
-            }
-
-            // All conditions met, post the ACK
-            let post_result = if pr.author_login == "apoelstra" {
-                // Post comment instead of approval for own PRs
-                gh::post_pr_comment(&repo.repo_shell, pr.pr_number, &ack.message).await
-            } else {
-                // Post approval review
-                gh::post_pr_approval(&repo.repo_shell, pr.pr_number, &ack.message).await
-            };
-
-            match post_result {
-                Ok(()) => {
-                    // Update ACK status to 'posted'
-                    tx.execute(
-                        "UPDATE acks SET status = 'posted' WHERE id = $1",
-                        &[&ack.id],
-                    )
-                    .await
-                    .context("updating ACK status to posted")?;
-
-                    log::info(format_args!(
-                        "Posted ACK for PR #{} from reviewer {}",
-                        pr.pr_number, ack.reviewer_name
-                    ));
-                    work_done = true;
-                }
-                Err(e) => {
-                    log::warn(&e,
-                        format_args!(
-                        "Failed to post ACK for PR #{} from reviewer {}",
-                        pr.pr_number, ack.reviewer_name
-                    ));
-
-                    // Update ACK status to 'failed'
-                    tx.execute(
-                        "UPDATE acks SET status = 'failed' WHERE id = $1",
-                        &[&ack.id],
-                    )
-                    .await
-                    .context("updating ACK status to failed")?;
-                }
-            }
+        if counts.total == 0 {
+            log_limit.run(|| {
+                log::info(format_args!(
+                    "ACK for PR #{} not posted: no non-merge commits found",
+                    pr.pr_number
+                ));
+            });
+            continue;
         }
+
+        if counts.ready != counts.total {
+            log_limit.run(|| log::info(format_args!(
+                "PR #{} approved ({} commits; {} approved, {} passed).",
+                pr.pr_number, counts.total, counts.approved, counts.ready,
+            )));
+            continue;
+        }
+
+        // All conditions met, post the ACK
+        let post_result = if pr.author_login == "apoelstra" {
+            // Post comment instead of approval for own PRs
+            gh::post_pr_comment(&repo.repo_shell, pr.pr_number, &ack.message).await
+        } else {
+            // Post approval review
+            gh::post_pr_approval(&repo.repo_shell, pr.pr_number, &ack.message).await
+        };
+
+        let new_status = match post_result {
+            Ok(()) => AckStatus::Posted,
+            Err(e) => {
+                log::warn(&e,
+                    format_args!(
+                    "Failed to post ACK for PR #{} from reviewer {}",
+                    pr.pr_number, ack.reviewer_name
+                ));
+                AckStatus::Failed
+            },
+        };
+
+        // Update ACK status to 'posted'
+        let update = UpdateAck {
+            status: Some(new_status),
+            ..Default::default()
+        };
+        ack.update(&tx, &update)
+            .await
+            .context("failed to update ACK to 'posted' in database")?;
+
+        if new_status == AckStatus::Posted {
+            log::info(format_args!(
+                "Posted ACK for PR #{} from reviewer {}",
+                pr.pr_number, ack.reviewer_name
+            ));
+        }
+        work_done = true;
     }
 
     tx.commit().await.context("committing transaction")?;

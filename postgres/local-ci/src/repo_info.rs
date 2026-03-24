@@ -47,7 +47,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
     let mut all_commits = vec![];
     // ...all PR commits
     for pr in &all_prs {
-        let commits = pr.id.get_current_non_merge_commits(&tx)
+        let commits = pr.get_current_non_merge_commits(&tx)
             .await
             .with_context(|| format!("getting commits for PR {}", pr.pr_number))?;
         all_commits.extend(commits);

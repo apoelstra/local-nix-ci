@@ -273,6 +273,7 @@ impl DbPullRequestId {
                     COUNT(*) as total,
                     COUNT(CASE WHEN c.review_status = 'approved' THEN 1 END) as approved,
                     COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'unstarted' AND c.should_run_ci = true THEN 1 END) as untested
+                    COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'passed' THEN 1 END) as ready
                 FROM commits c
                 JOIN pr_commits pc ON c.id = pc.commit_id
                 WHERE pc.pull_request_id = $1 AND pc.is_current = true
@@ -519,5 +520,12 @@ impl PullRequest {
         )
         .await?;
         ret
+    }
+}
+
+impl core::ops::Deref for PullRequest {
+    type Target = DbPullRequestId;
+    fn deref(&self) -> &Self::Target {
+        &self.id
     }
 }

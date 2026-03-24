@@ -160,6 +160,8 @@ pub struct CommitCounts {
     pub approved: usize,
     pub unapproved: usize,
     pub untested: usize,
+    /// Both 'approved' and CI passed.
+    pub ready: usize,
 }
 
 impl CommitCounts {
@@ -167,11 +169,13 @@ impl CommitCounts {
         let total = row.get::<_, Count>("total").into();
         let approved = row.get::<_, Count>("approved").into();
         let untested = row.get::<_, Count>("untested").into();
+        let ready = row.get::<_, Count>("ready").into();
         Self {
             total,
             approved,
             unapproved: total - approved,
             untested,
+            ready,
         }
     }
 }
