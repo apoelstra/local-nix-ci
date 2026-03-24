@@ -617,9 +617,20 @@ async fn process_stack_updates(
             ));
         }
 
+        if pr.review_status != ReviewStatus::Approved {
+            log::info(format_args!(
+                "{} PR {} no longer marked as approved; removing commit {} removing rest of stack",
+                stack.id,
+                commit.git_commit_id,
+                pr.pr_number,
+            ));
+            stack_poisoned = true;
+        }
+
         if commit.ci_status == CiStatus::Skipped {
             log::info(format_args!(
-                "commit {} has been marked 'skipped' (due update to PR {}); removing rest of stack",
+                "{} commit {} has been marked 'skipped' (due update to PR {}); removing rest of stack",
+                stack.id,
                 commit.git_commit_id,
                 pr.pr_number,
             ));

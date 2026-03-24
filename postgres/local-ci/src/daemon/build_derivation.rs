@@ -40,9 +40,6 @@ pub async fn process_commit_ci(
             return Ok(false);
         }
     };
-    dbg!(has_cargo_toml);
-    dbg!(&lockfiles);
-    time::sleep(Duration::from_secs(90)).await;
     assert!(!has_cargo_toml || !lockfiles.is_empty(), "should be an error check above");
 
     // Build cargo nixes JSON
