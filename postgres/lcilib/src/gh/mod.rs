@@ -57,12 +57,14 @@ pub async fn get_pr_info(shell: &RepoShell, pr_number: usize) -> Result<PrInfo, 
     }).await
     .map_err(Error::ShellLock)??;
 
-    // Check if the output indicates the PR was not found
-    if output.contains("could not resolve to a PullRequest") || output.contains("not found") {
+    // Attempt to parse the JSON. If the pull is not found, gh will spew non-JSON crap.
+    // So we have to try both ways.
+    let maybe_gh_output = output.contains("could not resolve to a PullRequest") || output.contains("not found");
+    let json_result = serde_json::from_str(&output).map_err(|e| Error::Json(output, e));
+    if json_result.is_err() && maybe_gh_output {
         return Err(Error::PrNotFound(pr_number));
     }
-
-    serde_json::from_str(&output).map_err(|e| Error::Json(output, e))
+    json_result
 }
 
 /// Lists PRs updated since the given timestamp using the `gh` CLI tool.
