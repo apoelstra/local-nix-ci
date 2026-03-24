@@ -210,6 +210,47 @@ impl Ack {
         }
     }
 
+    /// Retrieves the list of all ACKs which are 'pending' or 'failed' and
+    /// which apply to approved PRs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn find_all_pending_on_approved_prs(
+        tx: &Transaction<'_>,
+    ) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx.inner
+            .query(
+                r#"
+                SELECT
+                    a.id,
+                    a.pull_request_id,
+                    a.commit_id,
+                    a.reviewer_name,
+                    a.message,
+                    a.status,
+                    a.created_at,
+                    a.updated_at,
+                FROM acks a
+                JOIN pull_requests pr ON a.pull_request_id = pr.id
+                WHERE a.status IN ('pending', 'failed')
+                AND pr.review_status = 'approved'
+                ORDER BY a.created_at ASC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "find_all_pending_on_approved_prs",
+                entity_type: EntityType::Ack,
+                raw_id: None,
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
     /// Updates an ack.
     ///
     /// # Errors

@@ -8,8 +8,7 @@ mod util;
 use anyhow::Context as _;
 use lcilib::Db;
 use lcilib::db::models::{
-    CiStatus, Commit, CommitToTest, DbAckId, DbCommitId, DbPullRequestId, DbRepositoryId, DbStackId, PullRequest,
-    NewCommit, NewStack, Repository, ReviewStatus, Stack, UpdateCommit,
+    Ack, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack, PullRequest, Repository, ReviewStatus, Stack, UpdateCommit
 };
 use lcilib::{gh, git, jj};
 use lcilib::jj::is_commit_gpg_signed;
@@ -126,43 +125,19 @@ async fn check_pending_acks(
     let tx = db.transaction().await.context("starting transaction")?;
 
     // Query for ACKs that are pending or failed and might be ready to post
-    let rows = tx
-        .query(
-            r#"
-            SELECT
-                a.id as ack_id,
-                a.pull_request_id,
-                a.commit_id,
-                a.reviewer_name,
-                a.message,
-                a.status as ack_status,
-                pr.repository_id,
-                pr.pr_number,
-                pr.review_status as pr_review_status,
-                pr.author_login
-            FROM acks a
-            JOIN pull_requests pr ON a.pull_request_id = pr.id
-            WHERE a.status IN ('pending', 'failed')
-            AND pr.review_status = 'approved'
-            ORDER BY a.created_at ASC
-            "#,
-            &[],
-        )
+    let pending_acks = Ack::find_all_pending_on_approved_prs(&tx)
         .await
-        .context("querying for pending ACKs")?;
+        .context("getting list of pending ACKs")?;
 
     let mut work_done = false;
-
-    for row in rows {
-        let ack_id: DbAckId = row.get("ack_id");
-        let pull_request_id: DbPullRequestId = row.get("pull_request_id");
-        let pr_number: i32 = row.get("pr_number");
-        let reviewer_name: String = row.get("reviewer_name");
-        let message: String = row.get("message");
-        let repo_id: DbRepositoryId = row.get("repository_id");
-        let author_login: String = row.get("author_login");
-
-        let repo = Repository::get_by_id(&tx, repo_id)
+    for ack in pending_acks {
+        // Arguably we should get these via join, but at the scale we're
+        // talking (low single digits) there is no benefit to the
+        // extra complexity in the database abstraction layer.
+        let pr = PullRequest::get_by_id(&tx, ack.pull_request_id)
+            .await
+            .context("looking up PR for ACK")?;
+        let repo = Repository::get_by_id(&tx, pr.repository_id)
             .await
             .context("looking up repository for ACK")?;
 
@@ -178,7 +153,7 @@ async fn check_pending_acks(
                 AND pc.is_current = true
                 AND pc.commit_type != 'merge'
                 "#,
-                &[&pull_request_id],
+                &[&ack.pull_request_id],
             )
             .await
             .context("checking commit status for PR")?;
@@ -191,7 +166,7 @@ async fn check_pending_acks(
                 log_limit.run(|| {
                     log::info(format_args!(
                         "ACK for PR #{} not posted: no non-merge commits found",
-                        pr_number
+                        pr.pr_number
                     ));
                 });
                 continue;
@@ -200,18 +175,18 @@ async fn check_pending_acks(
             if ready_commits != total_commits {
                 log_limit.run(|| log::info(format_args!(
                     "ACK for PR #{} not posted: {}/{} non-merge commits are approved and passed CI",
-                    pr_number, ready_commits, total_commits
+                    pr.pr_number, ready_commits, total_commits
                 )));
                 continue;
             }
 
             // All conditions met, post the ACK
-            let post_result = if author_login == "apoelstra" {
+            let post_result = if pr.author_login == "apoelstra" {
                 // Post comment instead of approval for own PRs
-                gh::post_pr_comment(&repo.repo_shell, pr_number, &message).await
+                gh::post_pr_comment(&repo.repo_shell, pr.pr_number, &ack.message).await
             } else {
                 // Post approval review
-                gh::post_pr_approval(&repo.repo_shell, pr_number, &message).await
+                gh::post_pr_approval(&repo.repo_shell, pr.pr_number, &ack.message).await
             };
 
             match post_result {
@@ -219,28 +194,28 @@ async fn check_pending_acks(
                     // Update ACK status to 'posted'
                     tx.execute(
                         "UPDATE acks SET status = 'posted' WHERE id = $1",
-                        &[&ack_id],
+                        &[&ack.id],
                     )
                     .await
                     .context("updating ACK status to posted")?;
 
                     log::info(format_args!(
                         "Posted ACK for PR #{} from reviewer {}",
-                        pr_number, reviewer_name
+                        pr.pr_number, ack.reviewer_name
                     ));
                     work_done = true;
                 }
                 Err(e) => {
                     log::warn(&e,
                         format_args!(
-                        "Failed to post ACK for PR #{} from reviewer {}: {}",
-                        pr_number, reviewer_name, e
+                        "Failed to post ACK for PR #{} from reviewer {}",
+                        pr.pr_number, ack.reviewer_name
                     ));
 
                     // Update ACK status to 'failed'
                     tx.execute(
                         "UPDATE acks SET status = 'failed' WHERE id = $1",
-                        &[&ack_id],
+                        &[&ack.id],
                     )
                     .await
                     .context("updating ACK status to failed")?;

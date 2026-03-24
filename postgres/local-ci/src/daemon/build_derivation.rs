@@ -43,14 +43,14 @@ pub async fn process_commit_ci(
     assert!(!has_cargo_toml || !lockfiles.is_empty(), "should be an error check above");
 
     // Build cargo nixes JSON
-    let cargo_nixes = if !has_cargo_toml {
-        "{}".to_string()
-    } else {
+    let cargo_nixes = if has_cargo_toml {
         let entries: Vec<String> = lockfiles
             .iter()
             .map(|lockfile| format!("\"{}\" = null", lockfile))
             .collect();
         format!("{{ {}; }}", entries.join("; "))
+    } else {
+        "{}".to_string()
     };
 
     // Get derivation path with cancellation checking

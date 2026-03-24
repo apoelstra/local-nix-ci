@@ -631,31 +631,6 @@ impl PullRequest {
         Ok(pr)
     }
 
-    /// Find pull request by ID
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_by_id(
-        tx: &Transaction<'_>,
-        id: DbPullRequestId,
-    ) -> Result<Option<Self>, OperationError> {
-        let rows = tx
-            .inner
-            .query(
-                r#"
-                SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status,
-                       priority, ok_to_merge, required_reviewers, created_at, updated_at, synced_at
-                FROM pull_requests WHERE id = $1
-                "#,
-                &[&id],
-            )
-            .await
-            .map_err(|e| OperationError::with_context(e, "find_by_id", "PullRequest", &format!("id: {}", id)))?;
-
-        Ok(rows.first().map(Self::from_row))
-    }
-
     /// Find pull request by PR number
     ///
     /// # Errors
