@@ -35,18 +35,15 @@ async fn find_stacks(
     // Find all stacks grouped by DB and branch
     let mut branch_map = HashMap::<(DbRepositoryId, String), Vec<(f64, Stack, Vec<CommitToTest>)>>::new();
     for stack in Stack::get_all(tx).await? {
-        let (_, untested) = stack.get_commit_counts(tx).await?;
-        if untested > 0 {
-            let commits = stack.id.get_commits(tx).await?;
-            let priority = util::calculate_stack_priority(&commits, tx)
-                .await
-                .context("calculating stack priority")?;
+        let commits = stack.id.get_commits(tx).await?;
+        let priority = util::calculate_stack_priority(&commits, tx)
+            .await
+            .context("calculating stack priority")?;
 
-            branch_map
-                .entry((stack.repository_id, stack.target_branch.clone()))
-                .or_default()
-                .push((priority, stack, commits));
-        }
+        branch_map
+            .entry((stack.repository_id, stack.target_branch.clone()))
+            .or_default()
+            .push((priority, stack, commits));
     }
 
     let mut high_priority = vec![];
@@ -57,10 +54,19 @@ async fn find_stacks(
         stacks.sort_by(|a, b| a.0.total_cmp(&b.0));
         // pop() takes the highest one
         if let Some(stack) = stacks.pop() {
-            high_priority.push((stack.1, stack.2));
+            // We check the untested count right before pushing -- this means that
+            // the high-priority stack might be empty, if we're done testing all the
+            // high priority commits. Then we'll move on to PR commits.
+            let (_, untested) = stack.1.get_commit_counts(tx).await?;
+            if untested > 0 {
+                high_priority.push((stack.1, stack.2));
+            }
         }
         for stack in stacks {
-            low_priority.push((stack.1, stack.2));
+            let (_, untested) = stack.1.get_commit_counts(tx).await?;
+            if untested > 0 {
+                low_priority.push((stack.1, stack.2));
+            }
         }
     }
 
