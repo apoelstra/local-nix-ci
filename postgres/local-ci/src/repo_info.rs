@@ -167,6 +167,9 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         let revset = ids.join("|");
 
         println!("Stack {}: {} commits", stack.id, commits.len());
+        for commit in &commits {
+            println!("    {} / {} ({})", commit.git_commit_id.prefix8(), commit.jj_change_id.prefix8(), commit.ci_status);
+        }
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let shell = Shell::new()?;
             let _guard = shell.push_dir(&repo.path);

@@ -2,6 +2,7 @@
 
 mod ci_cycle;
 mod log;
+mod build_derivation;
 mod util;
 
 use anyhow::Context as _;

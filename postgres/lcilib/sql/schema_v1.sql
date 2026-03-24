@@ -248,10 +248,9 @@ BEGIN
         UPDATE commits SET ci_status = 'skipped' 
         WHERE ci_status NOT IN ('failed', 'passed')
         AND id IN (
-            SELECT sc.commit_id FROM stack_commits sc
-            JOIN stacks s ON sc.stack_id = s.id
-            JOIN pr_commits pc ON sc.commit_id = pc.commit_id
-            WHERE s.repository_id = NEW.repository_id
+            SELECT commit_id FROM pr_commits
+            WHERE pull_request_id = NEW.id
+            AND pc.is_current = true
             AND pc.commit_type = 'merge'
         );
     END IF;
