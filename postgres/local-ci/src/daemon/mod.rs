@@ -515,38 +515,9 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
 
     // Process each group
     for ((repo_id, _target_branch), mut stacks) in stacks_by_repo_target {
-        // Sort by priority (highest first)
-        let tx = db
-            .transaction()
-            .await
-            .context("starting stack priority transaction")?;
-        let repo = Repository::get_by_id(&tx, repo_id).await?;
-
-        let mut stack_priorities = Vec::new();
-        for stack in &stacks {
-            let commits = stack
-                .id
-                .get_commits(&tx)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
-            let priority = util::calculate_stack_priority(&commits, &tx)
-                .await
-                .context("calculating stack priority")?;
-            stack_priorities.push((stack, priority));
-        }
-        tx.commit()
-            .await
-            .context("committing stack priority transaction")?;
-
-        stack_priorities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        stacks = stack_priorities
-            .into_iter()
-            .map(|(s, _)| s.clone())
-            .collect();
-
         // Process each stack
         for stack in stacks {
-            if process_stack_updates(db, &stack, &repo).await
+            if process_stack_updates(db, &stack).await
                 .with_context(|| format!("processing updates for stack {}", stack.id))?
             {
                 work_done = true;
@@ -560,12 +531,15 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
 async fn process_stack_updates(
     db: &mut Db,
     stack: &Stack,
-    repo: &Repository,
 ) -> anyhow::Result<bool> {
     let tx = db
         .transaction()
         .await
         .context("starting stack update transaction")?;
+
+    let repo = Repository::get_by_id(&tx, stack.repository_id)
+        .await
+        .context("getting repo ID for stack")?;
 
     let stack_commits = stack
         .id
@@ -637,6 +611,7 @@ async fn process_stack_updates(
 
     // Update descriptions and check for commit changes
     let mut work_done = false;
+    let mut stack_poisoned = false;
     for commit in &stack_commits {
         let pr = commit.id.get_pull_request(&tx).await?;
         // Update description (dummy implementation for now)
@@ -652,81 +627,94 @@ async fn process_stack_updates(
             ));
         }
 
+        if commit.ci_status == CiStatus::Skipped {
+            log::info(format_args!(
+                "commit {} has been marked 'skipped' (due update to PR {}); removing rest of stack",
+                commit.git_commit_id,
+                pr.pr_number,
+            ));
+            stack_poisoned = true;
+        }
+        // FIXME what to do about ci_status Failed -- we actually want to mark the whole PR as 'needs change'
+        //  I guess to prevent the commit from being recreated? Or maybe it depends on the particular stack?
+        //  For now just ignore it.
+
         // Check if git commit ID has changed, and if so, if this was a "real" change (tree changed,
         // which should never happen, but okay, let's check) or just an accounting change (update
         // description or sign, which may happen externally).
-        let mut stack_poisoned = false;
-        match jj::get_current_git_commit_for_change_id(&repo.repo_shell, &commit.jj_change_id).await {
-            Ok(current_git_id) => {
-                if current_git_id != commit.git_commit_id {
-                    // Get tree hash and parents to check what changed
-                    let current_tree =
-                        git::resolve_ref(&repo.repo_shell, format!("{}^{{tree}}", current_git_id))
-                            .await
-                            .context("getting current tree hash")?;
-                    let original_tree = git::resolve_ref(
-                        &repo.repo_shell,
-                        format!("{}^{{tree}}", commit.git_commit_id),
-                    )
-                    .await
-                    .context("getting original tree hash")?;
-
-                    if current_tree == original_tree {
-                        // Tree unchanged -- just update the commit ID in place (lol)
-                        tx.execute(
-                            "UPDATE commits SET git_commit_id = $1 WHERE id = $2",
-                            &[&current_git_id, &commit.id],
+        if !stack_poisoned {
+            match jj::get_current_git_commit_for_change_id(&repo.repo_shell, &commit.jj_change_id).await {
+                Ok(current_git_id) => {
+                    if current_git_id != commit.git_commit_id {
+                        // Get tree hash and parents to check what changed
+                        let current_tree =
+                            git::resolve_ref(&repo.repo_shell, format!("{}^{{tree}}", current_git_id))
+                                .await
+                                .context("getting current tree hash")?;
+                        let original_tree = git::resolve_ref(
+                            &repo.repo_shell,
+                            format!("{}^{{tree}}", commit.git_commit_id),
                         )
                         .await
-                        .context("updating git commit ID")?;
+                        .context("getting original tree hash")?;
 
-                        // Check for lost GPG signature
-                        let was_signed = is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await?;
-                        if was_signed {
-                            let is_signed = jj::is_commit_gpg_signed(
-                                &repo.repo_shell,
-                                &commit.jj_change_id,
-                            ).await?;
-                            if !is_signed {
-                                log::info(format_args!(
-                                    "Throwing away GPG signature on change {} due to commit ID change",
-                                    commit.jj_change_id
-                                ));
+                        if current_tree == original_tree {
+                            // Tree unchanged -- just update the commit ID in place (lol)
+                            tx.execute(
+                                "UPDATE commits SET git_commit_id = $1 WHERE id = $2",
+                                &[&current_git_id, &commit.id],
+                            )
+                            .await
+                            .context("updating git commit ID")?;
+
+                            // Check for lost GPG signature
+                            let was_signed = is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await?;
+                            if was_signed {
+                                let is_signed = jj::is_commit_gpg_signed(
+                                    &repo.repo_shell,
+                                    &commit.jj_change_id,
+                                ).await?;
+                                if !is_signed {
+                                    log::info(format_args!(
+                                        "Throwing away GPG signature on change {} due to commit ID change",
+                                        commit.jj_change_id
+                                    ));
+                                }
                             }
+                        } else {
+                            // Tree changed - kill the rest of the stack
+                            // FIXME this should be a warning and somehow have a std::Error associated to it (by refactoring functions probably)
+                            log::info(format_args!(
+                                "Change {} tree changed (commit {} to {}), marking as not current removing remainder of stack.",
+                                commit.jj_change_id, commit.git_commit_id, current_git_id,
+                            ));
+                            stack_poisoned = true;
                         }
-                    } else {
-                        // Tree changed - kill the rest of the stack
-                        // FIXME this should be a warning and somehow have a std::Error associated to it (by refactoring functions probably)
-                        log::info(format_args!(
-                            "Change {} tree changed (commit {} to {}), marking as not current removing remainder of stack.",
-                            commit.jj_change_id, commit.git_commit_id, current_git_id,
-                        ));
-                        stack_poisoned = true;
+                        work_done = true;
                     }
-                    work_done = true;
                 }
+                Err(e) => {
+                    log::warn(&e, format_args!(
+                        "Failed to get current git commit for {}",
+                        commit.jj_change_id
+                    ));
+                }
+            }
+        }
 
-                if stack_poisoned {
-                    tx.execute(
-                        "UPDATE pr_commits SET is_current = false WHERE commit_id = $1 AND pull_request_id = $2",
-                        &[&commit.id, &pr.id],
-                    )
-                    .await
-                    .context("marking commit as not current")?;
-                    tx.execute(
-                        "DELETE FROM stack_commits WHERE stack_id = $1 AND commit_id = $2",
-                        &[&stack.id, &commit.id],
-                    )
-                    .await
-                    .context("deleting commit from stack")?;
-                }
-            }
-            Err(e) => {
-                log::warn(&e, format_args!(
-                    "Failed to get current git commit for {}",
-                    commit.jj_change_id
-                ));
-            }
+        if stack_poisoned {
+            tx.execute(
+                "UPDATE pr_commits SET is_current = false WHERE commit_id = $1 AND pull_request_id = $2",
+                &[&commit.id, &pr.id],
+            )
+            .await
+            .context("marking commit as not current")?;
+            tx.execute(
+                "DELETE FROM stack_commits WHERE stack_id = $1 AND commit_id = $2",
+                &[&stack.id, &commit.id],
+            )
+            .await
+            .context("deleting commit from stack")?;
         }
     }
 
