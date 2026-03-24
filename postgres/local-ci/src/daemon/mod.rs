@@ -538,6 +538,13 @@ async fn process_stack_updates(
         .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
 
     if stack_commits.is_empty() {
+        tx.execute(
+            "DELETE FROM stacks WHERE id = $1",
+            &[&stack.id],
+        )
+        .await
+        .context("deleting empty stack")?;
+
         tx.commit()
             .await
             .context("committing empty stack transaction")?;
