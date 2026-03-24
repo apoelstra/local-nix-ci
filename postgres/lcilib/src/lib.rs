@@ -6,8 +6,4 @@ pub mod git;
 pub mod jj;
 pub mod repo;
 
-pub use self::db::Db;
-
-/// Re-export the `Transaction` type since it's needed for the database
-/// abstraction layer.
-pub use tokio_postgres::Transaction;
+pub use self::db::{Db, Transaction};

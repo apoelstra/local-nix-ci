@@ -5,7 +5,7 @@ use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
 use super::ReviewStatus;
-use crate::db::{DbQueryError, EntityType, models::CommitType, util::log_action};
+use crate::db::{DbQueryError, EntityType, Transaction, models::CommitType, util::log_action};
 use crate::git::CommitId;
 use crate::jj::ChangeId;
 
@@ -167,7 +167,7 @@ impl DbCommitId {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn apply_update(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdateCommit,
     ) -> Result<Option<tokio_postgres::Row>, DbQueryError> {
         let ret = self.apply_update_no_log(tx, updates).await?;
@@ -190,7 +190,7 @@ impl DbCommitId {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn apply_update_no_log(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdateCommit,
     ) -> Result<Option<tokio_postgres::Row>, DbQueryError> {
         let (mut params, clauses) = updates.to_params_and_clauses();
@@ -210,7 +210,7 @@ impl DbCommitId {
             clauses.len() + 1,
         );
 
-        tx.query_one(&query, &params)
+        tx.inner.query_one(&query, &params)
             .await
             .map(Some)
             .map_err(|error| {
@@ -233,9 +233,10 @@ impl DbCommitId {
     /// Returns an error if the database operation fails, if no PR is found, or if multiple PRs are found.
     pub async fn get_pull_request(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
     ) -> Result<super::PullRequest, DbQueryError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 SELECT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, 
@@ -284,7 +285,7 @@ impl Commit {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn update(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdateCommit,
     ) -> Result<Self, DbQueryError> {
         let ret = match self.id.apply_update_no_log(tx, updates).await? {

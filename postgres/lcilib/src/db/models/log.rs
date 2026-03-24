@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::db::Transaction;
 use crate::db::util::EntityType;
 use chrono::{DateTime, Utc};
-use tokio_postgres::Transaction;
 
 /// A log entry from the database
 #[derive(Debug, Clone)]
@@ -87,7 +87,7 @@ impl Log {
         // Order by timestamp
         query.push_str(" ORDER BY timestamp ASC");
 
-        let rows = tx.query(&query, &params).await?;
+        let rows = tx.inner.query(&query, &params).await?;
 
         let mut logs = Vec::new();
         for row in rows {
@@ -179,7 +179,7 @@ impl Log {
         // Order by timestamp
         query.push_str(" ORDER BY timestamp ASC");
 
-        let rows = tx.query(&query, &params).await?;
+        let rows = tx.inner.query(&query, &params).await?;
 
         let mut logs = Vec::new();
         for row in rows {

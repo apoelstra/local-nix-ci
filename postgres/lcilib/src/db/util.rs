@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::str::FromStr;
-use tokio_postgres::{Error, Transaction};
+use tokio_postgres::Error;
 
-use crate::db::DbQueryError;
+use crate::db::{DbQueryError, Transaction};
 
 /// Entity types that can be logged, matching the database enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, postgres_types::FromSql, postgres_types::ToSql)]
@@ -67,7 +67,7 @@ impl FromStr for EntityType {
 /// # Errors
 ///
 /// Errors if the INSERT query fails.
-pub async fn log_action(
+pub(super) async fn log_action(
     tx: &Transaction<'_>,
     entity_type: EntityType,
     entity_id: i32,
@@ -75,7 +75,7 @@ pub async fn log_action(
     description: Option<&str>,
     reason: Option<&str>,
 ) -> Result<u64, DbQueryError> {
-    tx.execute(
+    tx.inner.execute(
         r#"
         INSERT INTO logs (entity_type, entity_id, action, description, reason)
         VALUES ($1, $2, $3, $4, $5)
@@ -106,7 +106,7 @@ pub async fn log_action(
 /// # Errors
 ///
 /// Errors if the `SELECT` query fails.
-pub async fn table_exists(tx: &Transaction<'_>, table: &str) -> Result<bool, Error> {
+pub(super) async fn table_exists(tx: &tokio_postgres::Transaction<'_>, table: &str) -> Result<bool, Error> {
     let row = tx
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
@@ -122,8 +122,9 @@ pub async fn table_exists(tx: &Transaction<'_>, table: &str) -> Result<bool, Err
 /// # Errors
 ///
 /// Errors if the SELECT query fails or if no version is found.
-pub async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, Error> {
+pub(super) async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, Error> {
     let row = tx
+        .inner
         .query_one("SELECT schema_version FROM global", &[])
         .await?;
 
@@ -135,8 +136,9 @@ pub async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, Error> {
 /// # Errors
 ///
 /// Errors if the SELECT query fails.
-pub async fn repository_exists_by_path(tx: &Transaction<'_>, path: &str) -> Result<bool, Error> {
+pub(super) async fn repository_exists_by_path(tx: &Transaction<'_>, path: &str) -> Result<bool, Error> {
     let row = tx
+        .inner
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM repositories WHERE path = $1)",
             &[&path],
@@ -151,11 +153,12 @@ pub async fn repository_exists_by_path(tx: &Transaction<'_>, path: &str) -> Resu
 /// # Errors
 ///
 /// Errors if the SELECT query fails or if no repository is found.
-pub async fn get_repository_id_by_path(
+pub(super) async fn get_repository_id_by_path(
     tx: &Transaction<'_>,
     path: &str,
 ) -> Result<Option<i32>, Error> {
     let rows = tx
+        .inner
         .query("SELECT id FROM repositories WHERE path = $1", &[&path])
         .await?;
 
@@ -167,12 +170,13 @@ pub async fn get_repository_id_by_path(
 /// # Errors
 ///
 /// Errors if the SELECT query fails.
-pub async fn commit_exists_by_git_id(
+pub(super) async fn commit_exists_by_git_id(
     tx: &Transaction<'_>,
     repository_id: i32,
     git_commit_id: &str,
 ) -> Result<bool, Error> {
     let row = tx
+        .inner
         .query_one(
             r#"
             SELECT EXISTS (
@@ -192,12 +196,13 @@ pub async fn commit_exists_by_git_id(
 /// # Errors
 ///
 /// Errors if the SELECT query fails.
-pub async fn pull_request_exists(
+pub(super) async fn pull_request_exists(
     tx: &Transaction<'_>,
     repository_id: i32,
     pr_number: i32,
 ) -> Result<bool, Error> {
     let row = tx
+        .inner
         .query_one(
             r#"
             SELECT EXISTS (

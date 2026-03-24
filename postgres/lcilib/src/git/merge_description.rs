@@ -3,6 +3,7 @@
 use crate::db::{
     DbQueryError,
     models::{CommitToTest, PullRequest, Repository},
+    Transaction,
 };
 use crate::git::CommitId;
 
@@ -62,7 +63,7 @@ impl std::error::Error for MergeDescriptionError {
 ///
 /// Panics if `std::current_env` returns an error.
 pub async fn compute_merge_description(
-    tx: &tokio_postgres::Transaction<'_>,
+    tx: &Transaction<'_>,
     pr: &PullRequest,
     merge_commit: &CommitToTest,
 ) -> Result<String, MergeDescriptionError> {

@@ -8,7 +8,7 @@ use postgres_types::{FromSql, ToSql};
 use std::path::Path;
 
 use super::{PullRequest, Stack};
-use crate::db::{DbQueryError, EntityType, util::log_action};
+use crate::db::{DbQueryError, EntityType, Transaction, util::log_action};
 pub use shell::{RepoShell, RepoShellLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
@@ -95,9 +95,10 @@ impl DbRepositoryId {
     /// Returns an error if the database operation fails.
     pub async fn get_current_pull_requests(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
     ) -> Result<Vec<PullRequest>, DbQueryError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status,
@@ -129,9 +130,10 @@ impl DbRepositoryId {
     /// Returns an error if the database operation fails.
     pub async fn get_stacks(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
     ) -> Result<Vec<Stack>, DbQueryError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, target_branch, created_at, updated_at
@@ -159,9 +161,10 @@ impl DbRepositoryId {
     /// Returns an error if the database operation fails.
     pub async fn update_last_synced(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
     ) -> Result<(), DbQueryError> {
         tx
+            .inner
             .execute(
                 r#"
                 UPDATE repositories SET last_synced_at = NOW()
@@ -215,7 +218,7 @@ impl Repository {
     ///
     /// Returns an error if the database operation fails.
     pub async fn create(
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         new_repo: NewRepository,
     ) -> Result<Self, RepositoryError> {
         // Do path checks explicitly before any database operations.
@@ -227,6 +230,7 @@ impl Repository {
         }
 
         let row = tx
+            .inner
             .query_one(
                 r#"
                 INSERT INTO repositories (name, path, nixfile_path)
@@ -269,9 +273,10 @@ impl Repository {
     /// is put into the returned error vector. If the database query fails, returns an
     /// empty result vector and an error vector with a single database query error.
     pub async fn list_all(
-        tx: &tokio_postgres::Transaction<'_>
+        tx: &Transaction<'_>
     ) -> (Vec<Self>, Vec<RepositoryError>) {
         let rows = match tx
+            .inner
             .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories ORDER BY name", &[])
             .await
             .map_err(|error| {
@@ -309,7 +314,7 @@ impl Repository {
     ///
     /// Panics if no repository with the given ID is in the database.
     pub async fn get_by_id(
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         id: DbRepositoryId,
     ) -> Result<Self, RepositoryError> {
         match Self::find_by_id(tx, id).await {
@@ -325,10 +330,11 @@ impl Repository {
     ///
     /// Returns an error if the database operation fails.
     pub async fn find_by_id(
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         id: DbRepositoryId,
     ) -> Result<Option<Self>, RepositoryError> {
         let rows = tx
+            .inner
             .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories WHERE id = $1", &[&id])
             .await
             .map_err(|error| {
@@ -351,10 +357,11 @@ impl Repository {
     ///
     /// Returns an error if the database operation fails.
     pub async fn find_by_path(
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         path: &str,
     ) -> Result<Option<Self>, RepositoryError> {
         let rows = tx
+            .inner
             .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories WHERE path = $1", &[&path])
             .await
             .map_err(|error| {

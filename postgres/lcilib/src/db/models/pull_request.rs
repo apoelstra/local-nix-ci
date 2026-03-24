@@ -5,7 +5,7 @@ use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
 use super::{CommitCounts, CommitToTest, DbCommitId, DbRepositoryId, MergeStatus, ReviewStatus};
-use crate::db::{DbQueryError, EntityType, util::log_action};
+use crate::db::{DbQueryError, EntityType, Transaction, util::log_action};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
 #[postgres(transparent)]
@@ -199,7 +199,7 @@ impl DbPullRequestId {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn apply_update(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdatePullRequest,
     ) -> Result<Option<tokio_postgres::Row>, DbQueryError> {
         let ret = self.apply_update_no_log(tx, updates).await?;
@@ -222,7 +222,7 @@ impl DbPullRequestId {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn apply_update_no_log(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdatePullRequest,
     ) -> Result<Option<tokio_postgres::Row>, DbQueryError> {
         let (mut params, clauses) = updates.to_params_and_clauses();
@@ -242,7 +242,7 @@ impl DbPullRequestId {
             clauses.len() + 1,
         );
 
-        tx.query_one(&query, &params)
+        tx.inner.query_one(&query, &params)
             .await
             .map(Some)
             .map_err(|error| DbQueryError {
@@ -263,9 +263,10 @@ impl DbPullRequestId {
     /// Returns an error if the database operation fails.
     pub async fn get_commit_counts(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
     ) -> Result<CommitCounts, DbQueryError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 SELECT
@@ -299,9 +300,10 @@ impl DbPullRequestId {
     /// Returns an error if the database operation fails.
     pub async fn get_current_non_merge_commits(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
     ) -> Result<Vec<CommitToTest>, DbQueryError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
@@ -378,9 +380,10 @@ impl DbPullRequestId {
     /// Returns an error if the database operation fails.
     pub async fn get_posted_acks_for_tip(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
     ) -> Result<Vec<(String, String)>, DbQueryError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT a.reviewer_name, a.message
@@ -442,7 +445,7 @@ impl PullRequest {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn update(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdatePullRequest,
     ) -> Result<Self, DbQueryError> {
         let ret = match self.id.apply_update_no_log(tx, updates).await? {

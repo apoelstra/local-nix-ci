@@ -9,7 +9,7 @@ use tokio_postgres::Client;
 const EXPECTED_SCHEMA_VERSION: i32 = 1;
 
 /// Ensure the database contains exactly the schema version this binary expects.
-pub async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
+pub(super) async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
     let tx = client.transaction().await.map_err(|e| SchemaError::Db {
         e,
         action: "create transaction",

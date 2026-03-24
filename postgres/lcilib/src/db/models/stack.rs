@@ -5,7 +5,7 @@ use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
 use super::{CommitToTest, DbCommitId, DbRepositoryId};
-use crate::db::{DbQueryError, EntityType, util::log_action};
+use crate::db::{DbQueryError, EntityType, Transaction, util::log_action};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
 #[postgres(transparent)]
@@ -88,7 +88,7 @@ impl DbStackId {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn apply_update(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdateStack,
     ) -> Result<Option<tokio_postgres::Row>, DbQueryError> {
         let ret = self.apply_update_no_log(tx, updates).await?;
@@ -111,7 +111,7 @@ impl DbStackId {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn apply_update_no_log(
         self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdateStack,
     ) -> Result<Option<tokio_postgres::Row>, DbQueryError> {
         let (mut params, clauses) = updates.to_params_and_clauses();
@@ -130,7 +130,7 @@ impl DbStackId {
             clauses.len() + 1,
         );
 
-        tx.query_one(&query, &params)
+        tx.inner.query_one(&query, &params)
             .await
             .map(Some)
             .map_err(|error| DbQueryError {
@@ -149,11 +149,11 @@ impl DbStackId {
     /// Returns an error if the database operation fails.
     pub async fn add_commit(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         commit_id: DbCommitId,
         sequence_order: i32,
     ) -> Result<(), DbQueryError> {
-        tx.execute(
+        tx.inner.execute(
             "INSERT INTO stack_commits (stack_id, commit_id, sequence_order) VALUES ($1, $2, $3)",
             &[&self, &commit_id, &sequence_order],
         )
@@ -190,9 +190,10 @@ impl DbStackId {
     /// Returns an error if the database operation fails.
     pub async fn get_commits(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
     ) -> Result<Vec<CommitToTest>, DbQueryError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
@@ -283,7 +284,7 @@ impl Stack {
     /// Returns an error if the database operation fails (the update or the log).
     pub async fn update(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         updates: &UpdateStack,
     ) -> Result<Self, DbQueryError> {
         let ret = match self.id.apply_update_no_log(tx, updates).await? {
@@ -311,8 +312,9 @@ impl Stack {
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn get_all(tx: &tokio_postgres::Transaction<'_>) -> Result<Vec<Self>, DbQueryError> {
+    pub async fn get_all(tx: &Transaction<'_>) -> Result<Vec<Self>, DbQueryError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, target_branch, created_at, updated_at
@@ -338,11 +340,12 @@ impl Stack {
     ///
     /// Returns an error if the database operation fails.
     pub async fn get_all_for_target_branch(
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &Transaction<'_>,
         repo: DbRepositoryId,
         target_branch: &str,
     ) -> Result<Vec<Self>, DbQueryError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, target_branch, created_at, updated_at

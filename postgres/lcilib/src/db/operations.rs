@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::HashSet;
-use tokio_postgres::{Error, Transaction};
+use tokio_postgres::Error;
 
 use super::models::{
     Ack, AckStatus, AllowedApprover, Commit, CommitToTest, CommitType, DbAckId, DbCommitId,
@@ -10,7 +10,7 @@ use super::models::{
     UpdateCommit,
 };
 use super::util::{self, EntityType};
-use crate::db::DbQueryError;
+use crate::db::{DbQueryError, Transaction};
 use crate::git::CommitId;
 
 /// Error type for database operations with contextual information
@@ -171,6 +171,7 @@ impl Commit {
     ) -> Result<Self, OperationError> {
         let git_commit_str = new_commit.git_commit_id.to_string();
         let row = tx
+            .inner
             .query_one(
                 r#"
                 INSERT INTO commits (repository_id, git_commit_id, jj_change_id, review_status,
@@ -226,6 +227,7 @@ impl Commit {
         id: DbCommitId,
     ) -> Result<Option<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
@@ -254,6 +256,7 @@ impl Commit {
     ) -> Result<Option<Self>, OperationError> {
         let git_commit_str = git_commit_id.to_string();
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
@@ -288,6 +291,7 @@ impl Commit {
         repository_id: DbRepositoryId,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
@@ -316,6 +320,7 @@ impl Commit {
     /// Returns an error if the database operation fails.
     pub async fn find_needing_ci(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
@@ -395,7 +400,7 @@ impl Commit {
             param_count
         );
 
-        let row = tx.query_one(&query, &params).await.map_err(|e| {
+        let row = tx.inner.query_one(&query, &params).await.map_err(|e| {
             OperationError::with_context(
                 e,
                 "update_with_custom_log",
@@ -431,6 +436,7 @@ impl PullRequest {
     /// Returns an error if the database operation fails.
     pub async fn get_ack_count(&self, tx: &Transaction<'_>) -> Result<i64, OperationError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 SELECT COUNT(*)
@@ -463,6 +469,7 @@ impl PullRequest {
         tx: &Transaction<'_>,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, pr.target_branch,
@@ -496,6 +503,7 @@ impl PullRequest {
         tx: &Transaction<'_>,
     ) -> Result<Option<CommitToTest>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
@@ -568,6 +576,7 @@ impl PullRequest {
         new_pr: NewPullRequest,
     ) -> Result<Self, OperationError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 INSERT INTO pull_requests (repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id,
@@ -632,6 +641,7 @@ impl PullRequest {
         id: DbPullRequestId,
     ) -> Result<Option<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status,
@@ -657,6 +667,7 @@ impl PullRequest {
         pr_number: i32,
     ) -> Result<Option<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status,
@@ -678,6 +689,7 @@ impl PullRequest {
     /// Returns an error if the database operation fails.
     pub async fn find_ready_for_merge(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, repository_id, pr_number, title, body, author_login, target_branch, tip_commit_id, merge_status, review_status,
@@ -704,6 +716,7 @@ impl PullRequest {
         tx: &Transaction<'_>,
     ) -> Result<Vec<(Commit, CommitType)>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
@@ -742,6 +755,7 @@ impl PullRequest {
         tx: &Transaction<'_>,
     ) -> Result<Vec<Commit>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
@@ -778,7 +792,7 @@ impl PullRequest {
         sequence_order: i32,
         commit_type: CommitType,
     ) -> Result<(), OperationError> {
-        tx.execute(
+        tx.inner.execute(
             "INSERT INTO pr_commits (pull_request_id, commit_id, sequence_order, commit_type) VALUES ($1, $2, $3, $4)",
             &[&self.id, &commit_id, &sequence_order, &commit_type],
         ).await
@@ -814,6 +828,7 @@ impl Stack {
         tx: &Transaction<'_>,
     ) -> Result<Vec<PullRequest>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, pr.target_branch,
@@ -845,6 +860,7 @@ impl Stack {
         tx: &Transaction<'_>,
     ) -> Result<(i64, i64), OperationError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 SELECT
@@ -868,6 +884,7 @@ impl Stack {
     /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_stack: NewStack) -> Result<Self, OperationError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 INSERT INTO stacks (repository_id, target_branch)
@@ -915,6 +932,7 @@ impl Stack {
         id: DbStackId,
     ) -> Result<Option<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 "SELECT id, repository_id, target_branch, created_at, updated_at FROM stacks WHERE id = $1",
                 &[&id],
@@ -935,6 +953,7 @@ impl Ack {
     /// Returns an error if the database operation fails.
     pub async fn create(tx: &Transaction<'_>, new_ack: NewAck) -> Result<Self, OperationError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 INSERT INTO acks (pull_request_id, commit_id, reviewer_name, message, status)
@@ -978,6 +997,7 @@ impl Ack {
         id: DbAckId,
     ) -> Result<Option<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, pull_request_id, commit_id, reviewer_name, message, status, created_at, updated_at
@@ -1001,6 +1021,7 @@ impl Ack {
         pull_request_id: DbPullRequestId,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, pull_request_id, commit_id, reviewer_name, message, status, created_at, updated_at
@@ -1021,6 +1042,7 @@ impl Ack {
     /// Returns an error if the database operation fails.
     pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, pull_request_id, commit_id, reviewer_name, message, status, created_at, updated_at
@@ -1075,6 +1097,7 @@ impl AllowedApprover {
         new_approver: NewAllowedApprover,
     ) -> Result<Self, OperationError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 INSERT INTO allowed_approvers (repository_id, approver_name)
@@ -1119,6 +1142,7 @@ impl AllowedApprover {
         repository_id: DbRepositoryId,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 "SELECT id, repository_id, approver_name, created_at FROM allowed_approvers WHERE repository_id = $1",
                 &[&repository_id],
@@ -1140,6 +1164,7 @@ impl AllowedApprover {
         approver_name: &str,
     ) -> Result<bool, OperationError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 SELECT EXISTS (
@@ -1179,6 +1204,7 @@ impl LogEntry {
         entity_id: i32,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, entity_type, entity_id, action, description, reason, timestamp
@@ -1209,6 +1235,7 @@ impl LogEntry {
         limit: i64,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, entity_type, entity_id, action, description, reason, timestamp
@@ -1245,6 +1272,7 @@ impl PrCommit {
         commit_type: CommitType,
     ) -> Result<Self, OperationError> {
         let row = tx
+            .inner
             .query_one(
                 r#"
                 INSERT INTO pr_commits (pull_request_id, commit_id, sequence_order, commit_type)
@@ -1269,6 +1297,7 @@ impl PrCommit {
         pull_request_id: DbPullRequestId,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
@@ -1294,6 +1323,7 @@ impl PrCommit {
         pull_request_id: DbPullRequestId,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
@@ -1319,6 +1349,7 @@ impl PrCommit {
         pull_request_id: DbPullRequestId,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
@@ -1344,6 +1375,7 @@ impl PrCommit {
         commit_id: DbCommitId,
     ) -> Result<Vec<Self>, OperationError> {
         let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
@@ -1404,7 +1436,7 @@ impl PrCommit {
             param_count
         );
 
-        tx.execute(&query, &params).await.map_err(|e| {
+        tx.inner.execute(&query, &params).await.map_err(|e| {
             OperationError::with_context(e, "update_status", "PrCommit", &format!("id: {}", id))
         })?;
 

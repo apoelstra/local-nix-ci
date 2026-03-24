@@ -6,7 +6,7 @@ mod schema;
 mod util;
 
 use core::fmt;
-use tokio_postgres::{Client, NoTls, Transaction};
+use tokio_postgres::{Client, NoTls};
 
 pub use self::models::{AckStatus, CiStatus, Log, MergeStatus, ReviewStatus};
 pub use self::schema::SchemaError;
@@ -61,7 +61,7 @@ impl Db {
     ///
     /// Returns an error if the transaction cannot be started.
     pub async fn transaction(&mut self) -> Result<Transaction<'_>, tokio_postgres::Error> {
-        self.client.transaction().await
+        self.client.transaction().await.map(|inner| Transaction { inner })
     }
 
     /// Execute a function within a transaction, automatically committing or rolling back
@@ -191,6 +191,39 @@ impl std::error::Error for Error {
             Self::Connect(e) => Some(e),
             Self::Schema(e) => Some(e),
         }
+    }
+}
+
+pub struct Transaction<'db> {
+    inner: tokio_postgres::Transaction<'db>,
+}
+
+// FIXME this allows direct database access to work. We want to remove all
+// these accesses then delete this. Will do over the coming commits.
+impl<'db> core::ops::Deref for Transaction<'db> {
+    type Target = tokio_postgres::Transaction<'db>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Transaction<'_> {
+    /// Commits the transaction to the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the commitment fails.
+    pub async fn commit(self) -> Result<(), tokio_postgres::Error> {
+        self.inner.commit().await
+    }
+
+    /// Cancels the transaction, rolling back any changes it made.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the rollback fails.
+    pub async fn rollback(self) -> Result<(), tokio_postgres::Error> {
+        self.inner.rollback().await
     }
 }
 

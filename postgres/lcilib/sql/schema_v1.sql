@@ -107,8 +107,6 @@ CREATE TABLE acks (
     status ack_status NOT NULL DEFAULT 'pending',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    
-    UNIQUE(pull_request_id, reviewer_name)
 );
 
 -- Allowed approvers table for tracking who can approve PRs
