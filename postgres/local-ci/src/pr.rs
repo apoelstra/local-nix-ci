@@ -973,7 +973,7 @@ pub async fn refresh(
     };
 
     // Get existing pr_commits for this PR
-    let existing_pr_commits = PrCommit::find_by_pr(&tx, pr_record.id)
+    let existing_pr_commits = PrCommit::find_current_non_merge_by_pr(&tx, pr_record.id)
         .await
         .context("failed to get existing PR commits")?;
 

@@ -361,8 +361,6 @@ async fn process_approved_pr(db: &mut Db, pr: &PullRequest) -> anyhow::Result<bo
             pr_is_first_in_some_stack |= index == 0;
             added_to_stack = true;
         } else if !added_to_stack {
-            println!("[debug] adding PR {} (id {}) to stack {}", pr.pr_number, pr.id, stack.id);
-            println!("[debug] annotated_stacks {:?}", annotated_stacks);
             // Otherwise, try to add it.
             if try_extend_stack(&tx, Some(stack.id), &pr.target_branch, commits, pr, &repo).await? {
                 added_to_stack = true;

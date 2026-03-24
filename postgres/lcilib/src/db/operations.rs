@@ -1264,7 +1264,7 @@ impl PrCommit {
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn find_by_pr(
+    pub async fn find_current_non_merge_by_pr(
         tx: &Transaction<'_>,
         pull_request_id: DbPullRequestId,
     ) -> Result<Vec<Self>, OperationError> {
@@ -1273,7 +1273,7 @@ impl PrCommit {
                 r#"
                 SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
                 FROM pr_commits
-                WHERE pull_request_id = $1
+                WHERE pull_request_id = $1 AND is_current = true AND commit_type != 'merge'
                 ORDER BY sequence_order
                 "#,
                 &[&pull_request_id],

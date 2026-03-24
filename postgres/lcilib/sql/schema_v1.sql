@@ -39,7 +39,6 @@ CREATE TABLE commits (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
     UNIQUE(repository_id, git_commit_id),
-    UNIQUE(repository_id, jj_change_id)
 );
 
 -- Pull requests table
