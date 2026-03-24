@@ -2,11 +2,12 @@
 
 use anyhow::Context as _;
 use chrono::Utc;
+use core::fmt;
 use lcilib::{
     Db,
     db::CiStatus,
     db::models::{
-        Commit, CommitToTest, CommitType, Repository, UpdateCommit,
+        Commit, CommitToTest, CommitType, Repository, RepoShell, UpdateCommit,
     },
     git::CommitId,
 };
@@ -18,6 +19,7 @@ use tokio::{
     io::{AsyncReadExt as _, BufReader},
     time,
 };
+use xshell::cmd;
 
 use super::mark_commit_status;
 use super::log;
@@ -30,40 +32,21 @@ pub async fn process_commit_ci(
     let repo_path = Path::new(&repo.path);
 
     // Find Cargo.lock files
-    let lockfiles = match find_cargo_lockfiles(repo_path, &commit.git_commit_id).await {
+    let (has_cargo_toml, lockfiles) = match find_cargo_lockfiles(&repo.repo_shell, &commit.git_commit_id).await {
         Ok(files) => files,
         Err(e) => {
-            log::warn(
-                &*e.into_boxed_dyn_error(),
-                "Failed to find Cargo.lock files",
-            );
+            log::warn(&e, "Failed to find Cargo.lock files");
             mark_commit_status(db, commit.id, CiStatus::Failed).await?;
             return Ok(false);
         }
     };
-
-    // Check for Cargo.toml without Cargo.lock
-    let has_cargo_toml = match check_has_cargo_toml(repo_path, &commit.git_commit_id).await {
-        Ok(has_toml) => has_toml,
-        Err(e) => {
-            log::warn(
-                &*e.into_boxed_dyn_error(),
-                "Failed to check for Cargo.toml files",
-            );
-            mark_commit_status(db, commit.id, CiStatus::Failed).await?;
-            return Ok(false);
-        }
-    };
-
-    if has_cargo_toml && lockfiles.is_empty() {
-        // FIXME promote these error checks to an error type, make this a warning
-        log::info("Found Cargo.toml files but no Cargo.lock files");
-        mark_commit_status(db, commit.id, CiStatus::Failed).await?;
-        return Ok(false);
-    }
+    dbg!(has_cargo_toml);
+    dbg!(&lockfiles);
+    time::sleep(Duration::from_secs(90)).await;
+    assert!(!has_cargo_toml || !lockfiles.is_empty(), "should be an error check above");
 
     // Build cargo nixes JSON
-    let cargo_nixes = if lockfiles.is_empty() {
+    let cargo_nixes = if !has_cargo_toml {
         "{}".to_string()
     } else {
         let entries: Vec<String> = lockfiles
@@ -369,87 +352,86 @@ async fn build_derivation_with_cancellation(
     }
 }
 
+#[derive(Debug)]
+pub enum LockFileError {
+    ShellLock(tokio::task::JoinError),
+    GitLsTree(xshell::Error),
+    Find(xshell::Error),
+    NoLockFiles,
+}
+
+impl fmt::Display for LockFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::ShellLock(_) => f.write_str("panic while holding shell lock"),
+            Self::GitLsTree(_) => f.write_str("failed to invoke git ls-tree"),
+            Self::Find(_) => f.write_str("failed to invoke find"),
+            Self::NoLockFiles => write!(f, "found a top-level Cargo.toml but no lockfiles, and no lockfiles in .."),
+        }
+    }
+}
+
+impl std::error::Error for LockFileError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::ShellLock(ref e) => Some(e),
+            Self::GitLsTree(ref e) => Some(e),
+            Self::Find(ref e) => Some(e),
+            Self::NoLockFiles => None,
+        }
+        
+    }
+}
+
+/// Search the repo for lockfiles. If there are none, also search the directory above the repo.
+///
+/// Returns a list of lockfiles and also a boolean indicating whether
+/// any Cargo.toml file appears in the repo. If not, we can
+/// assume this is not a Rust repo and that no lockfiles are
+/// expected.
 #[expect(clippy::case_sensitive_file_extension_comparisons)] // neat lint. complains about looking for .lock files. deliberately violating for now.
 async fn find_cargo_lockfiles(
-    repo_path: &Path,
+    repo_shell: &RepoShell,
     commit_id: &CommitId,
-) -> anyhow::Result<Vec<String>> {
-    let output = Command::new("git")
-        .args(["ls-tree", "-r", "--name-only", commit_id.as_str()])
-        .current_dir(repo_path)
-        .output()
-        .await
-        .context("Failed to run git ls-tree")?;
+) -> Result<(bool, Vec<String>), LockFileError> {
+    let ls_tree_output = repo_shell.with_lock_blocking(|shell| {
+        cmd!(shell, "git ls-tree -r --name-only {commit_id}")
+            .quiet()
+            .output()
+            .map_err(LockFileError::GitLsTree)
+    }).await
+    .map_err(LockFileError::ShellLock)??;
 
-    if !output.status.success() {
-        return Err(anyhow::anyhow!(
-            "git ls-tree failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&ls_tree_output.stdout);
     let mut lockfiles: Vec<String> = stdout
         .lines()
         .filter(|line| line.starts_with("Cargo") && line.ends_with(".lock"))
         .map(str::to_owned)
         .collect();
+    let has_cargo_toml = stdout.lines().any(|line| line == "Cargo.toml");
 
-    // If no lockfiles found in commit, search the ".." directory for auxiliary lockfiles
-    if lockfiles.is_empty() {
-        let find_output = Command::new("find")
-            .args(["../", "-maxdepth", "1", "-name", "Cargo*.lock"])
-            .current_dir(repo_path)
-            .output()
-            .await;
+    // Only if there are no lockfiles in the commit, search ".." for other lockfiles.
+    if has_cargo_toml && lockfiles.is_empty() {
+        let find_output = repo_shell.with_lock_blocking(|shell| {
+            let braces = "{}"; // lol idk how to escape {} in cmd
+            cmd!(shell, "find ../ -maxdepth 1 -name Cargo*.lock -exec realpath {braces} ;")
+                .quiet()
+                .output()
+                .map_err(LockFileError::Find)
+        }).await
+        .map_err(LockFileError::ShellLock)??;
 
-        if let Ok(aux_output) = find_output
-            && aux_output.status.success()
-        {
-            let aux_stdout = String::from_utf8_lossy(&aux_output.stdout);
-            for line in aux_stdout.lines() {
-                let filename = line.trim();
-                if !filename.is_empty() && filename.contains("Cargo") {
-                    // Convert to absolute path using realpath
-                    let realpath_output = Command::new("realpath")
-                        .arg(filename)
-                        .current_dir(repo_path)
-                        .output()
-                        .await;
-
-                    if let Ok(realpath_result) = realpath_output
-                        && realpath_result.status.success()
-                    {
-                        let absolute_path = String::from_utf8_lossy(&realpath_result.stdout);
-                        lockfiles.push(absolute_path.trim().to_string());
-                    }
-                }
-            }
+        let aux_stdout = String::from_utf8_lossy(&find_output.stdout);
+        for line in aux_stdout.lines() {
+            lockfiles.push(line.trim().to_string());
         }
     }
 
-    Ok(lockfiles)
-}
-
-async fn check_has_cargo_toml(repo_path: &Path, commit_id: &CommitId) -> anyhow::Result<bool> {
-    let output = Command::new("git")
-        .args(["ls-tree", "-r", "--name-only", commit_id.as_str()])
-        .current_dir(repo_path)
-        .output()
-        .await
-        .context("Failed to run git ls-tree")?;
-
-    if !output.status.success() {
-        return Err(anyhow::anyhow!(
-            "git ls-tree failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+    if has_cargo_toml && lockfiles.is_empty() {
+        Err(LockFileError::NoLockFiles)
+    } else {
+        Ok((has_cargo_toml, lockfiles))
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let has_cargo_toml = stdout.lines().any(|line| line.ends_with("Cargo.toml"));
-
-    Ok(has_cargo_toml)
 }
 
 async fn check_for_cancellation(db: &mut Db, _commit: &CommitToTest) -> anyhow::Result<()> {

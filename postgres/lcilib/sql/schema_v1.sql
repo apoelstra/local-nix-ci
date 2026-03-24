@@ -250,8 +250,8 @@ BEGIN
         AND id IN (
             SELECT commit_id FROM pr_commits
             WHERE pull_request_id = NEW.id
-            AND pc.is_current = true
-            AND pc.commit_type = 'merge'
+            AND is_current = true
+            AND commit_type = 'merge'
         );
     END IF;
     

@@ -13,7 +13,6 @@ use lcilib::db::models::{
 };
 use lcilib::{gh, git, jj};
 use lcilib::jj::is_commit_gpg_signed;
-use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
 

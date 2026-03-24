@@ -386,7 +386,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
             commit.git_commit_id, commit.jj_change_id
         ));
         for (pr, commit_type) in &commit.prs {
-            log::info(format_args!("    {} PR #{} ({}): {}", repo.name, pr.pr_number, commit_type, pr.title))
+            log::info(format_args!("    {} PR #{} ({}): {}", repo.name, pr.pr_number, commit_type, pr.title));
         }
         log::info("");
 
