@@ -508,21 +508,11 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
         .map_err(|e| anyhow::anyhow!("Failed to find stacks: {}", e))?;
     tx.commit().await.context("committing stacks query")?;
 
-    let mut stacks_by_repo_target: HashMap<(DbRepositoryId, String), Vec<Stack>> = HashMap::new();
     for stack in all_stacks {
-        let key = (stack.repository_id, stack.target_branch.clone());
-        stacks_by_repo_target.entry(key).or_default().push(stack);
-    }
-
-    // Process each group
-    for ((repo_id, _target_branch), mut stacks) in stacks_by_repo_target {
-        // Process each stack
-        for stack in stacks {
-            if process_stack_updates(db, &stack).await
-                .with_context(|| format!("processing updates for stack {}", stack.id))?
-            {
-                work_done = true;
-            }
+        if process_stack_updates(db, &stack).await
+            .with_context(|| format!("processing updates for stack {}", stack.id))?
+        {
+            work_done = true;
         }
     }
 
