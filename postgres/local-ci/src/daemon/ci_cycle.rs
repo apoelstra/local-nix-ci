@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
 
-use super::{get_repository_for_commit, mark_commit_status};
+use super::mark_commit_status;
 use super::{build_derivation, log, util};
 
 /// Returns all the high-priority and low-priority stacks across all repos.
@@ -361,12 +361,14 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
         };
 
         // Get repository information
-        let repo = match get_repository_for_commit(&mut db, &commit).await {
+        let tx = db.transaction().await.context("starting transaction")?;
+        let repo = match Repository::get_by_id(&tx, commit.repository_id)
+            .await {
             Ok(repo) => repo,
             Err(e) => {
                 log::warn_backoff(
                     &mut error_limit,
-                    &*e.into_boxed_dyn_error(),
+                    &e,
                     format!(
                         "Failed to get repository for commit {}",
                         commit.git_commit_id
@@ -376,6 +378,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                 continue;
             }
         };
+        tx.commit().await.context("committing transaction")?;
 
         // If we got a commit, we can reset the error backoff.
         error_limit.reset();

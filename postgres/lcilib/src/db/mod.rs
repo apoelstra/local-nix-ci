@@ -75,13 +75,12 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if the transaction fails or if the function returns an error.
-    pub async fn with_transaction<R, E, F>(&mut self, f: F) -> Result<R, DbTransactionError>
+    pub async fn with_transaction<R, F>(&mut self, f: F) -> Result<R, DbTransactionError>
     where
         R: Send + 'static,
-        E: Into<DbQueryError> + Send,
         F: for<'tx> FnOnce(
             &'tx Transaction<'tx>,
-        ) -> Pin<Box<dyn Future<Output = Result<R, E>> + Send + 'tx>>,
+        ) -> Pin<Box<dyn Future<Output = Result<R, DbQueryError>> + Send + 'tx>>,
     {
         let tx = self.transaction().await?;
         match f(&tx).await {
@@ -91,7 +90,7 @@ impl Db {
             }
             Err(e) => {
                 let _ = tx.rollback().await; // Ignore rollback errors
-                Err(DbTransactionError::Query(e.into()))
+                Err(DbTransactionError::Query(e))
             }
         }
     }

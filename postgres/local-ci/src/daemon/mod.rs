@@ -411,14 +411,9 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
     let mut work_done = false;
 
     // Get all stacks grouped by repo/target
-    let tx = db
-        .transaction()
+    let all_stacks = db.with_transaction(|tx| Box::pin(Stack::get_all(tx)))
         .await
-        .context("starting stacks transaction")?;
-    let all_stacks = Stack::get_all(&tx)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to find stacks: {}", e))?;
-    tx.commit().await.context("committing stacks query")?;
+        .context("getting list of all stacks from database")?;
 
     for stack in all_stacks {
         if process_stack_updates(db, &stack).await
@@ -667,35 +662,21 @@ async fn check_signed_merges(
     Ok(false)
 }
 
-async fn get_repository_for_commit(
-    db: &mut Db,
-    commit: &CommitToTest,
-) -> anyhow::Result<Repository> {
-    let tx = db.transaction().await.context("starting transaction")?;
-    let repo = Repository::find_by_id(&tx, commit.repository_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-        .ok_or_else(|| anyhow::anyhow!("Repository not found for ID: {}", commit.repository_id))?;
-    tx.commit().await.context("committing transaction")?;
-    Ok(repo)
-}
-
 async fn mark_commit_status(
     db: &mut Db,
     commit: DbCommitId,
     new_status: CiStatus,
 ) -> anyhow::Result<()> {
-    let tx = db.transaction().await.context("starting transaction")?;
-    let updates = UpdateCommit {
-        ci_status: Some(new_status),
-        ..Default::default()
-    };
-    commit
-        .apply_update(&tx, &updates)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to update commit: {}", e))?;
-    tx.commit().await.context("committing transaction")?;
-    Ok(())
+    db.with_transaction(|tx| Box::pin(async move {
+        let updates = UpdateCommit {
+            ci_status: Some(new_status),
+            ..Default::default()
+        };
+        commit
+            .apply_update(&tx, &updates)
+            .await?;
+        Ok(())
+    })).await.context("running update query")
 }
 
 async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
