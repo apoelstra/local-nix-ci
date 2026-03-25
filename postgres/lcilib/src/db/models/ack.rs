@@ -230,7 +230,7 @@ impl Ack {
                     a.message,
                     a.status,
                     a.created_at,
-                    a.updated_at,
+                    a.updated_at
                 FROM acks a
                 JOIN pull_requests pr ON a.pull_request_id = pr.id
                 WHERE a.status IN ('pending', 'failed')
