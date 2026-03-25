@@ -210,52 +210,12 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
     let mut work_done = false;
 
     // Step 1 & 2: For each approved PR, create merge commits and try to extend stacks
-    let tx = db
-        .transaction()
+    let approved_prs = db
+        .with_transaction(|tx| Box::pin(PullRequest::get_fully_approved_prs(tx)))
         .await
-        .context("starting transaction for approved PRs")?;
-    let approved_prs = tx.query(
-        r#"
-        SELECT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, pr.target_branch,
-               pr.tip_commit_id, pr.merge_status, pr.review_status, pr.priority, pr.ok_to_merge,
-               pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
-        FROM pull_requests pr
-        WHERE pr.review_status = 'approved'
-        AND pr.merge_status = 'pending'
-        AND NOT EXISTS (
-            SELECT 1 FROM pr_commits pc
-            JOIN commits c ON pc.commit_id = c.id
-            WHERE pc.pull_request_id = pr.id
-            AND pc.is_current = true
-            AND pc.commit_type != 'merge'
-            AND (c.review_status != 'approved' OR c.ci_status != 'passed')
-        )
-        ORDER BY pr.priority DESC, pr.created_at ASC
-        "#,
-        &[],
-    ).await.context("querying approved PRs")?;
-    tx.commit().await.context("committing approved PRs query")?;
+        .context("getting approved PRs from database")?;
 
-    for pr_row in approved_prs {
-        let pr = PullRequest {
-            id: pr_row.get("id"),
-            repository_id: pr_row.get("repository_id"),
-            pr_number: pr_row.get("pr_number"),
-            title: pr_row.get("title"),
-            body: pr_row.get("body"),
-            author_login: pr_row.get("author_login"),
-            target_branch: pr_row.get("target_branch"),
-            tip_commit_id: pr_row.get("tip_commit_id"),
-            merge_status: pr_row.get("merge_status"),
-            review_status: pr_row.get("review_status"),
-            priority: pr_row.get("priority"),
-            ok_to_merge: pr_row.get("ok_to_merge"),
-            required_reviewers: pr_row.get("required_reviewers"),
-            created_at: pr_row.get("created_at"),
-            updated_at: pr_row.get("updated_at"),
-            synced_at: pr_row.get("synced_at"),
-        };
-
+    for pr in approved_prs {
         if process_approved_pr(db, &pr).await
             .with_context(|| format!("processing approved PR {}", pr.pr_number))?
         {

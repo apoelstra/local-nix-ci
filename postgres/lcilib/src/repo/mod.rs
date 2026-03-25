@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::db::Db;
+use crate::db::{Db, DbTransactionError};
 use crate::db::models::{self, NewRepository, Repository};
 use xshell::{Shell, cmd};
 
@@ -13,7 +13,7 @@ pub enum Upstream {
 #[derive(Debug)]
 pub enum RepoError {
     CreateShell(xshell::Error),
-    DatabaseTransaction(tokio_postgres::Error),
+    DatabaseTransaction(DbTransactionError),
     Database(models::RepositoryError),
     GitCommandFailed(xshell::Error),
     UnknownProjectName,

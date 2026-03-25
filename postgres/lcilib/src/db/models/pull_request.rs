@@ -492,6 +492,48 @@ impl PullRequest {
         Ok(rows.first().map(Self::from_row))
     }
 
+    /// Gets a list of all PRs which are marked approved, have all commits approved,
+    /// and all non-merge commits have passed CI.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_fully_approved_prs(
+        tx: &Transaction<'_>,
+    ) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx
+            .inner
+            .query(
+                r#"
+                SELECT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, pr.target_branch,
+                       pr.tip_commit_id, pr.merge_status, pr.review_status, pr.priority, pr.ok_to_merge,
+                       pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
+                FROM pull_requests pr
+                WHERE pr.review_status = 'approved'
+                AND pr.merge_status = 'pending'
+                AND NOT EXISTS (
+                    SELECT 1 FROM pr_commits pc
+                    JOIN commits c ON pc.commit_id = c.id
+                    WHERE pc.pull_request_id = pr.id
+                    AND pc.is_current = true
+                    AND pc.commit_type != 'merge'
+                    AND (c.review_status != 'approved' OR c.ci_status != 'passed')
+                )
+                ORDER BY pr.priority DESC, pr.created_at ASC
+                "#,
+                &[],
+            ).await
+            .map_err(|error| DbQueryError {
+                action: "get_fully_approved_prs",
+                entity_type: EntityType::PullRequest,
+                raw_id: None,
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
     /// Updates a pull request.
     ///
     /// # Errors

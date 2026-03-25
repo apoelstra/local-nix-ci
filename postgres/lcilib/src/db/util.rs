@@ -122,97 +122,18 @@ pub(super) async fn table_exists(tx: &tokio_postgres::Transaction<'_>, table: &s
 /// # Errors
 ///
 /// Errors if the SELECT query fails or if no version is found.
-pub(super) async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, Error> {
+pub(super) async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, DbQueryError> {
     let row = tx
         .inner
         .query_one("SELECT schema_version FROM global", &[])
-        .await?;
+        .await
+        .map_err(|error| DbQueryError {
+            action: "get_schema_version",
+            entity_type: EntityType::System,
+            raw_id: None,
+            clauses: vec!["schema_version".into()],
+            error,
+        })?;
 
     Ok(row.get::<_, i32>(0))
-}
-
-/// Check if a repository exists by path
-///
-/// # Errors
-///
-/// Errors if the SELECT query fails.
-pub(super) async fn repository_exists_by_path(tx: &Transaction<'_>, path: &str) -> Result<bool, Error> {
-    let row = tx
-        .inner
-        .query_one(
-            "SELECT EXISTS (SELECT 1 FROM repositories WHERE path = $1)",
-            &[&path],
-        )
-        .await?;
-
-    Ok(row.get::<_, bool>(0))
-}
-
-/// Get repository ID by path
-///
-/// # Errors
-///
-/// Errors if the SELECT query fails or if no repository is found.
-pub(super) async fn get_repository_id_by_path(
-    tx: &Transaction<'_>,
-    path: &str,
-) -> Result<Option<i32>, Error> {
-    let rows = tx
-        .inner
-        .query("SELECT id FROM repositories WHERE path = $1", &[&path])
-        .await?;
-
-    Ok(rows.first().map(|row| row.get::<_, i32>(0)))
-}
-
-/// Check if a commit exists by git commit ID and repository
-///
-/// # Errors
-///
-/// Errors if the SELECT query fails.
-pub(super) async fn commit_exists_by_git_id(
-    tx: &Transaction<'_>,
-    repository_id: i32,
-    git_commit_id: &str,
-) -> Result<bool, Error> {
-    let row = tx
-        .inner
-        .query_one(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM commits
-                WHERE repository_id = $1 AND git_commit_id = $2
-            )
-            "#,
-            &[&repository_id, &git_commit_id],
-        )
-        .await?;
-
-    Ok(row.get::<_, bool>(0))
-}
-
-/// Check if a pull request exists by PR number and repository
-///
-/// # Errors
-///
-/// Errors if the SELECT query fails.
-pub(super) async fn pull_request_exists(
-    tx: &Transaction<'_>,
-    repository_id: i32,
-    pr_number: i32,
-) -> Result<bool, Error> {
-    let row = tx
-        .inner
-        .query_one(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM pull_requests
-                WHERE repository_id = $1 AND pr_number = $2
-            )
-            "#,
-            &[&repository_id, &pr_number],
-        )
-        .await?;
-
-    Ok(row.get::<_, bool>(0))
 }

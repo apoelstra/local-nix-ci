@@ -6,6 +6,7 @@ mod schema;
 mod util;
 
 use core::fmt;
+use core::pin::Pin;
 use tokio_postgres::{Client, NoTls};
 
 pub use self::models::{AckStatus, CiStatus, Log, MergeStatus, ReviewStatus};
@@ -60,33 +61,37 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if the transaction cannot be started.
-    pub async fn transaction(&mut self) -> Result<Transaction<'_>, tokio_postgres::Error> {
+    pub async fn transaction(&mut self) -> Result<Transaction<'_>, DbTransactionError> {
         self.client.transaction().await.map(|inner| Transaction { inner })
+        .map_err(DbTransactionError::Construct)
     }
 
-    /// Execute a function within a transaction, automatically committing or rolling back
+    /// Execute a function within a transaction, automatically committing or rolling back.
+    ///
+    /// The function is expected to be async, but its returned future must be boxed and
+    /// pinned. For example, see the implementation of [`Self::get_schema_version`].
+    /// This is ultimately due to limitations of Rust's lifetime syntax.
     ///
     /// # Errors
     ///
     /// Returns an error if the transaction fails or if the function returns an error.
-    pub async fn with_transaction<F, R, E>(&mut self, f: F) -> Result<R, Error>
+    pub async fn with_transaction<R, E, F>(&mut self, f: F) -> Result<R, DbTransactionError>
     where
-        F: for<'a> FnOnce(
-            &'a Transaction<'a>,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<R, E>> + Send + 'a>,
-        >,
-        E: Into<Error>,
+        R: Send + 'static,
+        E: Into<DbQueryError> + Send,
+        F: for<'tx> FnOnce(
+            &'tx Transaction<'tx>,
+        ) -> Pin<Box<dyn Future<Output = Result<R, E>> + Send + 'tx>>,
     {
-        let tx = self.transaction().await.map_err(Error::Connect)?;
+        let tx = self.transaction().await?;
         match f(&tx).await {
             Ok(result) => {
-                tx.commit().await.map_err(Error::Connect)?;
+                tx.commit().await?;
                 Ok(result)
             }
             Err(e) => {
                 let _ = tx.rollback().await; // Ignore rollback errors
-                Err(e.into())
+                Err(DbTransactionError::Query(e.into()))
             }
         }
     }
@@ -96,77 +101,8 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub async fn get_schema_version(&mut self) -> Result<i32, Error> {
-        let tx = self.transaction().await.map_err(Error::Connect)?;
-        let version = util::get_schema_version(&tx)
-            .await
-            .map_err(Error::Connect)?;
-        tx.commit().await.map_err(Error::Connect)?;
-        Ok(version)
-    }
-
-    /// Check if a repository exists by path
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query fails.
-    pub async fn repository_exists_by_path(&mut self, path: &str) -> Result<bool, Error> {
-        let tx = self.transaction().await.map_err(Error::Connect)?;
-        let exists = util::repository_exists_by_path(&tx, path)
-            .await
-            .map_err(Error::Connect)?;
-        tx.commit().await.map_err(Error::Connect)?;
-        Ok(exists)
-    }
-
-    /// Get repository ID by path
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query fails.
-    pub async fn get_repository_id_by_path(&mut self, path: &str) -> Result<Option<i32>, Error> {
-        let tx = self.transaction().await.map_err(Error::Connect)?;
-        let id = util::get_repository_id_by_path(&tx, path)
-            .await
-            .map_err(Error::Connect)?;
-        tx.commit().await.map_err(Error::Connect)?;
-        Ok(id)
-    }
-
-    /// Check if a commit exists by git commit ID
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query fails.
-    pub async fn commit_exists_by_git_id(
-        &mut self,
-        repository_id: i32,
-        git_commit_id: &str,
-    ) -> Result<bool, Error> {
-        let tx = self.transaction().await.map_err(Error::Connect)?;
-        let exists = util::commit_exists_by_git_id(&tx, repository_id, git_commit_id)
-            .await
-            .map_err(Error::Connect)?;
-        tx.commit().await.map_err(Error::Connect)?;
-        Ok(exists)
-    }
-
-    /// Check if a pull request exists
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query fails.
-    pub async fn pull_request_exists(
-        &mut self,
-        repository_id: i32,
-        pr_number: i32,
-    ) -> Result<bool, Error> {
-        let tx = self.transaction().await.map_err(Error::Connect)?;
-        let exists = util::pull_request_exists(&tx, repository_id, pr_number)
-            .await
-            .map_err(Error::Connect)?;
-        tx.commit().await.map_err(Error::Connect)?;
-        Ok(exists)
+    pub async fn get_schema_version(&mut self) -> Result<i32, DbTransactionError> {
+        self.with_transaction(|tx| Box::pin(util::get_schema_version(tx))).await
     }
 }
 
@@ -213,8 +149,8 @@ impl Transaction<'_> {
     /// # Errors
     ///
     /// Returns an error if the commitment fails.
-    pub async fn commit(self) -> Result<(), tokio_postgres::Error> {
-        self.inner.commit().await
+    pub async fn commit(self) -> Result<(), DbTransactionError> {
+        self.inner.commit().await.map_err(DbTransactionError::Commit)
     }
 
     /// Cancels the transaction, rolling back any changes it made.
@@ -222,8 +158,40 @@ impl Transaction<'_> {
     /// # Errors
     ///
     /// Returns an error if the rollback fails.
-    pub async fn rollback(self) -> Result<(), tokio_postgres::Error> {
-        self.inner.rollback().await
+    pub async fn rollback(self) -> Result<(), DbTransactionError> {
+        self.inner.rollback().await.map_err(DbTransactionError::Rollback)
+    }
+}
+
+#[derive(Debug)]
+pub enum DbTransactionError {
+    Construct(tokio_postgres::Error),
+    Commit(tokio_postgres::Error),
+    Rollback(tokio_postgres::Error),
+    Query(DbQueryError),
+}
+
+impl fmt::Display for DbTransactionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::Construct(..) => f.write_str("failed to open transaction"),
+            Self::Commit(..) => f.write_str("failed to commit transaction"),
+            Self::Rollback(..) => f.write_str("failed to rollback transaction"),
+            Self::Query(..) => f.write_str("failed to execute query within transaction"),
+        }
+        
+    }
+}
+
+impl std::error::Error for DbTransactionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::Construct(ref e) => Some(e),
+            Self::Commit(ref e) => Some(e),
+            Self::Rollback(ref e) => Some(e),
+            Self::Query(ref e) => Some(e),
+        }
+        
     }
 }
 
