@@ -61,9 +61,8 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if the transaction cannot be started.
-    pub async fn transaction(&mut self) -> Result<Transaction<'_>, DbTransactionError> {
+    pub async fn transaction(&mut self) -> Result<Transaction<'_>, tokio_postgres::Error> {
         self.client.transaction().await.map(|inner| Transaction { inner })
-        .map_err(DbTransactionError::Construct)
     }
 
     /// Execute a function within a transaction, automatically committing or rolling back.
@@ -75,21 +74,21 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if the transaction fails or if the function returns an error.
-    pub async fn with_transaction<R, F>(&mut self, f: F) -> Result<R, DbTransactionError>
+    pub async fn with_transaction<R, F, E>(&mut self, f: F) -> Result<R, DbTransactionError<E>>
     where
         R: Send + 'static,
         F: for<'tx> FnOnce(
             &'tx Transaction<'tx>,
-        ) -> Pin<Box<dyn Future<Output = Result<R, DbQueryError>> + Send + 'tx>>,
+        ) -> Pin<Box<dyn Future<Output = Result<R, E>> + Send + 'tx>>,
     {
-        let tx = self.transaction().await?;
+        let tx = self.transaction().await.map_err(DbTransactionError::Construct)?;
         match f(&tx).await {
             Ok(result) => {
-                tx.commit().await?;
+                tx.commit().await.map_err(DbTransactionError::Commit)?;
                 Ok(result)
             }
             Err(e) => {
-                let _ = tx.rollback().await; // Ignore rollback errors
+                let _ = tx.rollback::<E>().await; // Ignore rollback errors
                 Err(DbTransactionError::Query(e))
             }
         }
@@ -100,7 +99,7 @@ impl Db {
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub async fn get_schema_version(&mut self) -> Result<i32, DbTransactionError> {
+    pub async fn get_schema_version(&mut self) -> Result<i32, DbTransactionError<DbQueryError>> {
         self.with_transaction(|tx| Box::pin(util::get_schema_version(tx))).await
     }
 }
@@ -148,8 +147,8 @@ impl Transaction<'_> {
     /// # Errors
     ///
     /// Returns an error if the commitment fails.
-    pub async fn commit(self) -> Result<(), DbTransactionError> {
-        self.inner.commit().await.map_err(DbTransactionError::Commit)
+    pub async fn commit(self) -> Result<(), tokio_postgres::Error> {
+        self.inner.commit().await
     }
 
     /// Cancels the transaction, rolling back any changes it made.
@@ -157,37 +156,34 @@ impl Transaction<'_> {
     /// # Errors
     ///
     /// Returns an error if the rollback fails.
-    pub async fn rollback(self) -> Result<(), DbTransactionError> {
-        self.inner.rollback().await.map_err(DbTransactionError::Rollback)
+    pub async fn rollback<E>(self) -> Result<(), tokio_postgres::Error> {
+        self.inner.rollback().await
     }
 }
 
 #[derive(Debug)]
-pub enum DbTransactionError {
+pub enum DbTransactionError<E> {
     Construct(tokio_postgres::Error),
     Commit(tokio_postgres::Error),
-    Rollback(tokio_postgres::Error),
-    Query(DbQueryError),
+    Query(E),
 }
 
-impl fmt::Display for DbTransactionError {
+impl<E> fmt::Display for DbTransactionError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             Self::Construct(..) => f.write_str("failed to open transaction"),
             Self::Commit(..) => f.write_str("failed to commit transaction"),
-            Self::Rollback(..) => f.write_str("failed to rollback transaction"),
             Self::Query(..) => f.write_str("failed to execute query within transaction"),
         }
         
     }
 }
 
-impl std::error::Error for DbTransactionError {
+impl<E: std::error::Error + 'static> std::error::Error for DbTransactionError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
             Self::Construct(ref e) => Some(e),
             Self::Commit(ref e) => Some(e),
-            Self::Rollback(ref e) => Some(e),
             Self::Query(ref e) => Some(e),
         }
         

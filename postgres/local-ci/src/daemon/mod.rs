@@ -674,8 +674,8 @@ async fn mark_commit_status(
         };
         commit
             .apply_update(&tx, &updates)
-            .await?;
-        Ok(())
+            .await
+            .map(|_| ())
     })).await.context("running update query")
 }
 
