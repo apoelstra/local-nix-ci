@@ -6,6 +6,7 @@ mod build_derivation;
 mod util;
 
 use anyhow::Context as _;
+use lcilib::db::MergeStatus;
 use lcilib::Db;
 use lcilib::db::models::{
     Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack, PullRequest, Repository, ReviewStatus, Stack, UpdateAck, UpdateCommit
@@ -576,12 +577,23 @@ async fn process_stack_updates(
             ));
         }
 
+        if pr.merge_status != MergeStatus::Pending {
+            log::info(format_args!(
+                "{} PR {} no longer 'pending'; now {}; removing commit {} and rest of stack",
+                stack.id,
+                pr.pr_number,
+                pr.merge_status,
+                commit.git_commit_id,
+            ));
+            stack_poisoned = true;
+        }
+
         if pr.review_status != ReviewStatus::Approved {
             log::info(format_args!(
-                "{} PR {} no longer marked as approved; removing commit {} removing rest of stack",
+                "{} PR {} no longer marked as approved; removing commit {} and rest of stack",
                 stack.id,
-                commit.git_commit_id,
                 pr.pr_number,
+                commit.git_commit_id,
             ));
             stack_poisoned = true;
         }
