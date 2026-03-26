@@ -330,7 +330,7 @@ impl DbCommitId {
 
         // There should only be at most one stack that any given commit lives in
         tx.execute(
-            "DELETE FROM stack_commits WHERE stack_id = $1 AND commit_id = $2",
+            "DELETE FROM stack_commits WHERE commit_id = $1",
             &[self],
         )
         .await
