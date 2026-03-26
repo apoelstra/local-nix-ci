@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use chrono::{DateTime, Utc};
+use core::borrow::Borrow;
 use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
@@ -312,8 +313,9 @@ impl Stack {
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn get_all(tx: &Transaction<'_>) -> Result<Vec<Self>, DbQueryError> {
+    pub async fn get_all(tx: impl Borrow<Transaction<'_>>) -> Result<Vec<Self>, DbQueryError> {
         let rows = tx
+            .borrow()
             .inner
             .query(
                 r#"
@@ -365,5 +367,26 @@ impl Stack {
             })?;
 
         Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Deletes the stack from the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn delete(self, tx: &Transaction<'_>) -> Result<(), DbQueryError> {
+        tx.execute(
+            "DELETE FROM stacks WHERE id = $1",
+            &[&self.id],
+        )
+        .await
+        .map_err(|error| DbQueryError {
+            action: "delete_stack",
+            entity_type: EntityType::Stack,
+            raw_id: Some(self.id.bare_i32()),
+            clauses: vec![],
+            error,
+        })
+        .map(|_| ())
     }
 }

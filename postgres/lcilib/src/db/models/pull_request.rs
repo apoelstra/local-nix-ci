@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use chrono::{DateTime, Utc};
+use core::borrow::Borrow;
 use core::fmt;
 use postgres_types::{FromSql, ToSql};
 
@@ -499,9 +500,10 @@ impl PullRequest {
     ///
     /// Returns an error if the database operation fails.
     pub async fn get_fully_approved_prs(
-        tx: &Transaction<'_>,
+        tx: impl Borrow<Transaction<'_>>,
     ) -> Result<Vec<Self>, DbQueryError> {
         let rows = tx
+            .borrow()
             .inner
             .query(
                 r#"

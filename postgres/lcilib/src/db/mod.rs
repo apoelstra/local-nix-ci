@@ -6,7 +6,7 @@ mod schema;
 mod util;
 
 use core::fmt;
-use core::pin::Pin;
+use std::sync::Arc;
 use tokio_postgres::{Client, NoTls};
 
 pub use self::models::{AckStatus, CiStatus, Log, MergeStatus, ReviewStatus};
@@ -67,27 +67,35 @@ impl Db {
 
     /// Execute a function within a transaction, automatically committing or rolling back.
     ///
-    /// The function is expected to be async, but its returned future must be boxed and
-    /// pinned. For example, see the implementation of [`Self::get_schema_version`].
-    /// This is ultimately due to limitations of Rust's lifetime syntax.
+    /// The function receives the transaction as an `Arc`. It must not leak this `Arc`.
+    /// (The inability of the compiler to enforce "no leaks" is why we must pass an `Arc`
+    /// instead of a reference in the first place).
     ///
     /// # Errors
     ///
     /// Returns an error if the transaction fails or if the function returns an error.
-    pub async fn with_transaction<R, F, E>(&mut self, f: F) -> Result<R, DbTransactionError<E>>
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provided function panics, or if it leaks the `Arc`.
+    pub async fn with_transaction<'db, R, E, F, Fu>(&'db mut self, f: F) -> Result<R, DbTransactionError<E>>
     where
-        R: Send + 'static,
-        F: for<'tx> FnOnce(
-            &'tx Transaction<'tx>,
-        ) -> Pin<Box<dyn Future<Output = Result<R, E>> + Send + 'tx>>,
+        R: Send,
+        F: FnOnce(
+            Arc<Transaction<'db>>,
+        ) -> Fu,
+        Fu: Future<Output = Result<R, E>>,
     {
-        let tx = self.transaction().await.map_err(DbTransactionError::Construct)?;
-        match f(&tx).await {
+        let tx = Arc::new(self.transaction().await.map_err(DbTransactionError::Construct)?);
+        match f(Arc::clone(&tx)).await {
+
             Ok(result) => {
+                let tx = Arc::into_inner(tx).expect("we told you not to leak the arc");
                 tx.commit().await.map_err(DbTransactionError::Commit)?;
                 Ok(result)
             }
             Err(e) => {
+                let tx = Arc::into_inner(tx).expect("we told you not to leak the arc");
                 let _ = tx.rollback::<E>().await; // Ignore rollback errors
                 Err(DbTransactionError::Query(e))
             }
@@ -100,7 +108,7 @@ impl Db {
     ///
     /// Returns an error if the query fails.
     pub async fn get_schema_version(&mut self) -> Result<i32, DbTransactionError<DbQueryError>> {
-        self.with_transaction(|tx| Box::pin(util::get_schema_version(tx))).await
+        self.with_transaction(util::get_schema_version).await
     }
 }
 

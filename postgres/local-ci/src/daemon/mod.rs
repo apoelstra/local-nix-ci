@@ -9,7 +9,7 @@ use anyhow::Context as _;
 use lcilib::db::MergeStatus;
 use lcilib::Db;
 use lcilib::db::models::{
-    Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack, PullRequest, Repository, ReviewStatus, Stack, UpdateAck, UpdateCommit
+    Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack, PullRequest, Repository, ReviewStatus, Stack, UpdateAck, UpdateCommit,
 };
 use lcilib::{gh, git, jj};
 use lcilib::jj::is_commit_gpg_signed;
@@ -211,7 +211,7 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
 
     // Step 1 & 2: For each approved PR, create merge commits and try to extend stacks
     let approved_prs = db
-        .with_transaction(|tx| Box::pin(PullRequest::get_fully_approved_prs(tx)))
+        .with_transaction(PullRequest::get_fully_approved_prs)
         .await
         .context("getting approved PRs from database")?;
 
@@ -411,13 +411,14 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
     let mut work_done = false;
 
     // Get all stacks grouped by repo/target
-    let all_stacks = db.with_transaction(|tx| Box::pin(Stack::get_all(tx)))
+    let all_stacks = db.with_transaction(Stack::get_all)
         .await
         .context("getting list of all stacks from database")?;
 
     for stack in all_stacks {
-        if process_stack_updates(db, &stack).await
-            .with_context(|| format!("processing updates for stack {}", stack.id))?
+        let id = stack.id;
+        if process_stack_updates(db, stack).await
+            .with_context(|| format!("processing updates for stack {}", id))?
         {
             work_done = true;
         }
@@ -428,39 +429,23 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
 
 async fn process_stack_updates(
     db: &mut Db,
-    stack: &Stack,
+    stack: Stack,
 ) -> anyhow::Result<bool> {
-    let tx = db
-        .transaction()
+    let mut stack_commits = db.with_transaction(async |tx| stack.id.get_commits(&tx).await)
         .await
-        .context("starting stack update transaction")?;
+        .with_context(|| format!("getting list of commits for {}", stack.id))?;
 
-    let repo = Repository::get_by_id(&tx, stack.repository_id)
-        .await
-        .context("getting repo ID for stack")?;
-
-    let stack_commits = stack
-        .id
-        .get_commits(&tx)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to get stack commits: {}", e))?;
-
-    if stack_commits.is_empty() {
-        tx.execute(
-            "DELETE FROM stacks WHERE id = $1",
-            &[&stack.id],
-        )
-        .await
-        .context("deleting empty stack")?;
-
-        tx.commit()
+    let Some(first_commit) = stack_commits.first() else {
+        db.with_transaction(async |tx| stack.delete(&tx).await)
             .await
-            .context("committing empty stack transaction")?;
+            .context("deleting empty stack from database")?;
         return Ok(false);
-    }
+    };
 
     // Check if first commit's first parent matches target
-    let first_commit = &stack_commits[0];
+    let repo = db.with_transaction(async |tx| Repository::get_by_id(&tx, stack.repository_id).await)
+        .await
+        .with_context(|| format!("repository {} for {}", stack.repository_id, stack.id))?;
     let parents = git::list_parents(&repo.repo_shell, &first_commit.git_commit_id)
         .await
         .context("getting commit parents")?;
@@ -488,39 +473,31 @@ async fn process_stack_updates(
         }
 
         // Mark all commits as not current and delete stack
-        for commit in &stack_commits {
-            tx.execute(
-                "UPDATE pr_commits SET is_current = false WHERE commit_id = $1",
-                &[&commit.id],
-            )
-            .await
-            .context("marking commits as not current")?;
-        }
-
-        tx.execute(
-            "DELETE FROM stack_commits WHERE stack_id = $1",
-            &[&stack.id],
-        )
-        .await
-        .context("deleting stack commits")?;
-        tx.execute("DELETE FROM stacks WHERE id = $1", &[&stack.id])
+        db.with_transaction(async |tx| {
+            for commit in &stack_commits {
+                commit.id.mark_non_current_for_all_prs_and_stacks(&tx)
+                    .await?;
+            }
+            stack.delete(&tx)
+                .await
+        })
             .await
             .context("deleting stack")?;
 
-        tx.commit().await.context("committing rebase transaction")?;
-
-        // TODO: Recreate stack in correct order - this is complex and would need
-        // to re-run the extend_stack logic for each PR in the original order
+        // The stack will be recreated naturally by the usual approved-PR logic.
         return Ok(true);
     }
 
     // Update descriptions and check for commit changes
     let mut work_done = false;
     let mut stack_poisoned = false;
-    for commit in &stack_commits {
-        let pr = commit.id.get_pull_request(&tx).await?;
+    for commit in &mut stack_commits {
+        let pr = db.with_transaction(async |tx| commit.id.get_pull_request(&tx).await)
+            .await
+            .with_context(|| format!("getting PR for merge commit {}", commit.git_commit_id))?;
         // Update description (dummy implementation for now)
-        let description = git::compute_merge_description(&tx, &pr, commit).await
+        let description = db.with_transaction(async |tx| git::compute_merge_description(&tx, &pr, commit).await)
+            .await
             .with_context(|| format!("computing merge description for merge of PR {} (commit {})", pr.pr_number, commit.git_commit_id))?;
         if let Err(e) =
             jj::update_commit_description(&repo.repo_shell, &commit.jj_change_id, &description)
@@ -587,12 +564,9 @@ async fn process_stack_updates(
 
                         if current_tree == original_tree {
                             // Tree unchanged -- just update the commit ID in place (lol)
-                            tx.execute(
-                                "UPDATE commits SET git_commit_id = $1 WHERE id = $2",
-                                &[&current_git_id, &commit.id],
-                            )
-                            .await
-                            .context("updating git commit ID")?;
+                            db.with_transaction(async |tx| commit.replace_commit_id(&tx, current_git_id).await)
+                                .await
+                                .context("updating git commit ID")?;
 
                             // Check for lost GPG signature
                             let was_signed = is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await?;
@@ -630,24 +604,16 @@ async fn process_stack_updates(
         }
 
         if stack_poisoned {
-            tx.execute(
-                "UPDATE pr_commits SET is_current = false WHERE commit_id = $1 AND pull_request_id = $2",
-                &[&commit.id, &pr.id],
-            )
-            .await
-            .context("marking commit as not current")?;
-            tx.execute(
-                "DELETE FROM stack_commits WHERE stack_id = $1 AND commit_id = $2",
-                &[&stack.id, &commit.id],
-            )
-            .await
-            .context("deleting commit from stack")?;
+            // FIXME: because we are using a separate transaction for each commit we're deleting,
+            // in theory some could succeed but later ones fail, leaving the stack in a bad state
+            // where middle commits are missing in the database (though ofc not in the git tree).
+            // We should loop through and do a single transaction here.
+            db.with_transaction(async |tx| commit.id.mark_non_current_for_all_prs_and_stacks(&tx).await)
+                .await
+                .context("marking commit as not current for poisoned stack")?;
         }
     }
 
-    tx.commit()
-        .await
-        .context("committing stack update transaction")?;
     Ok(work_done)
 }
 
@@ -667,7 +633,7 @@ async fn mark_commit_status(
     commit: DbCommitId,
     new_status: CiStatus,
 ) -> anyhow::Result<()> {
-    db.with_transaction(|tx| Box::pin(async move {
+    db.with_transaction(async |tx| {
         let updates = UpdateCommit {
             ci_status: Some(new_status),
             ..Default::default()
@@ -676,7 +642,7 @@ async fn mark_commit_status(
             .apply_update(&tx, &updates)
             .await
             .map(|_| ())
-    })).await.context("running update query")
+    }).await.context("running update query")
 }
 
 async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {

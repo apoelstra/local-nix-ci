@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::str::FromStr;
+use core::borrow::Borrow;
+use core::str::FromStr;
 use tokio_postgres::Error;
 
 use crate::db::{DbQueryError, Transaction};
@@ -122,8 +123,9 @@ pub(super) async fn table_exists(tx: &tokio_postgres::Transaction<'_>, table: &s
 /// # Errors
 ///
 /// Errors if the SELECT query fails or if no version is found.
-pub(super) async fn get_schema_version(tx: &Transaction<'_>) -> Result<i32, DbQueryError> {
+pub(super) async fn get_schema_version(tx: impl Borrow<Transaction<'_>>) -> Result<i32, DbQueryError> {
     let row = tx
+        .borrow()
         .inner
         .query_one("SELECT schema_version FROM global", &[])
         .await

@@ -260,6 +260,100 @@ impl DbCommitId {
 
         Ok(super::PullRequest::from_row(&row))
     }
+
+    /// Replaces the commit ID for the commit.
+    ///
+    /// This should be called when a commit's description or signedness state has changed, but
+    /// it has retained its jj change ID. It should **not** be called if the tree has changed
+    /// or if the jj change ID has been changed; in that case you probably want to mark the
+    /// commit as non-current in whatever PR you're considering, and make a new one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails (the update or the log).
+    pub async fn replace_commit_id(
+        &self,
+        tx: &Transaction<'_>,
+        new_commit_id: &CommitId,
+    ) -> Result<(), DbQueryError> {
+        tx.execute(
+            "UPDATE commits SET git_commit_id = $1 WHERE id = $2",
+            &[&new_commit_id, self],
+        )
+        .await
+        .map_err(|error| DbQueryError {
+            action: "replace_commit_id",
+            entity_type: EntityType::Commit,
+            raw_id: Some(self.bare_i32()),
+            clauses: vec![format!("git_commit_id = '{new_commit_id}'")],
+            error,
+        })?;
+
+        log_action(
+            tx,
+            EntityType::Commit,
+            self.bare_i32(),
+            "replace_commit_id",
+            Some("git_commit_id"),
+            None,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Marks a commit as non-current for all PRs.
+    ///
+    /// Typically this should only be used for merge commits, since non-merge
+    /// commits might be present in multiple PRs and it is unlikely that they
+    /// will become out-of-date for all of them at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails (the update or the log).
+    pub async fn mark_non_current_for_all_prs_and_stacks(
+        &self,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DbQueryError> {
+        tx.execute(
+            "UPDATE pr_commits SET is_current = false WHERE commit_id = $1",
+            &[self],
+        )
+        .await
+        .map_err(|error| DbQueryError {
+            action: "mark_commit_not_current",
+            entity_type: EntityType::Commit,
+            raw_id: Some(self.bare_i32()),
+            clauses: vec![],
+            error,
+        })?;
+
+        // There should only be at most one stack that any given commit lives in
+        tx.execute(
+            "DELETE FROM stack_commits WHERE stack_id = $1 AND commit_id = $2",
+            &[self],
+        )
+        .await
+        .map_err(|error| DbQueryError {
+            action: "delete_commit_from_stack",
+            entity_type: EntityType::Commit,
+            raw_id: Some(self.bare_i32()),
+            clauses: vec![],
+            error,
+        })?;
+
+        log_action(
+            tx,
+            EntityType::Commit,
+            self.bare_i32(),
+            "commit_marked_non_current",
+            Some("is_current"),
+            None,
+        )
+        .await?;
+
+        Ok(())
+    }
 }
 
 impl Commit {
@@ -337,4 +431,25 @@ impl CommitToTest {
             prs: vec![], // This will be populated by the calling code after grouping rows
         }
     }
+
+    /// Replaces the commit ID for the commit.
+    ///
+    /// This should be called when a commit's description or signedness state has changed, but
+    /// it has retained its jj change ID. It should **not** be called if the tree has changed
+    /// or if the jj change ID has been changed; in that case you probably want to mark the
+    /// commit as non-current in whatever PR you're considering, and make a new one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails (the update or the log).
+    pub async fn replace_commit_id(
+        &mut self,
+        tx: &Transaction<'_>,
+        new_commit_id: CommitId,
+    ) -> Result<(), DbQueryError> {
+        self.id.replace_commit_id(tx, &new_commit_id).await?;
+        self.git_commit_id = new_commit_id;
+        Ok(())
+    }
 }
+
