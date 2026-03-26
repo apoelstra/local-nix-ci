@@ -140,15 +140,6 @@ pub struct Transaction<'db> {
     inner: tokio_postgres::Transaction<'db>,
 }
 
-// FIXME this allows direct database access to work. We want to remove all
-// these accesses then delete this. Will do over the coming commits.
-impl<'db> core::ops::Deref for Transaction<'db> {
-    type Target = tokio_postgres::Transaction<'db>;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
 impl Transaction<'_> {
     /// Commits the transaction to the database.
     ///

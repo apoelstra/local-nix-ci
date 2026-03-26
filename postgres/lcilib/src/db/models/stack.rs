@@ -375,7 +375,7 @@ impl Stack {
     ///
     /// Returns an error if the database operation fails.
     pub async fn delete(self, tx: &Transaction<'_>) -> Result<(), DbQueryError> {
-        tx.execute(
+        tx.inner.execute(
             "DELETE FROM stacks WHERE id = $1",
             &[&self.id],
         )

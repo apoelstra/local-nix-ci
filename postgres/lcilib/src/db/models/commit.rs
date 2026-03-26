@@ -276,7 +276,7 @@ impl DbCommitId {
         tx: &Transaction<'_>,
         new_commit_id: &CommitId,
     ) -> Result<(), DbQueryError> {
-        tx.execute(
+        tx.inner.execute(
             "UPDATE commits SET git_commit_id = $1 WHERE id = $2",
             &[&new_commit_id, self],
         )
@@ -315,7 +315,7 @@ impl DbCommitId {
         &self,
         tx: &Transaction<'_>,
     ) -> Result<(), DbQueryError> {
-        tx.execute(
+        tx.inner.execute(
             "UPDATE pr_commits SET is_current = false WHERE commit_id = $1",
             &[self],
         )
@@ -329,7 +329,7 @@ impl DbCommitId {
         })?;
 
         // There should only be at most one stack that any given commit lives in
-        tx.execute(
+        tx.inner.execute(
             "DELETE FROM stack_commits WHERE commit_id = $1",
             &[self],
         )
