@@ -15,51 +15,40 @@ Having said that, if you are interested in using this, read on.
 # Setup
 
 1. Clone this repo somewhere.
-2. Then, ensure that you have a directory *one level above* the git repo that
-   you want to run CI on. This directory should be available for repo-related
-   files. See "Note on my `git worktree` setup" below for justification for this.
-3. Similarly, ensure you have your git setup to fetch the `/head` and `/merge`
-   refs from Github, and put them under `pr/`. To do this for all repos, add
-   this your `~/.gitconfig`:
-```
-[remote "origin"]
-        fetch = +refs/pull/*:refs/remotes/pr/*
-        fetch = +refs/merge-requests/*:refs/remotes/pr/*
-```
-   The first line is for GIthub, the second for Gitlab.
+2. Run `cargo build --release` in the `postgres/` directory and symlink it into
+   your `~/bin/` (or maybe you can run `cargo install`? I don't know what this
+   does.)
+3. Run `local-ci run` in a tmux session.
 
-4. Link all the shell files into `..`, and the appropriate `check-pr.nix` file:
-```
-ln -s "$PATH_TO_THIS_REPO/*.sh" ..
-ln -s "$PATH_TO_THIS_REPO/org.project.check-pr.nix" ../check-pr.nix
-```
-5. For Rust projects, generate some `Cargo.lock` files:
-```
-cargo +nightly update -Z minimal-versions && cp Cargo.lock ../Cargo.minimal.lock
-cargo +nightly update && cp Cargo.lock ../Cargo.latest.lock
-```
-   (You may need to do some `cargo update -p` iterating to fix the minimal lockfile,
-   because projects don't test their minimal lockfiles.)
-6. Generate the repo metadata: `../generate-repo-json.sh`
+## Review and Testing
 
-You should be good to go! Test it with
-```
-../test-pr.sh HEAD
-```
-which will test the single commit pointed to by `HEAD`.
+To review a PR, go to your local checkout and:
 
-In general, the syntax is
-```
-./test-pr.sh <ref | pr number> ["ACK"]
-```
-The script will attempt to interpret the first argument as a git ref. Failing
-that, it will assume it is a PR number, and using the `pr/#/head` and `pr/#/merge`
-refs from Github, figure out all the commits in the PR, and run itself on each
-of those.
+1. Fetch it from Github or Forgejo: `local-ci refresh <number>`
+2. Run `local-ci <number>` to see a summary, then run `local-ci next <number>`
+   repeatedly to review each commit and finally ACK the PR.
+3. Wait for the CI system to test each commit, create a merge commit, put it in
+   a "stack", and test that. (To see available stacks and their test status just
+   run `local-ci info`.)
+4. Sign the commits in the stack (see below)
 
-If the second argument is the string `ACK`, on success, it will use the `gh`
-tool to ACK the PR. You may want to try running this command yourself before
-letting the script do it. `gh` will initially ask some setup questions.
+## Signing and Pushing
+
+TODO implement this properly:
+
+1. For each commit in the stack you want to push, run
+
+```
+sqlite/check-and-sign.sh <pr number> <jj change ID of the merge>
+```
+
+2. Then run `local-ci info` and refresh a few times til the CI system has noticed
+   your signatures and updated the git commit IDs.
+3. Push: `git push origin <tip of stack>:master`
+4. Manually refresh all the PRs you pushed: `local-ci <number> refresh` so that the
+   system doesn't try to re-do them on a new stack. (It downloads all changes from
+   Github in real-time but somehow isn't notified about merges? I dunno. TODO
+   investigate why you have to do this manually)
 
 # Contributing
 
