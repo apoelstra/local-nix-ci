@@ -14,6 +14,9 @@
 ## On 2024-10-18 changed to 0c9668f3018e9d51e22189c218a4de9bbc8182ae which is my PR
 ## 365, which fixes a problem with rust-secp-zkp that was introduced by 357.
 ##
+## On 2026-03-29 changed to copy the `../include` directory alongside crate, if it
+## exists. This should make rust-bitcoin work with 5612 and friends.
+##
 
 #
 # Some tools that might be useful in builds.
@@ -168,6 +171,21 @@ rec {
         fi
 
         cp -r . $out/crate
+        # ASP: if there is an include directory, copy it into the source tree for every crate
+        #  and use sed to edit all the references to ../include/ to be ./include/. This is a
+        #  pretty big hack but it should be pretty fast and reliable in practice.
+        if [ -d "./include" ]; then
+            pushd $out/crate
+            find . -mindepth 1 -maxdepth 1 -type d -a \( -path './.*' -prune -o -path './include' -prune -o -print \)
+
+            find . -mindepth 1 -maxdepth 1 -type d -a \( -path './.*' -prune -o -path './include' -prune -o -print \) |
+            while read -r crate_dir;
+            do
+                cp -r include/ $crate_dir/
+                find "$crate_dir" -name '*.rs' -exec sed -i 's#\.\./include/#\./include/#' {} +
+            done
+            popd
+        fi
 
         echo "import ./crate/Cargo-generated.nix" > $out/default.nix
       '';
