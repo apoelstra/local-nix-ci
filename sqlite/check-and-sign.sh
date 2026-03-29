@@ -82,7 +82,12 @@ if [[ "$(echo "$description" | tr -s '[:space:]')" != "$(echo "$actual_descripti
     echo "--- End ---" >&2
     echo "$description" >$HOME/old
     echo "$actual_description" >$HOME/new
+read -p "Please type YES in all caps if you are absolutely sure this is ok: " confirmation
+
+if [[ "$confirmation" != "YES" ]]; then
+    echo "Signing cancelled. You must type exactly 'YES' to confirm." >&2
     exit 1
+fi
 fi
 
 echo "Checking that change has exactly two parents..."

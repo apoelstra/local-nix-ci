@@ -742,8 +742,6 @@ rec {
           export LD_LIBRARY_PATH=${rustcLdLibraryPath}
         '';
         testPostRun = ''
-            set -x
-            pwd
             export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin:${pkgs.pkg-config}/bin
             export NIXES_GENERATED_DIR=${generatedCargoNix}/
             # FIXME these two lines properly belong to icboc -- should add some config
