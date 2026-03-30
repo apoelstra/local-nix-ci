@@ -1087,10 +1087,8 @@ pub async fn refresh(
         }
     }
 
-    println!("Successfully refreshed PR #{}", pr_info.number);
-    println!("Title: {}", pr_info.title);
-    println!("Commits: {}", commit_records.len());
-    println!("Tip: {}", pr_info.head_commit.with_color());
+    println!("Refreshed PR #{}: {}", pr_info.number, pr_info.title);
+    println!("Commits: {}; tip: {}", commit_records.len(), pr_info.head_commit.with_color());
 
     Ok(())
 }

@@ -93,10 +93,9 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     .context("printing work summary")?;
 
     // 1. Check high-priority stacks first (with positive priority)
-    for (stack, commits) in &high_priority_stacks {
+    for (_stack, commits) in &high_priority_stacks {
         for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
-                log::info(format_args!("Found commit from high-priority stack {}", stack.id));
                 tx.commit().await.context("committing transaction")?;
                 return Ok(Some(commit.clone()));
             }
@@ -134,7 +133,6 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
             .await
             .context("getting next untested commit from PR")?
         {
-            log::info("Found commit from PR");
             tx.commit().await.context("committing transaction")?;
             return Ok(Some(commit));
         }
@@ -144,7 +142,6 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     for (_stack, commits) in &low_priority_stacks {
         for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
-                log::info("Found commit from low-priority stack");
                 tx.commit().await.context("committing transaction")?;
                 return Ok(Some(commit.clone()));
             }
@@ -384,7 +381,6 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
         // If we got a commit, we can reset the error backoff.
         error_limit.reset();
 
-        log::info("");
         let prs_desc = commit
             .prs
             .iter()

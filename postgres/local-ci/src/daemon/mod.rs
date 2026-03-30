@@ -40,7 +40,7 @@ async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
         .context("connecting to database for maintenance cycle")?;
 
     let mut error_limit = log::BackoffSleepToken::new();
-    let mut info_limit = log::RateLimiter::new(Duration::from_mins(20));
+    let mut info_limit = log::RateLimiter::new(Duration::from_mins(25));
 
     let idle_time = Duration::from_secs(30);
     loop {
@@ -705,13 +705,8 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             .with_context(|| format!("failed to refresh PR #{}", pr_info.number))
         {
             log::warn(&*e.into_boxed_dyn_error(), format_args!(
-                "Warning: Failed to process PR #{} in repository {}",
+                "Warning: Failed to refresh PR #{} in repository {}",
                 pr_info.number, repo.name,
-            ));
-        } else {
-            log::info(format_args!(
-                "Successfully synced PR #{} in repository {}",
-                pr_info.number, repo.name
             ));
         }
     }
