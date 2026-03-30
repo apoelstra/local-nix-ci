@@ -7,8 +7,12 @@
 
 // (Taken from trade-tracker, then made minor tweaks and clippy cleanups.)
 
+mod colorable;
+
 use core::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+pub use colorable::Colorable;
 
 static ENABLE_COLOR: AtomicBool = AtomicBool::new(true);
 
@@ -104,7 +108,6 @@ impl<D: fmt::Display> ColorFormat<D> {
     }
 
     /// Construct a new white formatter
-    #[expect(dead_code)]
     pub fn white(data: D) -> Self {
         Self::new(data, 250, 250, 250)
     }
@@ -134,21 +137,23 @@ impl<D: fmt::Display> ColorFormat<D> {
     }
 
     /// Construct a new light-purple formatter
-    #[expect(dead_code)]
     pub fn light_purple(data: D) -> Self {
         Self::new(data, 250, 110, 250)
     }
 
     /// Construct a new pale yellow formatter
-    #[expect(dead_code)]
     pub fn pale_yellow(data: D) -> Self {
         Self::new(data, 250, 250, 180)
     }
 
     /// Construct a new dull-green formatter
-    #[expect(dead_code)]
     pub fn dull_green(data: D) -> Self {
         Self::new(data, 130, 220, 130)
+    }
+
+    /// Construct a new dull-redformatter
+    pub fn dull_red(data: D) -> Self {
+        Self::new(data, 220, 130, 130)
     }
 
     #[expect(dead_code)]

@@ -18,6 +18,8 @@ use std::{
 };
 use xshell::{Shell, cmd};
 
+use crate::terminal::{Colorable as _, ColorFormat};
+
 /// Show information about a commit
 ///
 /// # Errors
@@ -211,18 +213,18 @@ pub async fn real_review(repo: &Repository, commit_hash: &git::CommitId, db: &mu
     loop {
         // Show menu
         println!("\nWhat would you like to do?");
-        println!("1a) Review and Approve");
-        println!("1b) Review and Reject");
+        println!("{} Review and Approve", ColorFormat::white("1a)"));
+        println!("{} Review and Reject", ColorFormat::white("1b)"));
         println!();
-        println!("2a) View existing review");
-        println!("2b) Erase review (mark unreviewed)");
+        println!("{} View existing review", ColorFormat::white("2a)"));
+        println!("{} Erase review (mark unreviewed)", ColorFormat::white("2b)"));
         println!();
-        println!("3a) View diff (50-line context)");
-        println!("3b) View diff (3-line context)");
-        println!("3c) View diff (5000-line context)");
-        println!("3d) View diff (stat)");
+        println!("{} View diff (50-line context)", ColorFormat::white("3a)"));
+        println!("{} View diff (3-line context)", ColorFormat::white("3b)"));
+        println!("{} View diff (5000-line context)", ColorFormat::white("3c)"));
+        println!("{} View diff (stat)", ColorFormat::white("3d)"));
         println!();
-        println!("4) Cancel");
+        println!("{} Cancel", ColorFormat::white("4)"));
         print!("Choice (1a-4): ");
         io::stdout().flush()?;
 
@@ -323,7 +325,7 @@ async fn show_commit_info(
             .await
             .context("failed to get commit info from git")?;
 
-    println!("{} {}", repo.name, commit_hash);
+    println!("{}", ColorFormat::white(format_args!("{} {}", repo.name, commit_hash)));
     println!("Author: {}", commit_info.author);
     println!("Date: {}", commit_info.date);
     println!();
@@ -331,9 +333,9 @@ async fn show_commit_info(
     println!();
     println!("Diffstat: {}", commit_info.diffstat);
     println!();
-    println!("Review Status: {:?}", commit.review_status);
+    println!("Review Status: {}", commit.review_status.with_color());
     println!("Should Run CI: {}", commit.should_run_ci);
-    println!("CI Status: {:?}", commit.ci_status);
+    println!("CI Status: {}", commit.ci_status.with_color());
     if let Some(ref derivation) = commit.nix_derivation {
         println!("Nix Derivation: {}", derivation);
     }
@@ -575,8 +577,8 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     {
         println!("Commit {} already exists in database.", commit_hash);
         println!("Created: {}", existing_commit.created_at);
-        println!("Review Status: {:?}", existing_commit.review_status);
-        println!("CI Status: {:?}", existing_commit.ci_status);
+        println!("Review Status: {}", existing_commit.review_status.with_color());
+        println!("CI Status: {}", existing_commit.ci_status.with_color());
     } else {
         // Create new commit record
         let new_commit = NewCommit {
@@ -594,7 +596,7 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
             .await
             .context("failed to create commit record")?;
 
-        println!("Successfully added commit {} to database.", commit_hash);
+        println!("Successfully added commit {} to database.", commit_hash.with_color());
         println!("Author: {}", commit_info.author);
         println!("Date: {}", commit_info.date);
         println!(

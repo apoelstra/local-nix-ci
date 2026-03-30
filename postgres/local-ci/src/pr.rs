@@ -21,6 +21,8 @@ use std::{
 };
 use xshell::{Shell, cmd};
 
+use crate::terminal::{Colorable as _, ColorFormat};
+
 /// Show information about a PR
 ///
 /// # Errors
@@ -45,8 +47,9 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to query pull request")?
     {
         println!(
-            "{} PR #{}: {}",
-            repo.name, pr.pr_number, pr.title
+            "{}: {}",
+            ColorFormat::white(format_args!("{} PR #{}", repo.name, pr.pr_number)),
+            pr.title
         );
         println!();
         println!(
@@ -58,8 +61,8 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             }
         );
         println!();
-        println!("Merge Status: {:?}", pr.merge_status);
-        println!("Review Status: {:?}", pr.review_status);
+        println!("Merge Status: {}", pr.merge_status.with_color());
+        println!("Review Status: {}", pr.review_status.with_color());
         println!("Priority: {}", pr.priority);
         println!("OK to Merge: {}", pr.ok_to_merge);
         println!("Required Reviewers: {}", pr.required_reviewers);
@@ -77,12 +80,12 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
             println!("\nCommits:");
             for (i, (commit, commit_type)) in commits.iter().enumerate() {
                 println!(
-                    "  {}. {} ({:?}) - Review: {:?}, CI: {:?}",
+                    "  {}. {} ({}) - Review: {}, CI: {}",
                     i + 1,
-                    commit.git_commit_id,
+                    commit.git_commit_id.with_color(),
                     commit_type,
-                    commit.review_status,
-                    commit.ci_status
+                    commit.review_status.with_color(),
+                    commit.ci_status.with_color()
                 );
             }
         }
@@ -114,7 +117,7 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                     "  {} by {} ({}): {}",
                     ack.created_at.format("%Y-%m-%d %H:%M:%S"),
                     ack.reviewer_name,
-                    ack.status,
+                    ack.status.with_color(),
                     ack.message
                 );
             }
@@ -509,15 +512,15 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     loop {
         // Show menu
         println!("\nWhat would you like to do?");
-        println!("1a) ACK (approve)");
-        println!("1b) NACK (reject)");
+        println!("{} ACK (approve)", ColorFormat::white("1a)"));
+        println!("{} NACK (reject)", ColorFormat::white("1b)"));
         println!();
-        println!("2a) View existing ACKs");
-        println!("2b) Erase ACK");
+        println!("{} View existing ACKs", ColorFormat::white("2a)"));
+        println!("{} Erase ACK", ColorFormat::white("2b)"));
         println!();
         println!("3x) View total diff (not implemented)");
         println!();
-        println!("4) Cancel");
+        println!("{} Cancel", ColorFormat::white("4)"));
         print!("Choice (1a-4): ");
         io::stdout().flush()?;
 
@@ -613,7 +616,7 @@ async fn show_pr_info(
         }
     );
     println!();
-    println!("Tip commit: {}", tip_commit.git_commit_id);
+    println!("Tip commit: {}", tip_commit.git_commit_id.with_color());
     println!("Author: {}", commit_info.author);
     println!("Date: {}", commit_info.date);
     println!();
@@ -621,8 +624,8 @@ async fn show_pr_info(
     println!();
     println!("Diffstat: {}", commit_info.diffstat);
     println!();
-    println!("Merge Status: {:?}", pr.merge_status);
-    println!("Review Status: {:?}", pr.review_status);
+    println!("Merge Status: {}", pr.merge_status.with_color());
+    println!("Review Status: {}", pr.review_status.with_color());
     println!("Priority: {}", pr.priority);
     println!("OK to Merge: {}", pr.ok_to_merge);
     println!("Required Reviewers: {}", pr.required_reviewers);
