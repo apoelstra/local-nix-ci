@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
 
+use crate::terminal::{ColorFormat, Colorable as _};
+
 use super::mark_commit_status;
 use super::{build_derivation, log, util};
 
@@ -384,23 +386,28 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
         error_limit.reset();
 
         log::info("");
-        log::info(format_args!(
-            "Starting CI for commit: {} ({})",
-            commit.git_commit_id, commit.jj_change_id
-        ));
+        let prs_desc = commit
+            .prs
+            .iter()
+            .map(|(pr, ty)| format!("#{} ({})", pr.pr_number, ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let commit_desc = format!(
+            "commit {} ({}) ({} PRs {})",
+            commit.git_commit_id.with_color(), commit.jj_change_id.prefix8(), repo.name, prs_desc,
+            
+        );
+        log::info(format_args!("{} for {}", ColorFormat::pale_yellow("Starting CI"), commit_desc));
         for (pr, commit_type) in &commit.prs {
             log::info(format_args!("    {} PR #{} ({}): {}", repo.name, pr.pr_number, commit_type, pr.title));
         }
         log::info("");
 
         // Process the commit
-        match build_derivation::process_commit_ci(&mut db, &commit, &repo).await {
+        match build_derivation::process_commit_ci(&mut db, &commit, &commit_desc, &repo).await {
             Ok(success) => {
                 if success {
-                    log::info(format_args!(
-                        "CI SUCCESS for commit: {}",
-                        commit.git_commit_id
-                    ));
+                    log::info(format_args!("{} for {}", ColorFormat::dull_green("CI SUCCESS"), commit_desc));
                     if let Err(e) = mark_commit_status(&mut db, commit.id, CiStatus::Passed).await {
                         log::warn(&*e.into_boxed_dyn_error(), "Failed to mark commit passed.");
                     }
@@ -416,10 +423,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                     */
                 } else {
                     // FIXME shouldn't this be an error case?
-                    log::info(format_args!(
-                        "CI FAILED for commit: {}",
-                        commit.git_commit_id
-                    ));
+                    log::info(format_args!("{} for {}", ColorFormat::dull_red("CI FAILED"), commit_desc));
                     // Error details already logged and commit marked as failed in process_commit_ci
                     if let Err(e) = mark_commit_status(&mut db, commit.id, CiStatus::Failed).await {
                         log::warn(&*e.into_boxed_dyn_error(), "Failed to mark commit failed.");

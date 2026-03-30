@@ -40,7 +40,7 @@ async fn run_db_maintenance_cycle() -> anyhow::Result<()> {
         .context("connecting to database for maintenance cycle")?;
 
     let mut error_limit = log::BackoffSleepToken::new();
-    let mut info_limit = log::RateLimiter::new(Duration::from_mins(5));
+    let mut info_limit = log::RateLimiter::new(Duration::from_mins(20));
 
     let idle_time = Duration::from_secs(30);
     loop {

@@ -21,12 +21,14 @@ use tokio::{
 };
 use xshell::cmd;
 
+use crate::terminal::ColorFormat;
 use super::mark_commit_status;
 use super::log;
 
 pub async fn process_commit_ci(
     db: &mut Db,
     commit: &CommitToTest,
+    commit_desc: &str,
     repo: &Repository,
 ) -> anyhow::Result<bool> {
     let repo_path = Path::new(&repo.path);
@@ -55,7 +57,7 @@ pub async fn process_commit_ci(
 
     // Get derivation path with cancellation checking
     let derivation_path =
-        match get_or_create_derivation_with_cancellation(db, commit, repo, &cargo_nixes).await {
+        match get_or_create_derivation_with_cancellation(db, commit, commit_desc, repo, &cargo_nixes).await {
             Ok(path) => path,
             Err(e) => {
                 log::warn(&*e.into_boxed_dyn_error(), "Failed to get derivation");
@@ -83,6 +85,7 @@ pub async fn process_commit_ci(
 async fn get_or_create_derivation_with_cancellation(
     db: &mut Db,
     commit: &CommitToTest,
+    commit_desc: &str,
     repo: &Repository,
     cargo_nixes: &str,
 ) -> anyhow::Result<String> {
@@ -113,10 +116,7 @@ async fn get_or_create_derivation_with_cancellation(
     );
 
     // Instantiate derivation with cancellation checking
-    log::info(format_args!(
-        "Instantiating derivation for commit {}",
-        commit.git_commit_id
-    ));
+    log::info(format_args!("{} for {}", ColorFormat::pale_yellow("Instantiating derivation"), commit_desc));
 
     let mut child = Command::new("nix-instantiate")
         .args([
@@ -231,7 +231,7 @@ async fn get_or_create_derivation_with_cancellation(
 
                 // Check if we should cancel
                 if should_cancel_ci(db, commit).await? {
-                    log::info(format_args!("CI cancellation requested for commit {}", commit.git_commit_id));
+                    log::info(format_args!("{} for {}", ColorFormat::light_purple("CI cancellation requested"), commit_desc));
 
                     // Kill the child process
                     if let Err(e) = child.kill().await {

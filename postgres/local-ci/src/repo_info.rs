@@ -170,9 +170,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
 
         println!("Stack {}: {} commits", stack.id, commits.len());
         for commit in &commits {
-            let pr = commit.id.get_pull_request(tx)
-                .await
-                .with_context(|| format!("getting PR for merge commit {}", commit.git_commit_id))?;
+            let pr = &commit.prs[0].0;
             let acks = Ack::find_by_pull_request(tx, pr.id)
                 .await
                 .context("failed to find ACKs for PR")?;
