@@ -172,11 +172,9 @@ async fn print_work_summary(
         return Ok(());
     }
 
-    log::info("=== Available Work Summary ===");
-
     // Print PR summary with individual commits
     if !prs_needing_testing.is_empty() {
-        log::info("\n");
+        log::info("");
         log::info("=== PRs needing testing ===");
     }
     for pr in prs_needing_testing {
@@ -226,7 +224,7 @@ async fn print_work_summary(
 
     // Print high-priority stack summary
     if !high_priority_stacks.is_empty() {
-        log::info("\n");
+        log::info("");
         log::info("=== High Priority Stacks ===");
     }
     for (stack, _commits) in high_priority_stacks {
@@ -294,6 +292,7 @@ async fn print_work_summary(
         ));
     }
 
+    log::info("");
     Ok(())
 }
 
