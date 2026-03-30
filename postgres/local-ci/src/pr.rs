@@ -517,6 +517,8 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         println!();
         println!("{} View existing ACKs", ColorFormat::white("2a)"));
         println!("{} Erase ACK", ColorFormat::white("2b)"));
+        println!("{} Increase priority", ColorFormat::white("2c)"));
+        println!("{} Decrease priority", ColorFormat::white("2d)"));
         println!();
         println!("3x) View total diff (not implemented)");
         println!();
@@ -575,6 +577,28 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                     .await
                     .context("failed to erase ACK")?;
                 println!("ACK erased successfully.");
+            }
+            "2c" => {
+                let new_priority = pr.priority.saturating_add(1);
+                let updates = UpdatePullRequest {
+                    priority: Some(new_priority),
+                    ..Default::default()
+                };
+                pr.update(&tx, &updates)
+                    .await
+                    .context("failed to update PR priority")?;
+                println!("Priority set from {} to {}.", pr.priority, new_priority);
+            }
+            "2d" => {
+                let new_priority = pr.priority.saturating_sub(1);
+                let updates = UpdatePullRequest {
+                    priority: Some(new_priority),
+                    ..Default::default()
+                };
+                pr.update(&tx, &updates)
+                    .await
+                    .context("failed to update PR priority")?;
+                println!("Priority set from {} to {}.", pr.priority, new_priority);
             }
             "4" => {
                 println!("Cancelled.");
