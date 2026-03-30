@@ -6,6 +6,8 @@ use lcilib::{
 };
 use xshell::{Shell, cmd};
 
+use crate::terminal::{ColorFormat, Colorable as _};
+
 /// Show overview of all PRs and commits in the current repository
 ///
 /// # Errors
@@ -24,7 +26,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to start database transaction")?;
 
-    println!("Repository: {} ({})", repo.name, repo.path);
+    println!("{}", ColorFormat::white(format_args!("Repository: {} ({})", repo.name, repo.path)));
     println!("Nixfile: {}", repo.nixfile_path);
     println!("Created: {}", repo.created_at);
     println!();
@@ -84,7 +86,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
 
 /// Display PRs organized by status
 fn show_prs(prs: &[PullRequest]) {
-    println!("=== Pull Requests by Status ===");
+    println!("{}", ColorFormat::white(format_args!("\n=== Pull Requests by Status ===")));
 
     // Ready to merge
     let ready_to_merge: Vec<_> = prs
@@ -154,7 +156,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         println!("\nNo stacks.");
         return Ok(());
     }
-    println!("\n=== Merge Stacks ===");
+    println!("{}", ColorFormat::white(format_args!("\n=== Merge Stacks ===")));
 
     for stack in stacks {
         let repo = Repository::get_by_id(tx, stack.repository_id).await?;
@@ -168,8 +170,23 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
 
         println!("Stack {}: {} commits", stack.id, commits.len());
         for commit in &commits {
-            println!("    {} / {} ({})", commit.git_commit_id.prefix8(), commit.jj_change_id.prefix8(), commit.ci_status);
+            let pr = commit.id.get_pull_request(tx)
+                .await
+                .with_context(|| format!("getting PR for merge commit {}", commit.git_commit_id))?;
+            let acks = Ack::find_by_pull_request(tx, pr.id)
+                .await
+                .context("failed to find ACKs for PR")?;
+
+            println!("    {} PR {} {} ({}): {} (ACKs: {})",
+                repo.name,
+                pr.pr_number,
+                commit.jj_change_id.prefix8(),
+                commit.git_commit_id.prefix8(),
+                commit.ci_status.with_color(),
+                acks.into_iter().map(|a| a.reviewer_name).collect::<Vec<_>>().join(", "),
+            );
         }
+        println!();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let shell = Shell::new()?;
             let _guard = shell.push_dir(&repo.path);
@@ -185,30 +202,9 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
 
 /// Display pending actions that need attention
 fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[Ack]) {
-    println!("\n=== Pending Actions ===");
+    println!("{}", ColorFormat::white(format_args!("\n=== Pending Actions ===")));
 
     let mut has_pending = false;
-
-    // Pending ACKs
-    let pending_acks: Vec<_> = acks
-        .iter()
-        .filter(|ack| ack.status == AckStatus::Pending)
-        .collect();
-
-    if !pending_acks.is_empty() {
-        has_pending = true;
-        println!("ACKs Pending ({}):", pending_acks.len());
-        for ack in pending_acks {
-            // Find the PR for this ACK
-            if let Some(pr) = prs.iter().find(|pr| pr.id == ack.pull_request_id) {
-                println!(
-                    "  PR #{}: {} by {}",
-                    pr.pr_number, ack.message, ack.reviewer_name
-                );
-            }
-        }
-        println!();
-    }
 
     // Failed ACKs
     let failed_acks: Vec<_> = acks
@@ -239,16 +235,24 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[A
     if !ci_needed.is_empty() {
         has_pending = true;
         println!("Commits Needing CI ({}):", ci_needed.len());
+        let mut n_unreviewed = 0;
         for commit in &ci_needed {
             let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
             let prs_str = prs.join(", ");
-
-            println!(
-                "  {} ({}) ({})",
-                commit.review_status,
-                commit.git_commit_id.prefix8(),
-                prs_str,
-            );
+            
+            if commit.review_status == ReviewStatus::Unreviewed {
+                n_unreviewed += 1;
+            } else {
+                println!(
+                    "  {} ({}) ({})",
+                    commit.review_status.with_color(),
+                    commit.git_commit_id.prefix8(),
+                    prs_str,
+                );
+            }
+        }
+        if n_unreviewed > 0 {
+            println!("...plus {} unreviewed.", n_unreviewed);
         }
         println!();
     }
@@ -261,7 +265,7 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[A
 
 /// Display CI status overview
 fn show_ci_status(commits: &[CommitToTest]) {
-    println!("\n=== CI Status ===");
+    println!("{}", ColorFormat::white(format_args!("\n=== CI Status ===")));
 
     // CI failures
     let ci_failed: Vec<_> = commits
@@ -288,32 +292,8 @@ fn show_ci_status(commits: &[CommitToTest]) {
         println!();
     }
 
-    // Recent CI passes (last 5)
-    let ci_passed: Vec<_> = commits
-        .iter()
-        .filter(|c| c.ci_status == CiStatus::Passed)
-        .collect();
-
-    if !ci_passed.is_empty() {
-        println!("Recent CI Passes (showing last 5):");
-        for commit in ci_passed.iter().take(5) {
-            let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
-            let prs_str = prs.join(", ");
-
-            println!(
-                "  {} ({})",
-                commit.git_commit_id.prefix8(),
-                prs_str,
-            );
-        }
-        if ci_passed.len() > 5 {
-            println!("  ... and {} more passed", ci_passed.len() - 5);
-        }
-        println!();
-    }
-
-    if ci_failed.is_empty() && ci_passed.is_empty() {
-        println!("No CI results yet.");
+    if ci_failed.is_empty() {
+        println!("No CI failures.");
         println!();
     }
 }
