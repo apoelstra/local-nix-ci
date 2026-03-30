@@ -393,7 +393,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
             .collect::<Vec<_>>()
             .join(", ");
         let commit_desc = format!(
-            "commit {} ({}) ({} PRs {})",
+            "commit {} ({}) ({} PR {})",
             commit.git_commit_id.with_color(), commit.jj_change_id.prefix8(), repo.name, prs_desc,
             
         );

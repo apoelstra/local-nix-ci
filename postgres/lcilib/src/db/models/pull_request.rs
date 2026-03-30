@@ -274,7 +274,7 @@ impl DbPullRequestId {
                     COUNT(*) as total,
                     COUNT(CASE WHEN c.review_status = 'approved' THEN 1 END) as approved,
                     COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'unstarted' AND c.should_run_ci = true THEN 1 END) as untested,
-                    COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'passed' THEN 1 END) as ready
+                    COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'passed' THEN 1 END) as ready,
                     COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'failed' THEN 1 END) as failed
                 FROM commits c
                 JOIN pr_commits pc ON c.id = pc.commit_id
