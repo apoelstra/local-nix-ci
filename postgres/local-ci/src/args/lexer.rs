@@ -48,6 +48,8 @@ pub enum ArgToken {
     Until(String),
     /// Anything else is assumed to be a git ref or jj change ID.
     MaybeRef(String),
+    /// The literal "--no-color"
+    NoColorFlag,
 }
 
 fn parse_as_pr_number(s: &str) -> Option<usize> {
@@ -117,6 +119,7 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
                 let value = args.next().unwrap_or_default();
                 Some(ArgToken::Until(value))
             }
+            "--no-color" => Some(ArgToken::NoColorFlag),
             _ => {
                 if s_arg.len() > 6 && s_arg.as_bytes()[..6] == *b"merge-" {
                     if let Some(res) = parse_as_pr_number(&s_arg[6..]) {

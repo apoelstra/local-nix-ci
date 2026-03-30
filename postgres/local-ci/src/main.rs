@@ -5,6 +5,7 @@ mod commit;
 mod daemon;
 mod pr;
 mod repo_info;
+mod terminal;
 
 use anyhow::Context as _;
 use args::{Action, Target};
@@ -14,6 +15,10 @@ use lcilib::Db;
 async fn main() -> anyhow::Result<()> {
     let args = args::parse_cli();
     let mut db = Db::connect().await.context("connecting to database")?;
+
+    if !args.enable_color {
+        terminal::disable_terminal_color();
+    }
 
     match (args.action, args.target) {
         (Action::Info, Target::None) => {

@@ -68,6 +68,8 @@ pub struct CliArguments {
     pub target: Target,
     /// Populated when `action == Action::Log`.
     pub log_options: Option<LogOptions>,
+    /// Can be disabled with the '--no-color' flag
+    pub enable_color: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,6 +241,7 @@ fn parse_args() -> Result<CliArguments, ParseError> {
     // the action turns out not to be Log.
     let mut saw_log_option: Option<&'static str> = None;
 
+    let mut enable_color = true;
     for token in lexed_args() {
         use ParseError as PE;
         match token {
@@ -257,6 +260,9 @@ fn parse_args() -> Result<CliArguments, ParseError> {
                 usage();
                 process::exit(0);
             }
+
+            // Flags
+            ArgToken::NoColorFlag => enable_color = false,
 
             // Target types
             ArgToken::Pr => {
@@ -415,13 +421,14 @@ fn parse_args() -> Result<CliArguments, ParseError> {
         action,
         target: final_target,
         log_options,
+        enable_color,
     })
 }
 
 pub fn usage() {
     let name = PROGRAM_NAME.get().map_or("local-ci", |s| s.as_str());
     eprintln!(
-        "Usage: {} [ACTION] [TARGET_TYPE] [TARGET] [LOG_OPTIONS]",
+        "Usage: {} [--no-color] [ACTION] [TARGET_TYPE] [TARGET] [LOG_OPTIONS]",
         name
     );
     eprintln!();
