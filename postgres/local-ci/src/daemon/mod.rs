@@ -156,10 +156,17 @@ async fn check_pending_acks(
         }
 
         if counts.ready != counts.total {
-            log_limit.run(|| log::info(format_args!(
-                "PR #{} approved ({} commits; {} approved, {} passed).",
-                pr.pr_number, counts.total, counts.approved, counts.ready,
-            )));
+            if counts.failed > 0 {
+                log_limit.run(|| log::info(format_args!(
+                    "PR #{} approved ({} commits; {} approved, {} passed, {} failed).",
+                    pr.pr_number, counts.total, counts.approved, counts.ready, counts.failed,
+                )));
+            } else {
+                log_limit.run(|| log::info(format_args!(
+                    "PR #{} approved ({} commits; {} approved, {} passed).",
+                    pr.pr_number, counts.total, counts.approved, counts.ready,
+                )));
+            }
             continue;
         }
 
