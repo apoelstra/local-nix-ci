@@ -63,8 +63,8 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         println!();
         println!("Merge Status: {}", pr.merge_status.with_color());
         println!("Review Status: {}", pr.review_status.with_color());
-        println!("Priority: {}", pr.priority);
-        println!("OK to Merge: {}", pr.ok_to_merge);
+        println!("Priority: {}", ColorFormat::redgreen(pr.priority, f64::from(pr.priority), -2.0, 2.0));
+        println!("OK to Merge: {}", pr.ok_to_merge.with_color());
         println!("Required Reviewers: {}", pr.required_reviewers);
         println!("Created: {}", pr.created_at);
         println!("Updated: {}", pr.updated_at);
@@ -651,7 +651,7 @@ async fn show_pr_info(
     println!("Merge Status: {}", pr.merge_status.with_color());
     println!("Review Status: {}", pr.review_status.with_color());
     println!("Priority: {}", pr.priority);
-    println!("OK to Merge: {}", pr.ok_to_merge);
+    println!("OK to Merge: {}", pr.ok_to_merge.with_color());
     println!("Required Reviewers: {}", pr.required_reviewers);
     println!("Created: {}", pr.created_at);
     println!("Updated: {}", pr.updated_at);
@@ -1090,7 +1090,7 @@ pub async fn refresh(
     println!("Successfully refreshed PR #{}", pr_info.number);
     println!("Title: {}", pr_info.title);
     println!("Commits: {}", commit_records.len());
-    println!("Head commit: {}", pr_info.head_commit);
+    println!("Tip: {}", pr_info.head_commit.with_color());
 
     Ok(())
 }

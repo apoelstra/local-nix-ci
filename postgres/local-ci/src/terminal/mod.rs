@@ -93,7 +93,6 @@ impl<D: fmt::Display> ColorFormat<D> {
 
     /// Construct a formatter which takes a value, a "red endpoint" and a "green endpoint"
     /// and interpolates a color between them
-    #[expect(dead_code)]
     #[expect(clippy::cast_possible_truncation)] // clearly ok
     #[expect(clippy::cast_sign_loss)] // clearly ok
     pub fn redgreen(data: D, val: f64, red: f64, green: f64) -> Self {

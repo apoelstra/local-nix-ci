@@ -11,6 +11,16 @@ pub trait Colorable: fmt::Display {
     fn with_color(&self) -> ColorFormat<&Self>;
 }
 
+impl Colorable for bool {
+    fn with_color(&self) -> ColorFormat<&Self> {
+        if *self {
+            ColorFormat::dull_green(self)
+        } else {
+            ColorFormat::dull_red(self)
+        }
+    }
+}
+
 impl Colorable for CommitId {
     fn with_color(&self) -> ColorFormat<&Self> {
         ColorFormat::white(self)
