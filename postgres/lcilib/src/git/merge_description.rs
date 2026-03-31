@@ -83,7 +83,7 @@ pub async fn compute_merge_description(
     let mut message = if pr.title.is_empty() {
         format!("Merge {}#{}\n\n", project, pr.pr_number)
     } else {
-        format!("Merge {}#{}: {}\n\n", project, pr.pr_number, pr.title)
+        format!("Merge {}#{}: {}\n\n", project, pr.pr_number, pr.title.trim())
     };
 
     // Get commit list from database and format using jj
