@@ -6,7 +6,11 @@ in import ./rust.check-pr.nix {
   fullMatrixOverrideWithPrev = prev: {
     # Use MSRV as a proxy for "this is an old broken version"
     runClippy = { src, features, rustc, isMainWorkspace, isMainLockFile, msrv, ... } @ args: (prev.runClippy args) && msrv >= "1.63.0";
-    runFuzz = { src, features, rustc, isMainWorkspace, isMainLockFile, msrv, ... } @ args: (prev.runClippy args) && msrv >= "1.63.0";
+
+    # We don't have a direct way to say "run once per PR", but the default value for
+    # `runClippy` happens to be "run once per PR", so use that for fuzzing. On
+    # rust-bitcoin it's more than doubling the runtime to be fuzzing on each commit.
+    runFuzz = prev.runClippy;
 
     runFmt = false;
     releaseMode = false; # ungodly slow
