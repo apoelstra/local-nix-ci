@@ -789,6 +789,7 @@ rec {
         # picture of how long each instantiation takes.
         # builtins.trace "Evaluating test derivation"
         drv.overrideDerivation (drv: {
+          allowSubstitutes = false;
           # Add a bunch of stuff just to make the derivation easier to grok
           checkPrProjectName = projectName;
           checkPrPrNum = prNum;
@@ -815,6 +816,8 @@ rec {
   , fuzzTargets
   }: let
     singleFuzzLibfuzzerDrv = fuzzTarget: stdenv.mkDerivation {
+      allowSubstitutes = false;
+
       name = "cargo-fuzz-${fuzzTarget}";
       src = src.src;
       buildInputs = [
