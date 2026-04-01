@@ -39,9 +39,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
         .context("failed to get PRs for repository")?;
 
     // Get all stacks for this repository
-    let all_stacks = repo
-        .id
-        .get_stacks(&tx)
+    let all_stacks = Stack::get_all(&tx)
         .await
         .context("failed to get stacks for repository")?;
 

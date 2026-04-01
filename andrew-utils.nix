@@ -320,6 +320,9 @@ rec {
     runClippy = fullTip;
     runDocs = fullTip;
     runFmt = fullTip;
+    # Fuzzer schedule is same as fullTip except we don't enforce isMainWorkspace, since we
+    # need to run specifically in the workspace(s) that have libfuzzer deps.
+    runFuzz = { src, features, rustc, isMainLockFile, ... }: features == [ "default" ] && rustcIsNightly rustc && src.isTip && isMainLockFile;
     # This more-than-doubles the build time (vs not including it, in which case
     # we default to false). So this should be inherited in crates where the total
     # runtime is otherwise really fast, but probably not worthwhile otherwise.
@@ -768,7 +771,7 @@ rec {
             cargo doc -j1 --all-features --no-deps
           '' + lib.optionalString runFmt ''
             cargo fmt --all -- --check
-          '' + lib.optionalString (runFuzz && rustcIsNightly rustc && isMainLockFile && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
+          '' + lib.optionalString (runFuzz && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
             echo "Ran fuzztests (cargo-fuzz): ${fuzzLibfuzzerDrv}"
           '' + extraTestPostRunTopLevel + ''
             popd
