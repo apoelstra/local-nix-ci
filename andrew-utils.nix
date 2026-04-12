@@ -115,7 +115,7 @@ rec {
 
   # Takes a `src` object (as returned from `srcFromCommit`) and determines
   # the set of rustcs to test it with.
-  rustcsForSrc = { src, nightlyVersion ? null, msrvVersion ? null }:
+  rustcsForSrc = { src, msrvVersion ? null }:
     let
       pkgs = import <nixpkgs> {
         overlays = [
@@ -123,19 +123,18 @@ rec {
         ];
       };
       msrv = pkgs.rust-bin.fromRustupToolchain { channel = msrvVersion; };
+      # Warn on missing nightly-version since this is likely to cause problems
       nightly = if src.nightlyVersion != null
         then pkgs.rust-bin.fromRustupToolchain { channel = builtins.elemAt (builtins.match "([^\r\n]+)\r?\n?" src.nightlyVersion) 0; }
-        else builtins.trace "warning - no rust-version, using latest nightly" (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default));
+        else builtins.trace "warning - no nightly-version, using latest nightly" (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default));
+      # ...but don't warn on missing stable, because in theory this shouldn't matter
+      stable = if src.stableVersion != null
+        then pkgs.rust-bin.fromRustupToolchain { channel = builtins.elemAt (builtins.match "([^\r\n]+)\r?\n?" src.stableVersion) 0; }
+        else pkgs.rust-bin.stable.latest.default;
     in [
       msrv
-      pkgs.rust-bin.stable.latest.default
+      stable
       nightly
-      # In 2025-05 this started causing problems due to a new unused_code lint getting into beta
-      # very shortly after we'd addressed it on rust-bitcoin master, so already-opened PRs started
-      # failing with the beta compiler.
-      # Also running this takes time and I don't think once in 10+ years has this ever provided
-      # value.
-      #pkgs.rust-bin.beta.latest.default
     ];
 
   # Determines whether a given rustc is a nightly rustc.
@@ -377,9 +376,24 @@ rec {
       cargoToml = if builtins.pathExists "${src}/Cargo.toml" then
         nixpkgs.lib.trivial.importTOML "${src}/Cargo.toml"
       else null;
-      nightlyVersion = if builtins.pathExists "${src}/nightly-version" then
-        builtins.readFile "${src}/nightly-version"
-      else null;
+      nightlyVersion =
+        if cargoToml ? workspace
+          && cargoToml.workspace ? metadata
+          && cargoToml.workspace.metadata ? rbmt
+          && cargoToml.workspace.metadata.rbmt ? toolchains
+          && cargoToml.workspace.metadata.rbmt.toolchains ? nightly
+        then cargoToml.workspace.metadata.rbmt.toolchains.nightly
+        else if builtins.pathExists "${src}/nightly-version" then
+          builtins.readFile "${src}/nightly-version"
+        else null;
+      stableVersion =
+        if cargoToml ? workspace
+          && cargoToml.workspace ? metadata
+          && cargoToml.workspace.metadata ? rbmt
+          && cargoToml.workspace.metadata.rbmt ? toolchains
+          && cargoToml.workspace.metadata.rbmt.toolchains ? stable
+        then cargoToml.workspace.metadata.rbmt.toolchains.stable
+        else null;
     };
 
   derivationName = drv:
