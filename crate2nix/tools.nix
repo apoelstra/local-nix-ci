@@ -174,15 +174,23 @@ rec {
         # ASP: if there is an include directory, copy it into the source tree for every crate
         #  and use sed to edit all the references to ../include/ to be ./include/. This is a
         #  pretty big hack but it should be pretty fast and reliable in practice.
-        if [ -d "./include" ]; then
+        if [ -d "./include" ] ; then
             pushd $out/crate
             find . -mindepth 1 -maxdepth 1 -type d -a \( -path './.*' -prune -o -path './include' -prune -o -print \)
 
             find . -mindepth 1 -maxdepth 1 -type d -a \( -path './.*' -prune -o -path './include' -prune -o -print \) |
             while read -r crate_dir;
             do
-                cp -r include/ $crate_dir/
-                find "$crate_dir" -name '*.rs' -exec sed -i 's#\.\./include/#\./include/#' {} +
+                if [ -L "$crate_dir/include" ]; then
+                    # Symlinks will point outside of the crate dir and then not work, so delete
+                    # them and replace them with a real directory..
+                    rm "$crate_dir/include"
+                    cp -r include/ $crate_dir/
+                fi
+                if [ ! -e "$crate_dir/include" ]; then
+                    cp -r include/ $crate_dir/
+                    find "$crate_dir" -name '*.rs' -exec sed -i 's#\.\./include/#\./include/#' {} +
+                fi
             done
             popd
         fi

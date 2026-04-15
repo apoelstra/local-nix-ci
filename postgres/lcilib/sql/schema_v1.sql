@@ -2,7 +2,7 @@
 
 CREATE TYPE ack_status AS ENUM ('pending', 'failed', 'posted', 'external');
 CREATE TYPE ci_status AS ENUM ('unstarted', 'skipped', 'failed', 'passed');
-CREATE TYPE merge_status AS ENUM ('pending', 'cancelled', 'conflicted', 'pushed');
+CREATE TYPE merge_status AS ENUM ('pending', 'cancelled', 'draft', 'conflicted', 'pushed');
 CREATE TYPE review_status AS ENUM ('unreviewed', 'rejected', 'approved');
 
 CREATE TYPE commit_type AS ENUM ('normal', 'single', 'tip', 'merge');

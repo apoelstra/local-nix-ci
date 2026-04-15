@@ -457,6 +457,11 @@ fn determine_merge_status_from_github(pr_info: &gh::PrInfo) -> MergeStatus {
         return MergeStatus::Cancelled;
     }
 
+    // If it is a draft, this is merge status 'draft'
+    if pr_info.is_draft {
+        return MergeStatus::Draft;
+    }
+
     // Otherwise, if the PR cannot be merged due to conflict, it is 'conflicted'
     if pr_info.mergeable == "CONFLICTING" {
         return MergeStatus::Conflicted;

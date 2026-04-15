@@ -56,6 +56,7 @@ impl Colorable for MergeStatus {
             Self::Pending => ColorFormat::light_purple(self),
             Self::Cancelled => ColorFormat::pale_yellow(self),
             Self::Conflicted => ColorFormat::dull_red(self),
+            Self::Draft => ColorFormat::dull_red(self),
             Self::Pushed => ColorFormat::dull_green(self),
         }
     }

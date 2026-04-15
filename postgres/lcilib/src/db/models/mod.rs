@@ -81,6 +81,8 @@ pub enum MergeStatus {
     Cancelled,
     #[postgres(name = "conflicted")]
     Conflicted,
+    #[postgres(name = "draft")]
+    Draft,
     #[postgres(name = "pushed")]
     Pushed,
 }
@@ -91,6 +93,7 @@ impl fmt::Display for MergeStatus {
             Self::Pending => write!(f, "pending"),
             Self::Cancelled => write!(f, "cancelled"),
             Self::Conflicted => write!(f, "conflicted"),
+            Self::Draft => write!(f, "draft"),
             Self::Pushed => write!(f, "pushed"),
         }
     }

@@ -9,7 +9,7 @@ use std::fmt;
 use xshell::cmd;
 
 /// GitHub API fields to request for PR information
-const PR_JSON_FIELDS: &str = "number,title,body,author,commits,comments,reviews,headRefOid,baseRefName,state,mergeable,mergeStateStatus,closed,mergedAt";
+const PR_JSON_FIELDS: &str = "number,title,body,author,commits,comments,reviews,headRefOid,baseRefName,state,mergeable,mergeStateStatus,isDraft,closed,mergedAt";
 
 #[derive(Debug)]
 pub enum Error {

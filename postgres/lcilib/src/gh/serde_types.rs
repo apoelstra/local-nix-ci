@@ -62,6 +62,9 @@ pub struct PrInfo {
     #[serde(rename = "mergeStateStatus", default)]
     pub merge_state_status: String,
     #[serde(default)]
+    #[serde(rename = "isDraft")]
+    pub is_draft: bool,
+    #[serde(default)]
     pub closed: bool,
     #[serde(rename = "mergedAt")]
     pub merged_at: Option<String>,
