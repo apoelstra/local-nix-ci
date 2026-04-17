@@ -397,6 +397,13 @@ async fn try_extend_stack(
             }
             Ok(true)
         }
+        Err(jj::Error::AlreadyConflicted { .. }) => {
+            // suppress "already conflicted" errors which are basically just noise. We will
+            // log when the first conflict is created. Eventually we should accumulate these
+            // and show a summary or something to help predict conflicts but this is okay
+            // for now.
+            Ok(false)
+        },
         Err(e) => {
             if let Some(id) = stack_id {
                 log::info(format_args!(
