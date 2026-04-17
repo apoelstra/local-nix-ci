@@ -18,6 +18,10 @@ pub enum Error {
     ChangeId(ChangeIdError),
     ParseOutput(String),
     HasConflicts(ChangeId),
+    AlreadyConflicted {
+        conflicted_changes: Vec<ChangeId>,
+        parents: Vec<String>,
+    },
 }
 
 impl fmt::Display for Error {
@@ -28,6 +32,11 @@ impl fmt::Display for Error {
             Self::ChangeId(_) => f.write_str("failed to parse change ID"),
             Self::ParseOutput(s) => write!(f, "failed to parse output {s}"),
             Self::HasConflicts(s) => write!(f, "newly created change {s} is conflicted"),
+            Self::AlreadyConflicted { conflicted_changes, parents } => {
+                write!(f, "conflicted merge(s) already exist for parents {}: {}", 
+                       parents.join(", "), 
+                       conflicted_changes.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "))
+            },
         }
     }
 }
@@ -40,6 +49,7 @@ impl std::error::Error for Error {
             Self::ChangeId(e) => Some(e),
             Self::ParseOutput(..) => None,
             Self::HasConflicts(..) => None,
+            Self::AlreadyConflicted { .. } => None,
         }
     }
 }
@@ -163,19 +173,60 @@ pub async fn has_conflicts(shell: &RepoShell, change_id: &ChangeId) -> Result<bo
     Ok(!output.trim().is_empty())
 }
 
+/// Check for existing conflicted merges of the given parents
+///
+/// # Errors
+///
+/// Returns an error if the jj command fails to execute.
+async fn check_existing_conflicted_merges(
+    shell: &RepoShell,
+    parents: &[&str],
+) -> Result<Vec<ChangeId>, Error> {
+    assert!(!parents.is_empty(), "should not have a merge without parents");
+
+    let revset = format!("({}+) & conflicts()", parents.join(")+ & ("));
+    let output = jj_log(shell, Some("change_id.short() ++ \"\\n\""), &revset).await?;
+    if (output.trim()).is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut conflicted_changes = Vec::new();
+    for line in output.lines() {
+        if let Ok(change_id) = line.trim().parse() {
+            conflicted_changes.push(change_id);
+        } else {
+            eprintln!("[warning] failed to parse {} as change ID", line);
+        }
+    }
+    
+    Ok(conflicted_changes)
+}
+
 /// Create a merge commit using jj
 ///
 /// # Errors
 ///
-/// Returns an error if the jj command fails to execute or if the merge has conflicts.
+/// Returns an error if the jj command fails to execute, if existing conflicted merges exist,
+/// or if the merge has conflicts.
 pub async fn create_merge_commit(
     shell: &RepoShell,
     pr_tip_commit: &str,
     target_branch: &str,
     description: Option<&str>,
 ) -> Result<ChangeId, Error> {
+    // Check for existing conflicted merges
+    let parents = [target_branch, pr_tip_commit];
+    let conflicted_changes = check_existing_conflicted_merges(shell, &parents).await?;
+    
+    if !conflicted_changes.is_empty() {
+        return Err(Error::AlreadyConflicted {
+            conflicted_changes,
+            parents: parents.iter().map(|s| s.to_string()).collect(),
+        });
+    }
+
     // Create new merge commit
-    let change_id = jj_new(shell, &[target_branch, pr_tip_commit], description).await?;
+    let change_id = jj_new(shell, &parents, description).await?;
     // Check for conflicts
     if has_conflicts(shell, &change_id).await? {
         return Err(Error::HasConflicts(change_id));
