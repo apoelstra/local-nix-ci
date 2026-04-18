@@ -324,7 +324,9 @@ rec {
     isMainWorkspace = { mainCargoToml, workspace, ... }:
       (workspace == null || workspace == builtins.head mainCargoToml.workspace.members);
 
-    # Clippy runs with --all-targets so we only need to run it on one workspace.
+    # We run clippy at the top level, so we only need to run it
+    # in one workspace. This isn't great; there is no way to tell
+    # clippy "lint all the workspaces". See https://github.com/rust-bitcoin/rust-bitcoin/pull/6025
     runClippy = fullTip;
     runDocs = fullTip;
     runFmt = fullTip;
@@ -784,6 +786,7 @@ rec {
             ${docTestCmd}
           '' + lib.optionalString runClippy ''
             # Nightly clippy
+            cargo clippy --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
             cargo clippy --all-features --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
           '' + lib.optionalString runDocs ''
             # Do nightly "broken links" check
