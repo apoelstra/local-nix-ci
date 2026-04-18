@@ -432,6 +432,53 @@ impl CommitToTest {
         }
     }
 
+    /// Gets all approved commits that are untested and have no PR associations.
+    ///
+    /// Returns commits that are:
+    /// - Approved (ReviewStatus::Approved)
+    /// - Untested (CiStatus::Unstarted)
+    /// - Should run CI (should_run_ci = true)
+    /// - Have no entries in the pr_commits table
+    ///
+    /// Note: If a commit was previously associated with a PR, it will still have an entry
+    /// in the pr_commits table with is_current = false, and will therefore be excluded
+    /// from this query. Currently the CI system provides no way for users to force a
+    /// test of such commits. We will figure this out later once there is a need for
+    /// this functionality.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_standalone_approved_commits(
+        tx: &Transaction<'_>,
+    ) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx
+            .inner
+            .query(
+                r#"
+                SELECT id, repository_id, git_commit_id, jj_change_id, review_status,
+                       should_run_ci, ci_status, nix_derivation
+                FROM commits
+                WHERE review_status = 'approved'
+                  AND ci_status = 'unstarted'
+                  AND should_run_ci = true
+                  AND id NOT IN (SELECT commit_id FROM pr_commits)
+                ORDER BY created_at ASC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_standalone_approved_commits",
+                entity_type: EntityType::Commit,
+                raw_id: None,
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
     /// Replaces the commit ID for the commit.
     ///
     /// This should be called when a commit's description or signedness state has changed, but

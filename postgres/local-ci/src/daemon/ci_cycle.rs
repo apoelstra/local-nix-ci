@@ -77,6 +77,9 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     let tx = db.transaction().await.context("starting transaction")?;
 
     // Compute lists of available work and print summary.
+    let standalone_commits = CommitToTest::get_standalone_approved_commits(&tx)
+        .await
+        .context("finding standalone approved commits")?;
     let (high_priority_stacks, low_priority_stacks) =
         find_stacks(&tx).await.context("finding stacks")?;
     let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx)
@@ -85,6 +88,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
 
     print_work_summary(
         &tx,
+        &standalone_commits,
         &high_priority_stacks,
         &prs_needing_testing,
         &low_priority_stacks,
@@ -92,7 +96,15 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     .await
     .context("printing work summary")?;
 
-    // 1. Check high-priority stacks first (with positive priority)
+    // 1. Check standalone approved commits first (highest priority)
+    for commit in &standalone_commits {
+        if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
+            tx.commit().await.context("committing transaction")?;
+            return Ok(Some(commit.clone()));
+        }
+    }
+
+    // 2. Check high-priority stacks (with positive priority)
     for (_stack, commits) in &high_priority_stacks {
         for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
@@ -102,7 +114,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
         }
     }
 
-    // 2. Check PRs by priority (user priority, then all approved, then fewer untested, then age)
+    // 3. Check PRs by priority (user priority, then all approved, then fewer untested, then age)
     let mut prioritized_prs = Vec::new();
     for pr in &prs_needing_testing {
         let counts = pr
@@ -138,7 +150,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
         }
     }
 
-    // 3. Check low-priority stacks (negative priority or conflicting)
+    // 4. Check low-priority stacks (negative priority or conflicting)
     for (_stack, commits) in &low_priority_stacks {
         for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
@@ -155,11 +167,13 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
 /// Print a summary of all remaining work
 async fn print_work_summary(
     tx: &lcilib::Transaction<'_>,
+    standalone_commits: &[CommitToTest],
     high_priority_stacks: &[(Stack, Vec<CommitToTest>)],
     prs_needing_testing: &[PullRequest],
     low_priority_stacks: &[(Stack, Vec<CommitToTest>)],
 ) -> anyhow::Result<()> {
-    if prs_needing_testing.is_empty()
+    if standalone_commits.is_empty()
+        && prs_needing_testing.is_empty()
         && high_priority_stacks.is_empty()
         && low_priority_stacks.is_empty()
     {
@@ -167,6 +181,21 @@ async fn print_work_summary(
         // to print "nothing to do" messages without spamming the user at a higher
         // layer.
         return Ok(());
+    }
+
+    // Print standalone commits summary
+    if !standalone_commits.is_empty() {
+        log::info("");
+        log::info("=== Standalone Approved Commits ===");
+        for commit in standalone_commits {
+            let repo = Repository::get_by_id(tx, commit.repository_id).await?;
+            log::info(format_args!(
+                "{} commit {} ({})",
+                repo.name,
+                commit.git_commit_id,
+                commit.jj_change_id.prefix8()
+            ));
+        }
     }
 
     // Print PR summary with individual commits
@@ -381,20 +410,28 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
         // If we got a commit, we can reset the error backoff.
         error_limit.reset();
 
-        let prs_desc = commit
-            .prs
-            .iter()
-            .map(|(pr, ty)| format!("#{} ({})", pr.pr_number, ty))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let prs_desc = if commit.prs.is_empty() {
+            "no PRs".to_string()
+        } else {
+            commit
+                .prs
+                .iter()
+                .map(|(pr, ty)| format!("#{} ({})", pr.pr_number, ty))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let commit_desc = format!(
             "commit {} ({}) ({} PR {})",
             commit.git_commit_id.with_color(), commit.jj_change_id.prefix8(), repo.name, prs_desc,
             
         );
         log::info(format_args!("{} for {}", ColorFormat::pale_yellow("Starting CI"), commit_desc));
-        for (pr, commit_type) in &commit.prs {
-            log::info(format_args!("    {} PR #{} ({}): {}", repo.name, pr.pr_number, commit_type, pr.title));
+        if commit.prs.is_empty() {
+            log::info(format_args!("    {} standalone commit", repo.name));
+        } else {
+            for (pr, commit_type) in &commit.prs {
+                log::info(format_args!("    {} PR #{} ({}): {}", repo.name, pr.pr_number, commit_type, pr.title));
+            }
         }
         log::info("");
 
