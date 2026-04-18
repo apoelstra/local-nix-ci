@@ -265,7 +265,7 @@ rec {
     featuresName = features: "feat-" + builtins.substring
       0 8
       (builtins.hashString "sha256" (builtins.concatStringsSep "," features));
-    fullTip = { src, features, rustc, isMainWorkspace, isMainLockFile, ... }: features == [ "default" ] && rustcIsNightly rustc && src.isTip && isMainWorkspace && isMainLockFile;
+    fullTip = { src, features, rustc, isMainWorkspace, isMainLockFile, ... }: features == [ ] && rustcIsNightly rustc && src.isTip && isMainWorkspace && isMainLockFile;
   in jsonConfig: {
     projectName = jsonConfig.projectName;
     src = jsonConfig.gitCommits;
@@ -330,7 +330,7 @@ rec {
     runFmt = fullTip;
     # Fuzzer schedule is same as fullTip except we don't enforce isMainWorkspace, since we
     # need to run specifically in the workspace(s) that have libfuzzer deps.
-    runFuzz = { src, features, rustc, isMainLockFile, ... }: features == [ "default" ] && rustcIsNightly rustc && src.isTip && isMainLockFile;
+    runFuzz = { src, features, rustc, isMainLockFile, ... }: features == [ ] && rustcIsNightly rustc && src.isTip && isMainLockFile;
     # This more-than-doubles the build time (vs not including it, in which case
     # we default to false). So this should be inherited in crates where the total
     # runtime is otherwise really fast, but probably not worthwhile otherwise.
