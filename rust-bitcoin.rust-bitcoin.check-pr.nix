@@ -27,10 +27,9 @@ in import ./rust.check-pr.nix {
       } { inherit src cargoToml needsNoStd rustc; }
       else utils.featuresForSrc { } { inherit src cargoToml needsNoStd rustc; };
 
-    extraTestPostRunTopLevel = { workspace, needsNoStd, msrv, ... }:
-    # FIXME remove the msrv requirement by fixing generate-files.sh on backport branches;
-    # remove the "false" by just waiting a week or two for all PRs to be based on fixed commit.
-    lib.optionalString (false && msrv >= "1.63.0" && ! needsNoStd && workspace == "bitcoin") ''
+    extraTestPostRunTopLevel = { cargoToml, ... }:
+    # FIXME remove this false at some point, maybe 2026-05-10
+    lib.optionalString (false && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
       CHECKDIR=$(mktemp -d)
       cp -r . "$CHECKDIR"
       chmod +w -R "$CHECKDIR"
@@ -41,6 +40,7 @@ in import ./rust.check-pr.nix {
 
       cd fuzz/
       patchShebangs ./generate-files.sh
+      sed -i 's#(cargo fuzz#(${utils.nixpkgs.cargo-fuzz}/bin/cargo-fuzz#' ./generate-files.sh
       sed -i 's/REPO_DIR=.*/REPO_DIR=../' generate-files.sh
       sed -i 's/REPO_DIR=.*/REPO_DIR=../' fuzz-util.sh
       ./generate-files.sh
