@@ -96,7 +96,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Shell(_) => f.write_str("failed to invoke git"),
+            Self::Shell(_) => f.write_str("shell command failed"),
             Self::ShellLock(_) => f.write_str("panic while holding shell lock"),
             Self::CommitParse(s, _) => write!(f, "failed to parse {s} as git commit"),
             Self::CommitNotFound(commit) => write!(
