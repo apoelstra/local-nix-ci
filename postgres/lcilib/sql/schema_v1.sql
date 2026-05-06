@@ -39,7 +39,7 @@ CREATE TABLE commits (
     review_text TEXT, -- Freeform review text
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
-    UNIQUE(repository_id, git_commit_id),
+    UNIQUE(repository_id, git_commit_id)
 );
 
 -- Pull requests table
@@ -107,7 +107,7 @@ CREATE TABLE acks (
     message TEXT NOT NULL,
     status ack_status NOT NULL DEFAULT 'pending',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Allowed approvers table for tracking who can approve PRs
