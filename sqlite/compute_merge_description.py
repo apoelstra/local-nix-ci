@@ -183,7 +183,7 @@ def make_acks_message(head_commit, acks) -> str:
         ack_str ='\n\nACKs for top commit:\n'.format(head_commit)
         for name, msg in acks.items():
             ack_str += '  {}:\n'.format(name)
-            ack_str += '    {}\n'.format(msg)
+            ack_str += '    {}\n'.format(msg.strip())
     else:
         ack_str ='\n\nTop commit has no ACKs.\n'
     return ack_str

@@ -188,7 +188,7 @@ pub async fn compute_merge_description(
         message.push_str("\n\nACKs for top commit:\n");
         for (name, ack_msg) in &acks {
             if let Some((ack_msg, _)) = extract_ack_from_text(ack_msg, &commit_map) {
-                message.push_str(&format!("  {}:\n    {}\n", name, ack_msg));
+                message.push_str(&format!("  {}:\n    {}\n", name, ack_msg.trim()));
             }
         }
     }

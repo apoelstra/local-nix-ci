@@ -13,7 +13,7 @@ import hashlib
 
 # External tools (can be overridden using environment)
 GIT = os.getenv('GIT', 'git')
-JJ = os.getenv('JJ', '/home/apoelstra/code/jj-vcs/jj/main/target/release/jj')
+JJ = os.getenv('JJ', 'jj')
 
 def tree_sha512sum(commit='HEAD'):
     # request metadata for entire tree, recursively
