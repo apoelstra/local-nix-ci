@@ -313,6 +313,8 @@ async fn scan_and_update_acks(
     let mut existing_external_acks = HashMap::new();
     let mut existing_user_acks = HashMap::new();
 
+    println!("{:?}", found_acks);
+
     for ack in existing_acks {
         if ack.reviewer_name == current_user {
             // Group current user's ACKs by message
@@ -682,7 +684,7 @@ fn handle_ack_with_editor(commit: &Commit, is_ack: bool) -> anyhow::Result<Optio
     };
 
     let prefill_content = format!(
-        "# Enter your {} message here. Commit: {}\n# Edit the message above. Lines starting with # will be removed.\n{}",
+        "\n# Enter your {} message here. Commit: {}\n# Edit the message above. Lines starting with # will be removed.\n{}",
         action_text, commit.git_commit_id, default_message
     );
 

@@ -393,7 +393,7 @@ async fn handle_review_with_editor(
         };
 
         let prefill_content = format!(
-            "# Enter your review here. Updated commit {} review status: {}\n# Edit the review message above. Lines starting with # will be removed.\n{}",
+            "\n# Enter your review here. Updated commit {} review status: {}\n# Edit the review message above. Lines starting with # will be removed.\n{}",
             commit_git_id,
             status_text,
             existing_review.as_deref().unwrap_or("")
