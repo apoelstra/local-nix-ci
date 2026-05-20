@@ -419,7 +419,7 @@ fn extract_ack_from_text(
             }
         }
 
-        let ack_pos = ack_word_pos?;
+        let Some(ack_pos) = ack_word_pos else { continue };
 
         // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
         for word in words.iter().skip(ack_pos) {
@@ -1096,4 +1096,28 @@ pub async fn refresh(
     println!("Commits: {}; tip: {}", commit_records.len(), pr_info.head_commit.with_color());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_id() -> DbCommitId {
+        // SAFETY: whatever
+        unsafe { core::mem::zeroed() }
+    }
+
+    #[test]
+    fn extract_ack() {
+        let map = {
+            let mut map = HashMap::new();
+            map.insert("2a20232".to_owned(), dummy_id());
+            map
+        };
+        extract_ack_from_text("Lol, in that case I just had a tickle in my throat...
+
+            ACK 2a20232",
+            &map,
+        ).unwrap();
+    }
 }
