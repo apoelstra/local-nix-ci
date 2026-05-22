@@ -684,8 +684,8 @@ fn handle_ack_with_editor(commit: &Commit, is_ack: bool) -> anyhow::Result<Optio
     };
 
     let prefill_content = format!(
-        "\n# Enter your {} message here. Commit: {}\n# Edit the message above. Lines starting with # will be removed.\n{}",
-        action_text, commit.git_commit_id, default_message
+        "{}\n# Enter your {} message here. Commit: {}\n# Edit the message above. Lines starting with # will be removed.",
+        default_message, action_text, commit.git_commit_id
     );
 
     fs::write(&temp_file_path, prefill_content.as_bytes())
