@@ -258,7 +258,7 @@ async fn scan_and_update_acks(
 
     // Scan comments
     for comment in &pr_info.comments {
-        if let Some((ack_text, commit_id)) = extract_ack_from_text(&comment.body, &commit_map) {
+        if let Some((ack_text, commit_id)) = git::extract_ack_from_text(&comment.body, &commit_map) {
             let timestamp = parse_github_timestamp(&comment.created_at)?;
             let reviewer = &comment.author.login;
 
@@ -281,7 +281,7 @@ async fn scan_and_update_acks(
 
     // Scan reviews
     for review in &pr_info.reviews {
-        if let Some((ack_text, commit_id)) = extract_ack_from_text(&review.body, &commit_map) {
+        if let Some((ack_text, commit_id)) = git::extract_ack_from_text(&review.body, &commit_map) {
             let timestamp = parse_github_timestamp(&review.submitted_at)?;
             let reviewer = &review.author.login;
 
@@ -397,47 +397,6 @@ async fn scan_and_update_acks(
         .context("failed to delete obsolete external ACKs")?;
 
     Ok(())
-}
-
-/// Extract ACK text and commit ID from a GitHub comment/review body
-fn extract_ack_from_text(
-    text: &str,
-    commit_map: &HashMap<String, DbCommitId>,
-) -> Option<(String, DbCommitId)> {
-    for line in text.lines() {
-        // Split line into alphanumeric words (punctuation acts as separator)
-        let words: Vec<&str> = line
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|word| !word.is_empty())
-            .collect();
-
-        // Look for words ending in "ACK" (case sensitive for ACK part)
-        let mut ack_word_pos = None;
-
-        for (i, word) in words.iter().enumerate() {
-            if word.ends_with("ACK") && !word.ends_with("NACK") && !word.ends_with("nACK") {
-                ack_word_pos = Some(i);
-                break;
-            }
-        }
-
-        let Some(ack_pos) = ack_word_pos else { continue };
-
-        // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
-        for word in words.iter().skip(ack_pos) {
-            if word.len() >= 7
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-                && let Some(commit_id) = commit_map.get(*word)
-            {
-                // Found a valid commit ID, construct the ACK text
-                let ack_text = line.trim().to_string();
-                return Some((ack_text, *commit_id));
-            }
-        }
-    }
-    None
 }
 
 /// Parse GitHub timestamp string to `DateTime<Utc>`
@@ -1098,28 +1057,4 @@ pub async fn refresh(
     println!("Commits: {}; tip: {}", commit_records.len(), pr_info.head_commit.with_color());
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn dummy_id() -> DbCommitId {
-        // SAFETY: whatever
-        unsafe { core::mem::zeroed() }
-    }
-
-    #[test]
-    fn extract_ack() {
-        let map = {
-            let mut map = HashMap::new();
-            map.insert("2a20232".to_owned(), dummy_id());
-            map
-        };
-        extract_ack_from_text("Lol, in that case I just had a tickle in my throat...
-
-            ACK 2a20232",
-            &map,
-        ).unwrap();
-    }
 }

@@ -10,7 +10,7 @@ use crate::db::models::{RepoShell, RepoShellLock};
 
 mod merge_description;
 
-pub use merge_description::{MergeDescriptionError, compute_merge_description};
+pub use merge_description::{MergeDescriptionError, compute_merge_description, extract_ack_from_text};
 
 /// Information about a git commit
 #[derive(Debug, Clone)]

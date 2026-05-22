@@ -2,7 +2,7 @@
 
 use crate::db::{
     DbQueryError,
-    models::{CommitToTest, PullRequest, Repository},
+    models::{CommitToTest, DbCommitId, PullRequest, Repository},
     Transaction,
 };
 use crate::git::CommitId;
@@ -46,6 +46,48 @@ impl std::error::Error for MergeDescriptionError {
             Self::DatabaseQuery(_, ref e) => Some(e),
         }
     }
+}
+
+
+/// Extract ACK text and commit ID from a GitHub comment/review body
+pub fn extract_ack_from_text(
+    text: &str,
+    commit_map: &HashMap<String, DbCommitId>,
+) -> Option<(String, DbCommitId)> {
+    for line in text.lines() {
+        // Split line into alphanumeric words (punctuation acts as separator)
+        let words: Vec<&str> = line
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .collect();
+
+        // Look for words ending in "ACK" (case sensitive for ACK part)
+        let mut ack_word_pos = None;
+
+        for (i, word) in words.iter().enumerate() {
+            if word.ends_with("ACK") && !word.ends_with("NACK") && !word.ends_with("nACK") {
+                ack_word_pos = Some(i);
+                break;
+            }
+        }
+
+        let Some(ack_pos) = ack_word_pos else { continue };
+
+        // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
+        for word in words.iter().skip(ack_pos) {
+            if word.len() >= 7
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+                && let Some(commit_id) = commit_map.get(*word)
+            {
+                // Found a valid commit ID, construct the ACK text
+                let ack_text = line.trim().to_string();
+                return Some((ack_text, *commit_id));
+            }
+        }
+    }
+    None
 }
 
 /// Computes a complete merge description that can be used as the git message for the merge
@@ -189,4 +231,28 @@ fn tree_sha512sum(sh: &Shell, commit_id: &CommitId) -> Result<String, MergeDescr
 
     let final_hash = sha512::Hash::from_engine(overall_engine);
     Ok(final_hash.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_id() -> DbCommitId {
+        // SAFETY: whatever
+        unsafe { core::mem::zeroed() }
+    }
+
+    #[test]
+    fn extract_ack() {
+        let map = {
+            let mut map = HashMap::new();
+            map.insert("2a20232".to_owned(), dummy_id());
+            map
+        };
+        extract_ack_from_text("Lol, in that case I just had a tickle in my throat...
+
+            ACK 2a20232",
+            &map,
+        ).unwrap();
+    }
 }
