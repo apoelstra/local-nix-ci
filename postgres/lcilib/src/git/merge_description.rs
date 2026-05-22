@@ -165,9 +165,19 @@ pub async fn compute_merge_description(
     if acks.is_empty() {
         message.push_str("\n\nTop commit has no ACKs.\n");
     } else {
+        // Create prefix->commit map with only the tip in it, so we can filter
+        // any non-tip ACKs or other cruft from the ACK messages.
+        let commit_map = {
+            let mut map = HashMap::new();
+            commits.last().map(|commit| commit.git_commit_id.populate_prefix_map(&mut map, commit.id));
+            map
+        };
+
         message.push_str("\n\nACKs for top commit:\n");
         for (name, ack_msg) in &acks {
-            message.push_str(&format!("  {}:\n    {}\n", name, ack_msg));
+            if let Some((ack_msg, _)) = extract_ack_from_text(&ack_msg, &commit_map) {
+                message.push_str(&format!("  {}:\n    {}\n", name, ack_msg));
+            }
         }
     }
 
