@@ -73,12 +73,27 @@ async fn calculate_commit_priority(
     // Start with: 10 × PR priority
     let mut priority = 10.0 * f64::from(base_priority);
 
-    // Add: +1 for every ACK
-    let ack_count = oldest_pr
+    // Add: +1 for every ACK, but dock for my own ACKs
+    let total_ack_count = oldest_pr
         .get_ack_count(tx)
         .await
         .context("getting ACK count")?;
-    priority += ack_count as f64;
+    let my_ack_count = oldest_pr
+        .get_my_ack_count(tx)
+        .await
+        .context("getting my ACK count")?;
+
+    let others_ack_count = total_ack_count - my_ack_count;
+    let is_my_pr = oldest_pr.is_mine(tx).await.context("checking if PR is mine")?;
+
+    // Full credit for others' ACKs
+    priority += others_ack_count as f64;
+
+    // Reduced credit for my own ACKs
+    if my_ack_count > 0 {
+        let my_ack_factor = if is_my_pr { 0.25 } else { 0.75 };
+        priority += (my_ack_count as f64) * my_ack_factor;
+    }
 
     // Add: +0.5 if GPG-signed already
     let repo = Repository::get_by_id(tx, commit.repository_id).await?;

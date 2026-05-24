@@ -494,6 +494,53 @@ impl PullRequest {
         Ok(row.get::<_, i64>(0))
     }
 
+    /// Get the number of valid ACKs from the configured user for this pull request
+    /// Only counts 'posted' and 'external' ACKs for the tip commit from my username
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_my_ack_count(&self, tx: &Transaction<'_>) -> Result<i64, DbQueryError> {
+        let username = tx.get_github_username().await
+            .map_err(|error| DbQueryError {
+                action: "query global username",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(self.id.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+        
+        let Some(username) = username else {
+            return Ok(0);
+        };
+
+        let row = tx
+            .inner
+            .query_one(
+                r#"
+                SELECT COUNT(*)
+                FROM acks
+                WHERE pull_request_id = $1
+                AND commit_id = $2
+                AND status IN ('posted', 'external')
+                AND reviewer_name = $3
+                "#,
+                &[&self.id, &self.tip_commit_id, &username],
+            )
+            .await
+            .map_err(|error| {
+                DbQueryError {
+                    action: "get_my_ack_count",
+                    entity_type: EntityType::PullRequest,
+                    raw_id: Some(self.id.bare_i32()),
+                    clauses: vec![],
+                    error,
+                }
+            })?;
+
+        Ok(row.get::<_, i64>(0))
+    }
+
     /// Get the next untested approved commit for this PR
     ///
     /// # Errors
