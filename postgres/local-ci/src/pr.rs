@@ -307,7 +307,9 @@ async fn scan_and_update_acks(
         .await
         .context("failed to get existing ACKs")?;
 
-    let current_user = "apoelstra"; // FIXME: should use per-repository git configuration
+    let current_user = tx.get_github_username().await
+        .context("getting GitHub username")?
+        .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
 
     // Separate existing ACKs by reviewer and status
     let mut existing_external_acks = HashMap::new();
@@ -327,7 +329,7 @@ async fn scan_and_update_acks(
 
     // Process found ACKs
     for (ack_text, reviewer, _timestamp, commit_id) in found_acks.values() {
-        if reviewer == current_user {
+        if *reviewer == current_user {
             // Handle current user's ACKs with special logic
             if let Some(existing_user_ack) = existing_user_acks.get(ack_text) {
                 // If we have a pending/failed ACK with identical text, upgrade it to posted
@@ -676,14 +678,16 @@ fn handle_ack_with_editor(commit: &Commit, is_ack: bool) -> anyhow::Result<Optio
     Ok(Some(ack_message))
 }
 
-/// Create a new ACK record, deleting any existing ACKs by the same reviewer for this PR
+/// Create a new ACK record, deleting any existing ACKs by the reviewer for this PR
 async fn create_or_overwrite_ack(
     tx: &lcilib::Transaction<'_>,
     pull_request_id: DbPullRequestId,
     commit_id: DbCommitId,
     message: &str,
 ) -> anyhow::Result<()> {
-    let reviewer_name = "apoelstra"; // FIXME: should use per-repository git configuration
+    let reviewer_name = tx.get_github_username().await
+        .context("getting GitHub username")?
+        .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
 
     // Delete any existing ACKs by this reviewer for this PR
     let existing_acks = Ack::find_by_pull_request(tx, pull_request_id)
@@ -753,7 +757,9 @@ async fn erase_ack(
         .await
         .context("failed to find ACKs for PR")?;
 
-    let reviewer_name = "apoelstra"; // FIXME: should use per-repository git configuration
+    let reviewer_name = tx.get_github_username().await
+        .context("getting GitHub username")?
+        .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
 
     let matching_ack = acks
         .iter()

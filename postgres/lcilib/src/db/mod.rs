@@ -158,6 +158,27 @@ impl Transaction<'_> {
     pub async fn rollback<E>(self) -> Result<(), tokio_postgres::Error> {
         self.inner.rollback().await
     }
+
+    /// Get the configured GitHub username
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_github_username(&self) -> Result<Option<String>, tokio_postgres::Error> {
+        let row = self.inner.query_one("SELECT github_username FROM global", &[]).await?;
+        let username: Option<String> = row.get("github_username");
+        Ok(username)
+    }
+
+    /// Set the GitHub username
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn set_github_username(&self, username: &str) -> Result<(), tokio_postgres::Error> {
+        self.inner.execute("UPDATE global SET github_username = $1", &[&username]).await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

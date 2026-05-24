@@ -566,6 +566,23 @@ impl PullRequest {
         .await?;
         ret
     }
+
+    /// Check if this PR belongs to the configured GitHub user
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn is_mine(&self, tx: &Transaction<'_>) -> Result<bool, DbQueryError> {
+        let username = tx.get_github_username().await
+            .map_err(|error| DbQueryError {
+                action: "query global username",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+        Ok(Some(&self.author_login) == username.as_ref())
+    }
 }
 
 impl core::ops::Deref for PullRequest {

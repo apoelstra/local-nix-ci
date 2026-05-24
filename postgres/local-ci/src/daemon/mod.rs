@@ -171,7 +171,10 @@ async fn check_pending_acks(
         }
 
         // All conditions met, post the ACK
-        let post_result = if pr.author_login == "apoelstra" {
+        let github_username = tx.get_github_username().await
+            .context("getting GitHub username")?
+            .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
+        let post_result = if pr.author_login == github_username {
             // Post comment instead of approval for own PRs
             gh::post_pr_comment(&repo.repo_shell, pr.pr_number, &ack.message).await
         } else {

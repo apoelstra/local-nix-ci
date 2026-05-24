@@ -10,7 +10,8 @@ CREATE TYPE entity_type AS ENUM ('repository', 'commit', 'pull_request', 'stack'
 
 -- Version
 CREATE TABLE global (
-    schema_version INTEGER NOT NULL
+    schema_version INTEGER NOT NULL,
+    github_username VARCHAR(255)
 );
 INSERT INTO global (schema_version)
 VALUES (1);
