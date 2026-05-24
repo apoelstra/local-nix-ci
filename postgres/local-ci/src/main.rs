@@ -20,6 +20,30 @@ async fn main() -> anyhow::Result<()> {
         terminal::disable_terminal_color();
     }
 
+    // Check and set GitHub username if not configured
+    db.with_transaction(|tx| async move {
+        let username = tx.get_github_username().await?;
+        
+        if username.is_none() {
+            println!("GitHub username not configured. Please enter your GitHub username:");
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).context("reading GitHub username")?;
+            let username = input.trim();
+            
+            if username.is_empty() {
+                anyhow::bail!("GitHub username cannot be empty");
+            }
+
+            tx.set_github_username(username).await?;
+            println!("GitHub username set to: {}", username);
+        }
+        
+        Ok(())
+    }).await
+    // Need to panic on this error rather than returning it because of std::Error bugs
+    // (as manifested in anyhow)
+    .expect("configuring GitHub username");
+
     match (args.action, args.target) {
         (Action::Info, Target::None) => {
             repo_info::overview(&mut db)
