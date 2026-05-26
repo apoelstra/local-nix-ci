@@ -55,6 +55,11 @@ pub fn extract_ack_from_text(
     commit_map: &HashMap<String, DbCommitId>,
 ) -> Option<(String, DbCommitId)> {
     for line in text.lines() {
+        // Skip quoted lines (starting with > after trimming)
+        if line.trim_start().starts_with('>') {
+            continue;
+        }
+        
         // Split line into alphanumeric words (punctuation acts as separator)
         let words: Vec<&str> = line
             .split(|c: char| !c.is_alphanumeric())
