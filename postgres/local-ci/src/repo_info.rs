@@ -148,7 +148,7 @@ fn show_prs(prs: &[PullRequest]) {
     }
 }
 
-/// Display PRs organized by status
+/// Display stacks organized by repository
 async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::Result<()> {
     if stacks.is_empty() {
         println!("\nNo stacks.");
@@ -156,41 +156,55 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
     }
     println!("{}", ColorFormat::white(format_args!("\n=== Merge Stacks ===")));
 
+    // Group stacks by repository
+    let mut stacks_by_repo: std::collections::HashMap<lcilib::db::models::DbRepositoryId, Vec<&Stack>> = std::collections::HashMap::new();
     for stack in stacks {
-        let repo = Repository::get_by_id(tx, stack.repository_id).await?;
+        stacks_by_repo.entry(stack.repository_id).or_default().push(stack);
+    }
 
-        let commits = stack.id.get_commits(tx).await?;
-        let ids: Vec<_> = commits
-            .iter()
-            .map(|commit| commit.git_commit_id.as_str())
-            .collect();
-        let revset = ids.join("|");
+    for (repo_id, repo_stacks) in stacks_by_repo {
+        let repo = Repository::get_by_id(tx, repo_id).await?;
+        
+        // Display repository heading
+        println!("{}", ColorFormat::white("\n***** ***** ***** ***** ***** ***** ***** *****"));
+        println!("{}", ColorFormat::white(format_args!("***** {:35} *****", repo.name)));
+        println!("{}", ColorFormat::white("***** ***** ***** ***** ***** ***** ***** *****\n"));
 
-        println!("Stack {}: {} commits", stack.id, commits.len());
-        for commit in &commits {
-            let pr = &commit.prs[0].0;
-            let acks = Ack::find_by_pull_request(tx, pr.id)
-                .await
-                .context("failed to find ACKs for PR")?;
+        for stack in repo_stacks {
+            let commits = stack.id.get_commits(tx).await?;
+            let ids: Vec<_> = commits
+                .iter()
+                .map(|commit| commit.git_commit_id.as_str())
+                .collect();
+            let revset = ids.join("|");
 
-            println!("    {} PR {} {} ({}): {} (ACKs: {})",
-                repo.name,
-                pr.pr_number,
-                commit.jj_change_id.prefix8(),
-                commit.git_commit_id.prefix8(),
-                commit.ci_status.with_color(),
-                acks.into_iter().map(|a| a.reviewer_name).collect::<Vec<_>>().join(", "),
-            );
+            println!("Stack {}: {} commits", stack.id, commits.len());
+            for commit in &commits {
+                let pr = &commit.prs[0].0;
+                let acks = Ack::find_by_pull_request(tx, pr.id)
+                    .await
+                    .context("failed to find ACKs for PR")?;
+
+                println!("    {} PR {} {} ({}): {} (ACKs: {})",
+                    repo.name,
+                    pr.pr_number,
+                    commit.jj_change_id.prefix8(),
+                    commit.git_commit_id.prefix8(),
+                    commit.ci_status.with_color(),
+                    acks.into_iter().map(|a| a.reviewer_name).collect::<Vec<_>>().join(", "),
+                );
+            }
+            println!();
+            let repo_path = repo.path.clone();
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let shell = Shell::new()?;
+                let _guard = shell.push_dir(&repo_path);
+
+                cmd!(shell, "jj log --no-pager -r {revset}").quiet().run()?;
+                Ok(())
+            })
+            .await??;
         }
-        println!();
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let shell = Shell::new()?;
-            let _guard = shell.push_dir(&repo.path);
-
-            cmd!(shell, "jj log --no-pager -r {revset}").quiet().run()?;
-            Ok(())
-        })
-        .await??;
     }
 
     Ok(())
