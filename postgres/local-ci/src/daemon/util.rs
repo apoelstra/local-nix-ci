@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
-use lcilib::db::models::{CommitToTest, Repository};
+use lcilib::db::models::{CiStatus, CommitToTest, Repository};
 use lcilib::jj::is_commit_gpg_signed;
 
 /// Calculate the priority of a stack using the formula from the documentation
@@ -15,7 +15,8 @@ pub async fn calculate_stack_priority(
 ) -> anyhow::Result<f64> {
     let mut total_priority = 0.0;
 
-    for (position, commit) in commits.iter().enumerate() {
+    let mut position = 0;
+    for commit in commits.iter() {
         let commit_priority = calculate_commit_priority(commit, tx)
             .await
             .context("calculating commit priority")?;
@@ -23,6 +24,13 @@ pub async fn calculate_stack_priority(
         // Apply position weighting: (1/2)^position
         let weight = 0.5_f64.powi(i32::try_from(position)?);
         total_priority += commit_priority * weight;
+
+        // Only increment "position" for untested commits. Otherwise we get perverse stuff
+        // where a stack with 5 finished merges and a high-priority PR on top is ignored
+        // in favor of a brand-new stack with the high-priority PR on the bottom.
+        if commit.ci_status != CiStatus::Passed {
+            position += 1;
+        }
     }
 
     Ok(total_priority)
