@@ -455,7 +455,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to start database transaction")?;
 
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
+    let Some(mut pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
         .await
         .context("failed to query pull request")?
     else {
@@ -556,6 +556,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                     .await
                     .context("failed to update PR priority")?;
                 println!("Priority set from {} to {}.", pr.priority, new_priority);
+                pr.priority = new_priority;
             }
             "2d" => {
                 let new_priority = pr.priority.saturating_sub(1);
@@ -567,6 +568,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
                     .await
                     .context("failed to update PR priority")?;
                 println!("Priority set from {} to {}.", pr.priority, new_priority);
+                pr.priority = new_priority;
             }
             "4" => {
                 println!("Cancelled.");
