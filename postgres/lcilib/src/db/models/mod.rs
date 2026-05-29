@@ -9,6 +9,7 @@ mod pr_commit;
 mod pull_request;
 mod repository;
 mod stack;
+mod user_priority_offset;
 
 use postgres_types::{FromSql, ToSql};
 use std::fmt;
@@ -22,6 +23,7 @@ pub use pr_commit::{DbPrCommitId, PrCommit};
 pub use pull_request::{DbPullRequestId, NewPullRequest, PullRequest, UpdatePullRequest};
 pub use repository::{DbRepositoryId, NewRepository, Repository, RepositoryError, RepoShell, RepoShellLock};
 pub use stack::{DbStackId, NewStack, Stack, StackCommit, UpdateStack};
+pub use user_priority_offset::{DbUserPriorityOffsetId, NewUserPriorityOffset, UserPriorityOffset};
 
 /// Error type for parsing enum values from strings
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -47,7 +47,7 @@ async fn calculate_commit_priority(
     tx: &lcilib::Transaction<'_>,
 ) -> anyhow::Result<f64> {
     use chrono::Utc;
-    use lcilib::db::models::{PrCommit, PullRequest};
+    use lcilib::db::models::{PrCommit, PullRequest, UserPriorityOffset};
 
     // Find the PR(s) this commit belongs to
     let pr_commits = PrCommit::find_by_commit(tx, commit.id)
@@ -80,6 +80,12 @@ async fn calculate_commit_priority(
 
     // Start with: 10 × PR priority
     let mut priority = 10.0 * f64::from(base_priority);
+
+    // Add user priority offset based on PR author
+    let user_offset = UserPriorityOffset::get_offset_by_username(tx, &oldest_pr.author_login)
+        .await
+        .context("getting user priority offset")?;
+    priority += f64::from(user_offset);
 
     // Add: +1 for every ACK, but dock for my own ACKs
     let total_ack_count = oldest_pr

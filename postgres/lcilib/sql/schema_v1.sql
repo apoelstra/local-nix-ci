@@ -120,6 +120,13 @@ CREATE TABLE allowed_approvers (
     UNIQUE(repository_id, approver_name)
 );
 
+-- User priority offsets table for adjusting merge priorities by GitHub username
+CREATE TABLE user_priority_offsets (
+    id SERIAL PRIMARY KEY,
+    github_username VARCHAR(255) NOT NULL UNIQUE,
+    priority_offset REAL NOT NULL DEFAULT 0.0
+);
+
 -- Polymorphic log table for all actions
 CREATE TABLE logs (
     id SERIAL PRIMARY KEY,
@@ -163,6 +170,8 @@ CREATE INDEX idx_acks_status ON acks(status);
 CREATE INDEX idx_allowed_approvers_repository_id ON allowed_approvers(repository_id);
 CREATE INDEX idx_allowed_approvers_name ON allowed_approvers(approver_name);
 
+CREATE INDEX idx_user_priority_offsets_username ON user_priority_offsets(github_username);
+
 CREATE INDEX idx_logs_entity_type_id ON logs(entity_type, entity_id);
 CREATE INDEX idx_logs_timestamp ON logs(timestamp);
 
@@ -185,6 +194,9 @@ CREATE TRIGGER update_stacks_updated_at BEFORE UPDATE ON stacks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_acks_updated_at BEFORE UPDATE ON acks
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_user_priority_offsets_updated_at BEFORE UPDATE ON user_priority_offsets
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Business logic triggers for commits
