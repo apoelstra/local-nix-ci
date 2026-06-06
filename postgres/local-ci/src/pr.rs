@@ -844,13 +844,110 @@ pub async fn log(
     Ok(())
 }
 
-/// Reset a PR (not implemented yet)
+/// Reset a PR by marking all merge commits as non-current
 ///
 /// # Errors
 ///
-/// Currently always succeeds but outputs a message
-pub async fn reset(pr_number: usize, _db: &mut Db) -> anyhow::Result<()> {
-    println!("Reset for PR #{} not implemented yet.", pr_number);
+/// Returns an error if:
+/// - Failed to get current repository information
+/// - Database transaction fails
+/// - Repository or PR lookup fails
+/// - User input fails
+pub async fn reset(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
+
+    let tx = db
+        .transaction()
+        .await
+        .context("failed to start database transaction")?;
+
+    // Look up the PR in the database
+    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
+        .await
+        .context("failed to query pull request")?
+    else {
+        anyhow::bail!(
+            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
+            pr_number,
+            pr_number
+        );
+    };
+
+    // Get the tip commit for display
+    let Some(tip_commit) = Commit::find_by_id(&tx, pr.tip_commit_id)
+        .await
+        .context("failed to find tip commit")?
+    else {
+        anyhow::bail!("Tip commit not found for PR #{}", pr_number);
+    };
+
+    // Show current PR info
+    show_pr_info(&repo, &pr, &tip_commit).await?;
+
+    // Get all commits for this PR
+    let commits = pr
+        .get_commits(&tx)
+        .await
+        .context("failed to get PR commits")?;
+
+    // Filter for merge commits
+    let merge_commits: Vec<_> = commits
+        .iter()
+        .filter(|(_, commit_type)| *commit_type == CommitType::Merge)
+        .collect();
+
+    if merge_commits.is_empty() {
+        println!("\nNo merge commits found for PR #{}. Nothing to reset.", pr_number);
+        tx.commit().await.context("failed to commit transaction")?;
+        return Ok(());
+    }
+
+    // Show merge commits that will be affected
+    println!("\nThe following {} merge commit(s) will be marked as non-current:", merge_commits.len());
+    for (commit, _) in &merge_commits {
+        println!("  {} ({})", commit.git_commit_id.with_color(), commit.jj_change_id);
+    }
+
+    // Show warning and confirmation prompt
+    println!("\n{}", ColorFormat::pale_yellow("WARNING:"));
+    println!("This will mark all merge commits for this PR as non-current, which will:");
+    println!("- Remove the PR from any stacks it's currently in");
+    println!("- Force stack rebuilding when the daemon runs");
+    println!("- Potentially affect other PRs in the same stacks");
+    println!();
+    println!("If you don't want the merge commits to be recreated in the same place,");
+    println!("consider un-reviewing the PR or reducing its priority first.");
+    println!();
+
+    print!("Are you sure you want to reset PR #{}? (y/N): ", pr_number);
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let confirmation = input.trim().to_lowercase();
+
+    if confirmation != "y" && confirmation != "yes" {
+        println!("Reset cancelled.");
+        tx.commit().await.context("failed to commit transaction")?;
+        return Ok(());
+    }
+
+    // Mark all merge commits as non-current
+    let mut reset_count = 0;
+    for (commit, _) in &merge_commits {
+        commit.id.mark_non_current_for_all_prs_and_stacks(&tx)
+            .await
+            .with_context(|| format!("failed to mark commit {} as non-current", commit.git_commit_id))?;
+        reset_count += 1;
+    }
+
+    tx.commit().await.context("failed to commit transaction")?;
+
+    println!("Successfully reset {} merge commit(s) for PR #{}.", reset_count, pr_number);
+    println!("The daemon will handle stack cleanup automatically.");
+
     Ok(())
 }
 
