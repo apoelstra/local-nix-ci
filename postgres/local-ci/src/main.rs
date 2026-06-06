@@ -81,6 +81,16 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("refreshing commit")?;
         }
+        (Action::Reset, Target::Commit(commit_ref)) => {
+            commit::reset(&commit_ref, &mut db)
+                .await
+                .context("resetting commit")?;
+        }
+        (Action::Reset, Target::Pr(pr_number)) => {
+            pr::reset(pr_number, &mut db)
+                .await
+                .context("resetting PR")?;
+        }
         (Action::Log, Target::Commit(commit_ref)) => {
             let log_options = args.log_options.as_ref().unwrap();
             commit::log(

@@ -538,6 +538,65 @@ pub async fn log(
     Ok(())
 }
 
+/// Reset a commit's CI status and derivation
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Failed to get current repository information
+/// - Git reference resolution fails
+/// - Database transaction fails
+/// - Repository or commit lookup fails
+pub async fn reset(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
+    let repo = repo::current_repo(db)
+        .await
+        .context("failed to get current repository")?;
+
+    // Resolve the reference to a commit hash
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref).await.with_context(|| {
+        format!(
+            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+            commit_ref
+        )
+    })?;
+
+    let tx = db
+        .transaction()
+        .await
+        .context("failed to start database transaction")?;
+
+    // Look up the commit in the database
+    let Some(commit) = Commit::find_by_git_id(&tx, repo.id, &commit_hash)
+        .await
+        .context("failed to query commit")?
+    else {
+        anyhow::bail!(
+            "Commit {} not found in database. Use 'local-ci refresh commit {}' to add it to the database.",
+            commit_hash,
+            commit_ref
+        );
+    };
+
+    // Reset CI status and derivation
+    let update = UpdateCommit {
+        ci_status: Some(CiStatus::Unstarted),
+        nix_derivation: Some(None),
+        ..Default::default()
+    };
+
+    commit
+        .id
+        .apply_update(&tx, &update)
+        .await
+        .context("failed to reset commit")?;
+
+    println!("Reset commit {} - CI status set to unstarted, derivation cleared.", commit_hash.with_color());
+
+    tx.commit().await.context("failed to commit transaction")?;
+
+    Ok(())
+}
+
 /// Refresh a commit from the local git repository
 ///
 /// # Errors

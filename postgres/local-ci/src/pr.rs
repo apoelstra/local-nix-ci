@@ -844,6 +844,16 @@ pub async fn log(
     Ok(())
 }
 
+/// Reset a PR (not implemented yet)
+///
+/// # Errors
+///
+/// Currently always succeeds but outputs a message
+pub async fn reset(pr_number: usize, _db: &mut Db) -> anyhow::Result<()> {
+    println!("Reset for PR #{} not implemented yet.", pr_number);
+    Ok(())
+}
+
 /// Refresh a PR from GitHub (CLI entry point)
 ///
 /// # Errors

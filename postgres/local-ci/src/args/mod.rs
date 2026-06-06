@@ -25,6 +25,7 @@ pub enum Action {
     Info,
     Next,
     Refresh,
+    Reset,
     Review,
     Run,
     Log,
@@ -36,6 +37,7 @@ impl fmt::Display for Action {
             Self::Info => f.write_str("info"),
             Self::Next => f.write_str("next"),
             Self::Refresh => f.write_str("refresh"),
+            Self::Reset => f.write_str("reset"),
             Self::Review => f.write_str("review"),
             Self::Run => f.write_str("run"),
             Self::Log => f.write_str("log"),
@@ -163,7 +165,7 @@ impl std::fmt::Display for ParseError {
             Self::MissingAction => {
                 write!(
                     f,
-                    "No action specified. Please provide an action (info, log, next, refresh, review, or run)."
+                    "No action specified. Please provide an action (info, log, next, refresh, reset, review, or run)."
                 )
             }
         }
@@ -253,6 +255,7 @@ fn parse_args() -> Result<CliArguments, ParseError> {
             ArgToken::Info => set_once(&mut action, Action::Info, PE::MultipleActions)?,
             ArgToken::Next => set_once(&mut action, Action::Next, PE::MultipleActions)?,
             ArgToken::Refresh => set_once(&mut action, Action::Refresh, PE::MultipleActions)?,
+            ArgToken::Reset => set_once(&mut action, Action::Reset, PE::MultipleActions)?,
             ArgToken::Review => set_once(&mut action, Action::Review, PE::MultipleActions)?,
             ArgToken::Run => set_once(&mut action, Action::Run, PE::MultipleActions)?,
             ArgToken::Log => set_once(&mut action, Action::Log, PE::MultipleActions)?,
@@ -438,6 +441,7 @@ pub fn usage() {
     eprintln!("  log        Show recent logs");
     eprintln!("  next       Show next item to action");
     eprintln!("  refresh    Refresh data");
+    eprintln!("  reset      Reset CI status and derivations");
     eprintln!("  review     Review a PR");
     eprintln!("  run        Run tests");
     eprintln!();

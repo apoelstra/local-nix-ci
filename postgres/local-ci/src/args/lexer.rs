@@ -24,6 +24,8 @@ pub enum ArgToken {
     Refresh,
     /// The literal `review`. (Never interpreted as a number or ref.)
     Review,
+    /// The literal `reset`. (Never interpreted as a number or ref.)
+    Reset,
     /// The literal `run`. (Never interpreted as a number or ref.)
     Run,
     /// The literal `log`. (Never interpreted as a number or ref.)
@@ -98,6 +100,7 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
             "next" => Some(ArgToken::Next),
             "refresh" => Some(ArgToken::Refresh),
             "review" => Some(ArgToken::Review),
+            "reset" => Some(ArgToken::Reset),
             "run" => Some(ArgToken::Run),
             "log" => Some(ArgToken::Log),
             "help" => Some(ArgToken::Help),
