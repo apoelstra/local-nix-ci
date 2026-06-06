@@ -453,11 +453,11 @@ async fn show_diff(
     shell.with_lock_blocking(|shell| {
         if let Some(lines) = context {
             let lines = lines.to_string();
-            cmd!(shell, "git show --unified={lines} {commit_hash}")
+            cmd!(shell, "git show --color-moved-ws=ignore-all-space --unified={lines} {commit_hash}")
                 .run()
                 .context("failed to run git show")
         } else {
-            cmd!(shell, "git show {commit_hash}")
+            cmd!(shell, "git show --color-moved-ws=ignore-all-space {commit_hash}")
                 .run()
                 .context("failed to run git show")
         }
