@@ -3,7 +3,7 @@
 mod ci_cycle;
 mod log;
 mod build_derivation;
-mod util;
+pub mod util;
 
 use anyhow::Context as _;
 use lcilib::db::MergeStatus;

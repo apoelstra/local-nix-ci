@@ -6,6 +6,7 @@ use lcilib::{
 };
 use xshell::{Shell, cmd};
 
+use crate::daemon::util::calculate_stack_priority;
 use crate::terminal::{ColorFormat, Colorable as _};
 
 /// Show overview of all PRs and commits in the current repository
@@ -172,25 +173,27 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
 
         for stack in repo_stacks {
             let commits = stack.id.get_commits(tx).await?;
+            let prio = calculate_stack_priority(&commits, tx).await?;
             let ids: Vec<_> = commits
                 .iter()
                 .map(|commit| commit.git_commit_id.as_str())
                 .collect();
             let revset = ids.join("|");
 
-            println!("Stack {}: {} commits", stack.id, commits.len());
+            println!("Stack {}: prio {:1.3}, target {}, {} commits", stack.id, prio, stack.target_branch, commits.len());
             for commit in &commits {
                 let pr = &commit.prs[0].0;
                 let acks = Ack::find_by_pull_request(tx, pr.id)
                     .await
                     .context("failed to find ACKs for PR")?;
 
-                println!("    {} PR {} {} ({}): {} (ACKs: {})",
+                println!("    {} PR {} {} ({}): {} (prio {}, ACKs: {})",
                     repo.name,
                     pr.pr_number,
                     commit.jj_change_id.prefix8(),
                     commit.git_commit_id.prefix8(),
                     commit.ci_status.with_color(),
+                    pr.priority,
                     acks.into_iter().map(|a| a.reviewer_name).collect::<Vec<_>>().join(", "),
                 );
             }
