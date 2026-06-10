@@ -169,7 +169,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         // Display repository heading
         println!("{}", ColorFormat::white("\n***** ***** ***** ***** ***** ***** ***** *****"));
         println!("{}", ColorFormat::white(format_args!("***** {:35} *****", repo.name)));
-        println!("{}", ColorFormat::white("***** ***** ***** ***** ***** ***** ***** *****\n"));
+        println!("{}", ColorFormat::white("***** ***** ***** ***** ***** ***** ***** *****"));
 
         for stack in repo_stacks {
             let commits = stack.id.get_commits(tx).await?;
@@ -180,6 +180,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
                 .collect();
             let revset = ids.join("|");
 
+            println!();
             println!("Stack {}: prio {:1.3}, target {}, {} commits", stack.id, prio, stack.target_branch, commits.len());
             for commit in &commits {
                 let pr = &commit.prs[0].0;
@@ -189,8 +190,8 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
 
                 println!("    {} PR {} {} ({}): {} (prio {}, ACKs: {})",
                     repo.name,
-                    pr.pr_number,
-                    commit.jj_change_id.prefix8(),
+                    ColorFormat::white(pr.pr_number),
+                    ColorFormat::white(commit.jj_change_id.prefix8()),
                     commit.git_commit_id.prefix8(),
                     commit.ci_status.with_color(),
                     pr.priority,
@@ -248,6 +249,7 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[A
     if !ci_needed.is_empty() {
         has_pending = true;
         println!("Commits Needing CI ({}):", ci_needed.len());
+        let mut n_reviewed = 0;
         let mut n_unreviewed = 0;
         for commit in &ci_needed {
             let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
@@ -262,6 +264,12 @@ fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[A
                     commit.git_commit_id.prefix8(),
                     prs_str,
                 );
+
+                n_reviewed += 1;
+                if n_reviewed > 15 {
+                    println!("...plus {} more.", 15 - n_reviewed);
+                    break;
+                }
             }
         }
         if n_unreviewed > 0 {
