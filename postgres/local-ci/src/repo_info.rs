@@ -180,8 +180,8 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
                 .collect();
             let revset = ids.join("|");
 
-            println!();
-            println!("Stack {}: prio {:1.3}, target {}, {} commits", stack.id, prio, stack.target_branch, commits.len());
+            print!("\n{}", ColorFormat::light_green(format_args!("Stack {}: ", stack.id)));
+            println!("prio {:1.3}, target {}, {} commits", prio, stack.target_branch, commits.len());
             for commit in &commits {
                 let pr = &commit.prs[0].0;
                 let acks = Ack::find_by_pull_request(tx, pr.id)

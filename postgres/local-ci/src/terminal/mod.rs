@@ -130,7 +130,6 @@ impl<D: fmt::Display> ColorFormat<D> {
     }
 
     /// Construct a new light-green formatter
-    #[expect(dead_code)]
     pub fn light_green(data: D) -> Self {
         Self::new(data, 80, 250, 80)
     }

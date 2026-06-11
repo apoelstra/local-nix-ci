@@ -203,7 +203,8 @@ impl DbStackId {
                        pr.id as pr_id, pr.repository_id as pr_repository_id, pr.pr_number, pr.title, pr.body, 
                        pr.author_login, pr.target_branch, pr.tip_commit_id, pr.merge_status, pr.review_status as pr_review_status,
                        pr.priority, pr.ok_to_merge, pr.required_reviewers, pr.created_at as pr_created_at, 
-                       pr.updated_at as pr_updated_at, pr.synced_at as pr_synced_at
+                       pr.updated_at as pr_updated_at, pr.synced_at as pr_synced_at,
+                       sc.sequence_order
                 FROM commits c
                 JOIN stack_commits sc ON c.id = sc.commit_id
                 LEFT JOIN pr_commits pc ON c.id = pc.commit_id AND pc.is_current = true
@@ -227,7 +228,11 @@ impl DbStackId {
         for row in &rows {
             let commit_id = row.get("id");
             
-            let commit = commits_map.entry(commit_id).or_insert_with(|| CommitToTest::from_row(row));
+            let commit = commits_map.entry(commit_id).or_insert_with(|| {
+                let mut ret = CommitToTest::from_row(row);
+                ret.stack_sequence_order = Some(row.get("sequence_order"));
+                ret
+            });
             
             // Add PR association if it exists
             if let Ok(pr_id) = row.try_get::<_, super::DbPullRequestId>("pr_id") {

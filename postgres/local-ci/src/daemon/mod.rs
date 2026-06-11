@@ -219,6 +219,14 @@ async fn check_pending_acks(
 async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
     let mut work_done = false;
 
+    // Step 0: Process existing stacks in case the user has messed with them
+    //  since the last call.
+    if process_existing_stacks(db).await
+        .context("processing existing stacks (pass one)")?
+    {
+        work_done = true;
+    }
+
     // Step 1 & 2: For each approved PR, create merge commits and try to extend stacks
     let approved_prs = db
         .with_transaction(PullRequest::get_fully_approved_prs)
@@ -235,7 +243,7 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
 
     // Step 3: Process existing stacks for rebasing and updates
     if process_existing_stacks(db).await
-        .context("processing existing stacks")?
+        .context("processing existing stacks (pass two)")?
     {
         work_done = true;
     }
@@ -508,6 +516,7 @@ async fn process_stack_updates(
     // Update descriptions and check for commit changes
     let mut work_done = false;
     let mut stack_poisoned = false;
+    let mut next_idx = 1;
     for commit in &mut stack_commits {
         let pr = db.with_transaction(async |tx| commit.id.get_pull_request(&tx).await)
             .await
@@ -525,6 +534,14 @@ async fn process_stack_updates(
                 commit.jj_change_id
             ));
         }
+
+        if commit.stack_sequence_order != Some(next_idx) {
+            // A commit was deleted from the stack (perhaps by the
+            // user calling 'pr reset', or by an earlier attempted
+            // removal that went bad).
+            stack_poisoned = true;
+        }
+        next_idx += 1;
 
         if pr.merge_status != MergeStatus::Pending {
             log::info(format_args!(

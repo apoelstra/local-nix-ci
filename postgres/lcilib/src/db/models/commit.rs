@@ -414,6 +414,7 @@ pub struct CommitToTest {
     pub should_run_ci: bool,
     pub ci_status: CiStatus,
     pub nix_derivation: Option<String>,
+    pub stack_sequence_order: Option<i32>,
     pub prs: Vec<(super::PullRequest, CommitType)>,
 }
 
@@ -428,6 +429,7 @@ impl CommitToTest {
             should_run_ci: row.get("should_run_ci"),
             ci_status: row.get("ci_status"),
             nix_derivation: row.get("nix_derivation"),
+            stack_sequence_order: None, // Will be populated by calling code if this is a merge commit from a stack
             prs: vec![], // This will be populated by the calling code after grouping rows
         }
     }
