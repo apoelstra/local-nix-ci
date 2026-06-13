@@ -5,6 +5,8 @@ mod log;
 mod build_derivation;
 pub mod util;
 
+use crate::terminal::ColorFormat;
+
 use anyhow::Context as _;
 use lcilib::db::MergeStatus;
 use lcilib::Db;
@@ -158,13 +160,14 @@ async fn check_pending_acks(
         if counts.ready != counts.total {
             if counts.failed > 0 {
                 log_limit.run(|| log::info(format_args!(
-                    "PR #{} approved ({} commits; {} approved, {} passed, {} failed).",
-                    pr.pr_number, counts.total, counts.approved, counts.ready, counts.failed,
+                    "{} PR #{} approved ({} commits; {} approved, {} passed, {}).",
+                    repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
+                    ColorFormat::dull_red(format_args!("{} failed", counts.failed)),
                 )));
             } else {
                 log_limit.run(|| log::info(format_args!(
-                    "PR #{} approved ({} commits; {} approved, {} passed).",
-                    pr.pr_number, counts.total, counts.approved, counts.ready,
+                    "{} PR #{} approved ({} commits; {} approved, {} passed).",
+                    repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
                 )));
             }
             continue;

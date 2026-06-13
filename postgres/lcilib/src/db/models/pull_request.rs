@@ -278,7 +278,7 @@ impl DbPullRequestId {
                     COUNT(CASE WHEN c.review_status = 'approved' AND c.ci_status = 'failed' THEN 1 END) as failed
                 FROM commits c
                 JOIN pr_commits pc ON c.id = pc.commit_id
-                WHERE pc.pull_request_id = $1 AND pc.is_current = true
+                WHERE pc.commit_type != 'merge' AND pc.pull_request_id = $1 AND pc.is_current = true
                 "#,
                 &[&self],
             )
