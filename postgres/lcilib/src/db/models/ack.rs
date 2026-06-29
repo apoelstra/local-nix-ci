@@ -234,7 +234,8 @@ impl Ack {
                 FROM acks a
                 JOIN pull_requests pr ON a.pull_request_id = pr.id
                 WHERE a.status IN ('pending', 'failed')
-                AND pr.review_status = 'approved'
+                  AND pr.review_status = 'approved'
+                  AND pr.merge_status IN ('pending', 'draft')
                 ORDER BY a.created_at ASC
                 "#,
                 &[],
