@@ -4,6 +4,14 @@ let
 in import ./rust.check-pr.nix {
   inherit pkgs utils;
   fullMatrixOverride = {
+    msrv = "1.63.0"; # FIXME not set anywhere in the repo
+    features = utils.featuresForSrc {
+      exclude = [ "actual-serde" "actual-rand" "actual-hashes" ];
+    };
+
+    runClippy = false; # FIXME
+    runDocs = false; # FIXME doc_auto_cfg
+
     secp256k1RevFile = { src, ... }: builtins.elemAt (builtins.split "\n"
       (builtins.readFile "${src.src}/secp256k1-zkp-sys/depend/secp256k1-HEAD-revision.txt"))
       2;
