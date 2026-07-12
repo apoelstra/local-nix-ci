@@ -715,7 +715,7 @@ impl PullRequest {
                     WHERE pc.pull_request_id = pr.id
                     AND pc.is_current = true
                     AND pc.commit_type != 'merge'
-                    AND (c.review_status != 'approved' OR c.ci_status != 'passed')
+                    AND (c.review_status != 'approved' OR c.ci_status NOT IN ('passed', 'skipped'))
                 )
                 ORDER BY pr.priority DESC, pr.created_at ASC
                 "#,
