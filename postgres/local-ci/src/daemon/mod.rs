@@ -157,21 +157,31 @@ async fn check_pending_acks(
             continue;
         }
 
-        if counts.ready != counts.total {
-            if counts.failed > 0 {
-                log_limit.run(|| log::info(format_args!(
-                    "{} PR #{} approved ({} commits; {} approved, {} passed, {}).",
-                    repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
-                    ColorFormat::dull_red(format_args!("{} failed", counts.failed)),
-                )));
-            } else {
-                log_limit.run(|| log::info(format_args!(
-                    "{} PR #{} approved ({} commits; {} approved, {} passed).",
-                    repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
-                )));
-            }
+        if counts.failed > 0 {
+            // If any commit failed, don't post the ACK.
+            log_limit.run(|| log::info(format_args!(
+                "{} PR #{} approved ({} commits; {} approved, {} passed, {}).",
+                repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
+                ColorFormat::dull_red(format_args!("{} failed", counts.failed)),
+            )));
+            continue;
+        } else if counts.approved != counts.total {
+            // Then if any commit is unapproved, don't post the ACK.  
+            log_limit.run(|| log::info(format_args!(
+                "{} PR #{} approved ({} commits; {} approved, {} passed).",
+                repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
+            )));
+            continue;
+        } else if counts.untested > 0 {
+            // Then if any commits remain untested, don't post the ACK.
+            log_limit.run(|| log::info(format_args!(
+                "{} PR #{} fully approved ({} commits, {} untested).",
+                repo.name, pr.pr_number, counts.total, counts.untested,
+            )));
             continue;
         }
+        // At this point, all commits are approved and their CI status is either "skipped"
+        // or "passed".
 
         // All conditions met, post the ACK
         let github_username = tx.get_github_username().await
