@@ -215,6 +215,7 @@ pub async fn real_review(repo: &Repository, commit_hash: &git::CommitId, db: &mu
         println!("\nWhat would you like to do?");
         println!("{} Review and Approve", ColorFormat::white("1a)"));
         println!("{} Review and Reject", ColorFormat::white("1b)"));
+        println!("{} Approve but skip CI", ColorFormat::white("1c)"));
         println!();
         println!("{} View existing review", ColorFormat::white("2a)"));
         println!("{} Erase review (mark unreviewed)", ColorFormat::white("2b)"));
@@ -256,6 +257,20 @@ pub async fn real_review(repo: &Repository, commit_hash: &git::CommitId, db: &mu
                         .await
                         .context("failed to update commit with review")?;
                     println!("Commit review updated and rejected.");
+                    break;
+                }
+            }
+            "1c" => {
+                if let Some(mut update) =
+                    handle_review_with_editor(&commit, ReviewStatus::Approved).await?
+                {
+                    update.ci_status = Some(CiStatus::Skipped);
+                    commit
+                        .id
+                        .apply_update(&tx, &update)
+                        .await
+                        .context("failed to update commit with review")?;
+                    println!("Commit review updated, approved, and CI skipped.");
                     break;
                 }
             }
@@ -302,7 +317,7 @@ pub async fn real_review(repo: &Repository, commit_hash: &git::CommitId, db: &mu
                 break;
             }
             _ => {
-                println!("Invalid choice. Please enter 1a, 1b, 2a, 2b, 3a, 3b, 3c, 3d, or 3.");
+                println!("Invalid choice. Please enter 1a, 1b, 1c, 2a, 2b, 3a, 3b, 3c, 3d, or 4.");
             }
         }
     }
