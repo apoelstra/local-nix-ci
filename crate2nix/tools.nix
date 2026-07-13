@@ -82,7 +82,7 @@ rec {
         #
         # This means you MUST call this using oxalica rust-overlay
         # rather than stock nixpkgs.
-        pkgs.rust-bin.stable."1.76.0".default
+        pkgs.rust-bin.stable."1.90.0".default
         pkgs.jq
         crate2nix
       ];
