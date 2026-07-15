@@ -676,6 +676,13 @@ rec {
                 export CARGO_CRATE_NAME="${crate.crateName}"
                 echo "CARGO_CRATE_NAME: $CARGO_CRATE_NAME"
               '';
+              postUnpack = ''
+                set -x
+                export CARGO_MANIFEST_DIR="$PWD/$sourceRoot"
+                echo "CARGO_MANIFEST_DIR: $CARGO_MANIFEST_DIR"
+                ls "$CARGO_MANIFEST_DIR"
+                set +x
+              '';
               rust = rustc;
             };
         release = releaseMode;
