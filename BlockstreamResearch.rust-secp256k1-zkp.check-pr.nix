@@ -4,10 +4,6 @@ let
 in import ./rust.check-pr.nix {
   inherit pkgs utils;
   fullMatrixOverride = {
-    features = utils.featuresForSrc {
-      exclude = [ "actual-serde" "actual-rand" "actual-hashes" ];
-    };
-
     secp256k1RevFile = { src, ... }: builtins.elemAt (builtins.split "\n"
       (builtins.readFile "${src.src}/secp256k1-zkp-sys/depend/secp256k1-HEAD-revision.txt"))
       2;
