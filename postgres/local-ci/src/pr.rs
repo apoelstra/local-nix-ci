@@ -315,8 +315,6 @@ async fn scan_and_update_acks(
     let mut existing_external_acks = HashMap::new();
     let mut existing_user_acks = HashMap::new();
 
-    println!("{:?}", found_acks);
-
     for ack in existing_acks {
         if ack.reviewer_name == current_user {
             // Group current user's ACKs by message

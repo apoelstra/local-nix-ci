@@ -188,13 +188,14 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
                     .await
                     .context("failed to find ACKs for PR")?;
 
-                println!("    {} PR {} {} ({}): {} (prio {}, ACKs: {})",
+                println!("    {} PR {} {} ({}): {} (prio {}, by {}, ACKs: {})",
                     repo.name,
                     ColorFormat::white(pr.pr_number),
                     ColorFormat::white(commit.jj_change_id.prefix8()),
                     commit.git_commit_id.prefix8(),
                     commit.ci_status.with_color(),
                     pr.priority,
+                    pr.author_login,
                     acks.into_iter().map(|a| a.reviewer_name).collect::<Vec<_>>().join(", "),
                 );
             }
