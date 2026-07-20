@@ -2,8 +2,9 @@
 
 use anyhow::Context as _;
 use lcilib::{
-    db::models::{Ack, AckStatus, CiStatus, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}, repo, Db
+    db::models::{Ack, AckStatus, CiStatus, DbRepositoryId, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}, repo, Db
 };
+use std::collections::{BTreeMap, BTreeSet};
 use xshell::{Shell, cmd};
 
 use crate::daemon::util::calculate_stack_priority;
@@ -151,6 +152,48 @@ fn show_prs(prs: &[PullRequest]) {
 
 /// Display stacks organized by repository
 async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::Result<()> {
+    /// Key type to allow using repositories as a BTreeMap key sorted by name.
+    struct RepoKey {
+        name: String,
+        id: DbRepositoryId,
+        repo: Repository,
+    }
+    impl PartialEq for RepoKey {
+        fn eq(&self, other: &Self) -> bool { self.id == other.id }
+    }
+    impl Eq for RepoKey {}
+    impl PartialOrd for RepoKey {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for RepoKey {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            (&self.name, self.id.bare_i32()).cmp(&(&other.name, other.id.bare_i32()))
+        }
+    }
+
+    /// Same but for sorting stacks by reverse priority
+    struct StackKey<'s> {
+        stack: &'s Stack,
+        commits: Vec<CommitToTest>,
+        prio: f64,
+    }
+    impl PartialEq for StackKey<'_> {
+        fn eq(&self, other: &Self) -> bool { self.stack.id == other.stack.id }
+    }
+    impl Eq for StackKey<'_> {}
+    impl PartialOrd for StackKey<'_> {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for StackKey<'_> {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.prio.total_cmp(&other.prio)
+        }
+    }
+
     if stacks.is_empty() {
         println!("\nNo stacks.");
         return Ok(());
@@ -158,29 +201,40 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
     println!("{}", ColorFormat::white(format_args!("\n=== Merge Stacks ===")));
 
     // Group stacks by repository
-    let mut stacks_by_repo: std::collections::HashMap<lcilib::db::models::DbRepositoryId, Vec<&Stack>> = std::collections::HashMap::new();
+    let mut stacks_by_repo: BTreeMap<RepoKey, BTreeSet<StackKey<'_>>> = BTreeMap::new();
     for stack in stacks {
-        stacks_by_repo.entry(stack.repository_id).or_default().push(stack);
+        let repo = Repository::get_by_id(tx, stack.repository_id).await?;
+        // Sort the stack by priority.
+        let commits = stack.id.get_commits(tx).await?;
+        let prio = calculate_stack_priority(&commits, tx).await?;
+
+        // Then insert into a list ordered by name.
+        stacks_by_repo.entry(RepoKey {
+            name: repo.name.clone(),
+            id: repo.id,
+            repo,
+        }).or_default().insert(StackKey { stack, commits, prio });
     }
 
-    for (repo_id, repo_stacks) in stacks_by_repo {
-        let repo = Repository::get_by_id(tx, repo_id).await?;
-        
+    for (RepoKey { repo, .. }, repo_stacks) in stacks_by_repo {
         // Display repository heading
         println!("{}", ColorFormat::white("\n***** ***** ***** ***** ***** ***** ***** *****"));
         println!("{}", ColorFormat::white(format_args!("***** {:35} *****", repo.name)));
         println!("{}", ColorFormat::white("***** ***** ***** ***** ***** ***** ***** *****"));
 
-        for stack in repo_stacks {
-            let commits = stack.id.get_commits(tx).await?;
-            let prio = calculate_stack_priority(&commits, tx).await?;
-            let ids: Vec<_> = commits
+        let mut is_first = true;
+        for StackKey { stack, commits, prio } in repo_stacks {
+            let commit_ids: Vec<_> = commits
                 .iter()
                 .map(|commit| commit.git_commit_id.as_str())
                 .collect();
-            let revset = ids.join("|");
+            let revset = commit_ids.join("|");
 
-            print!("\n{}", ColorFormat::light_green(format_args!("Stack {}: ", stack.id)));
+            let color = if is_first { ColorFormat::light_green } else { ColorFormat::dull_green };
+            is_first = false;
+
+
+            print!("\n{}", color(format_args!("Stack {}: ", stack.id)));
             println!("prio {:1.3}, target {}, {} commits", prio, stack.target_branch, commits.len());
             for commit in &commits {
                 let pr = &commit.prs[0].0;
@@ -188,8 +242,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
                     .await
                     .context("failed to find ACKs for PR")?;
 
-                println!("    {} PR {} {} ({}): {} (prio {}, by {}, ACKs: {})",
-                    repo.name,
+                println!("    PR {} {} ({}): {} (prio {}, by {}, ACKs: {})",
                     ColorFormat::white(pr.pr_number),
                     ColorFormat::white(commit.jj_change_id.prefix8()),
                     commit.git_commit_id.prefix8(),
