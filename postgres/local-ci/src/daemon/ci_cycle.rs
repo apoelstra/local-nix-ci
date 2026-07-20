@@ -21,7 +21,7 @@ use super::mark_commit_status;
 use super::{build_derivation, log, util};
 
 /// Returns all the high-priority and low-priority stacks across all repos.
-async fn find_stacks(
+pub async fn find_stacks(
     tx: &lcilib::Transaction<'_>,
 ) -> anyhow::Result<(
     Vec<(Stack, Vec<CommitToTest>)>,
@@ -165,7 +165,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
 }
 
 /// Print a summary of all remaining work
-async fn print_work_summary(
+pub async fn print_work_summary(
     tx: &lcilib::Transaction<'_>,
     standalone_commits: &[CommitToTest],
     high_priority_stacks: &[(Stack, Vec<CommitToTest>)],

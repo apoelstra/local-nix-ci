@@ -18,6 +18,8 @@ use lcilib::jj::is_commit_gpg_signed;
 use std::time::Duration;
 use tokio::time;
 
+pub use self::ci_cycle::{find_stacks, print_work_summary};
+
 pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     log::info(format_args!("Starting local-ci daemon..."));
 

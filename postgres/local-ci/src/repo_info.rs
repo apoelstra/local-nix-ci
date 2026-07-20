@@ -73,6 +73,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
     }
 
     show_prs(&all_prs);
+    show_daemon_work(&tx).await?;
     show_stacks(&tx, &all_stacks).await?;
 
     tx.commit().await.context("failed to commit transaction")?;
@@ -144,6 +145,33 @@ fn show_prs(prs: &[PullRequest]) {
             println!("  PR #{}: {}", pr.pr_number, pr.title);
         }
     }
+}
+
+/// Display stacks organized by repository
+async fn show_daemon_work(tx: &lcilib::Transaction<'_>) -> anyhow::Result<()> {
+    println!("{}", ColorFormat::white("\n=== Available Work for Daemon ===\n"));
+
+    // This was just copied straight out of `daemon/ci_cyle.rs` `find_next_commit_to_test`
+    let standalone_commits = CommitToTest::get_standalone_approved_commits(&tx)
+        .await
+        .context("finding standalone approved commits")?;
+    let (high_priority_stacks, low_priority_stacks) =
+        crate::daemon::find_stacks(&tx).await.context("finding stacks")?;
+    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx)
+        .await
+        .context("finding PRs needing testing")?;
+
+    crate::daemon::print_work_summary(
+        &tx,
+        &standalone_commits,
+        &high_priority_stacks,
+        &prs_needing_testing,
+        &low_priority_stacks,
+    )
+    .await
+    .context("printing work summary")?;
+
+    Ok(())
 }
 
 /// Display stacks organized by repository
