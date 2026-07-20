@@ -2,7 +2,7 @@
 
 use anyhow::Context as _;
 use lcilib::{
-    db::models::{Ack, AckStatus, CiStatus, DbRepositoryId, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}, repo, Db
+    db::models::{Ack, DbRepositoryId, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}, repo, Db
 };
 use std::collections::{BTreeMap, BTreeSet};
 use xshell::{Shell, cmd};
@@ -74,10 +74,6 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
 
     show_prs(&all_prs);
     show_stacks(&tx, &all_stacks).await?;
-    show_pending_actions(&all_prs, &all_commits, &all_acks);
-
-    // Display CI status
-    show_ci_status(&all_commits);
 
     tx.commit().await.context("failed to commit transaction")?;
 
@@ -266,109 +262,4 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
     }
 
     Ok(())
-}
-
-/// Display pending actions that need attention
-fn show_pending_actions(prs: &[PullRequest], commits: &[CommitToTest], acks: &[Ack]) {
-    println!("{}", ColorFormat::white(format_args!("\n=== Pending Actions ===")));
-
-    let mut has_pending = false;
-
-    // Failed ACKs
-    let failed_acks: Vec<_> = acks
-        .iter()
-        .filter(|ack| ack.status == AckStatus::Failed)
-        .collect();
-
-    if !failed_acks.is_empty() {
-        has_pending = true;
-        println!("ACKs Failed ({}):", failed_acks.len());
-        for ack in failed_acks {
-            if let Some(pr) = prs.iter().find(|pr| pr.id == ack.pull_request_id) {
-                println!(
-                    "  PR #{}: {} by {}",
-                    pr.pr_number, ack.message, ack.reviewer_name
-                );
-            }
-        }
-        println!();
-    }
-
-    // Commits needing CI
-    let ci_needed: Vec<_> = commits
-        .iter()
-        .filter(|c| c.should_run_ci && c.ci_status == CiStatus::Unstarted)
-        .collect();
-
-    if !ci_needed.is_empty() {
-        has_pending = true;
-        println!("Commits Needing CI ({}):", ci_needed.len());
-        let mut n_reviewed = 0;
-        let mut n_unreviewed = 0;
-        for commit in &ci_needed {
-            let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
-            let prs_str = prs.join(", ");
-            
-            if commit.review_status == ReviewStatus::Unreviewed {
-                n_unreviewed += 1;
-            } else {
-                println!(
-                    "  {} ({}) ({})",
-                    commit.review_status.with_color(),
-                    commit.git_commit_id.prefix8(),
-                    prs_str,
-                );
-
-                n_reviewed += 1;
-                if n_reviewed > 15 {
-                    println!("...plus {} more.", 15 - n_reviewed);
-                    break;
-                }
-            }
-        }
-        if n_unreviewed > 0 {
-            println!("...plus {} unreviewed.", n_unreviewed);
-        }
-        println!();
-    }
-
-    if !has_pending {
-        println!("No pending actions! 🎉");
-        println!();
-    }
-}
-
-/// Display CI status overview
-fn show_ci_status(commits: &[CommitToTest]) {
-    println!("{}", ColorFormat::white(format_args!("\n=== CI Status ===")));
-
-    // CI failures
-    let ci_failed: Vec<_> = commits
-        .iter()
-        .filter(|c| c.ci_status == CiStatus::Failed)
-        .collect();
-
-    if !ci_failed.is_empty() {
-        println!("CI Failures ({}):", ci_failed.len());
-        for commit in ci_failed.iter().take(10) {
-            let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
-            let prs_str = prs.join(", ");
-
-            // Limit to first 10
-            println!(
-                "  {} ({})",
-                commit.git_commit_id.prefix8(),
-                prs_str,
-            );
-        }
-        if ci_failed.len() > 10 {
-            println!("  ... and {} more", ci_failed.len() - 10);
-        }
-        println!();
-    }
-
-    if ci_failed.is_empty() {
-        println!("No CI failures.");
-        println!();
-    }
 }
