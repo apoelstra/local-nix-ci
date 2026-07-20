@@ -36,6 +36,7 @@ impl RateLimiter {
 
 impl RateLimitToken {
     /// Constructs a rate-limiting token that won't ever rate-limit.
+    #[allow(unused)]
     pub fn ok_to_run() -> Self {
         Self(true)
     }
