@@ -149,12 +149,17 @@ impl<D: fmt::Display> ColorFormat<D> {
         Self::new(data, 130, 220, 130)
     }
 
+    /// Construct a new dull-green formatter
+    pub fn very_dull_green(data: D) -> Self {
+        Self::new(data, 140, 190, 140)
+    }
+
     /// Construct a new dull-redformatter
     pub fn dull_red(data: D) -> Self {
         Self::new(data, 220, 130, 130)
     }
 
-    #[expect(dead_code)]
+    #[expect(unused)]
     pub fn grey(data: D) -> Self {
         Self::new(data, 160, 160, 160)
     }

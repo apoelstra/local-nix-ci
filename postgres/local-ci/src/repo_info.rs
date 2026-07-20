@@ -214,7 +214,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
     }
     impl Ord for StackKey<'_> {
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.prio.total_cmp(&other.prio)
+            self.prio.total_cmp(&other.prio).reverse()
         }
     }
 
@@ -246,7 +246,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         println!("{}", ColorFormat::white(format_args!("***** {:35} *****", repo.name)));
         println!("{}", ColorFormat::white("***** ***** ***** ***** ***** ***** ***** *****"));
 
-        let mut is_first = true;
+        let mut last_target = None;
         for StackKey { stack, commits, prio } in repo_stacks {
             let commit_ids: Vec<_> = commits
                 .iter()
@@ -254,9 +254,12 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
                 .collect();
             let revset = commit_ids.join("|");
 
-            let color = if is_first { ColorFormat::light_green } else { ColorFormat::dull_green };
-            is_first = false;
-
+            let color = if last_target != Some(&stack.target_branch) {
+                ColorFormat::light_green
+            } else {
+                ColorFormat::very_dull_green
+            };
+            last_target = Some(&stack.target_branch);
 
             print!("\n{}", color(format_args!("Stack {}: ", stack.id)));
             println!("prio {:1.3}, target {}, {} commits", prio, stack.target_branch, commits.len());
