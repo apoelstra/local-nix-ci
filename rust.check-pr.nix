@@ -20,6 +20,7 @@ let
       features # Must be overridden if there are any exceptional feature combinations
       runClippy
       runFmt
+      runFuzz
       runDocs
       releaseMode # Should override with false for slow crates!
       ;
