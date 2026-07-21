@@ -11,7 +11,7 @@ use anyhow::Context as _;
 use args::{Action, Target};
 use lcilib::Db;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() -> anyhow::Result<()> {
     let args = args::parse_cli();
     let mut db = Db::connect().await.context("connecting to database")?;
