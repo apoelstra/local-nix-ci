@@ -201,6 +201,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
     struct StackKey<'s> {
         stack: &'s Stack,
         commits: Vec<CommitToTest>,
+        target: String,
         prio: f64,
     }
     impl PartialEq for StackKey<'_> {
@@ -214,7 +215,8 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
     }
     impl Ord for StackKey<'_> {
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.prio.total_cmp(&other.prio).reverse()
+            self.target.cmp(&other.target)
+                .then(self.prio.total_cmp(&other.prio).reverse())
         }
     }
 
@@ -231,13 +233,14 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         // Sort the stack by priority.
         let commits = stack.id.get_commits(tx).await?;
         let prio = calculate_stack_priority(&commits, tx).await?;
+        let target = stack.target_branch.clone();
 
         // Then insert into a list ordered by name.
         stacks_by_repo.entry(RepoKey {
             name: repo.name.clone(),
             id: repo.id,
             repo,
-        }).or_default().insert(StackKey { stack, commits, prio });
+        }).or_default().insert(StackKey { stack, commits, target, prio });
     }
 
     for (RepoKey { repo, .. }, repo_stacks) in stacks_by_repo {
@@ -247,7 +250,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         println!("{}", ColorFormat::white("***** ***** ***** ***** ***** ***** ***** *****"));
 
         let mut last_target = None;
-        for StackKey { stack, commits, prio } in repo_stacks {
+        for StackKey { stack, commits, target: _, prio } in repo_stacks {
             let commit_ids: Vec<_> = commits
                 .iter()
                 .map(|commit| commit.git_commit_id.as_str())
