@@ -3,7 +3,7 @@
 mod lexer;
 
 use core::fmt;
-use lcilib::db::EntityType;
+use lcilib::db::{models::DbStackId, EntityType};
 use lexer::{ArgToken, lexed_args};
 use std::process;
 use std::sync::OnceLock;
@@ -12,7 +12,16 @@ static PROGRAM_NAME: OnceLock<String> = OnceLock::new();
 
 /// A stack ID, displayed as `s` followed by a zero-padded 6-digit number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StackId(pub u32);
+pub struct StackId(pub i32);
+
+impl StackId {
+    /// Converts the "CLI stack ID" to a "database stack ID".
+    ///
+    /// This basically just changes the display impl.
+    pub fn to_db_stack_id(self) -> DbStackId {
+        DbStackId::from_i32(self.0)
+    }
+}
 
 impl fmt::Display for StackId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -400,8 +409,8 @@ fn parse_args() -> Result<CliArguments, ParseError> {
         },
         (Some("commit"), Some(s)) => Target::Commit(s),
         (Some("stack"), Some(s)) => {
-            // s is already in the form s000123; parse the numeric part.
-            match s[1..].parse::<u32>() {
+            // s is already in the form s000123 (with no '-' or '+'); parse the numeric part.
+            match s[1..].parse::<i32>() {
                 Ok(num) => Target::Stack(StackId(num)),
                 Err(_) => return Err(ParseError::InvalidStackId(s)),
             }

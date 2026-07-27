@@ -5,7 +5,7 @@ use tokio_postgres::Error;
 
 use super::models::{
     Ack, AckStatus, AllowedApprover, Commit, CommitType, DbAckId, DbCommitId,
-    DbPrCommitId, DbPullRequestId, DbRepositoryId, DbStackId, LogEntry, NewAck, NewAllowedApprover,
+    DbPrCommitId, DbPullRequestId, DbRepositoryId, LogEntry, NewAck, NewAllowedApprover,
     NewCommit, NewPullRequest, NewStack, PrCommit, PullRequest, Stack,
     UpdateCommit,
 };
@@ -757,27 +757,6 @@ impl Stack {
         .map_err(OperationError::LogQuery)?;
 
         Ok(stack)
-    }
-
-    /// Find stack by ID
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_by_id(
-        tx: &Transaction<'_>,
-        id: DbStackId,
-    ) -> Result<Option<Self>, OperationError> {
-        let rows = tx
-            .inner
-            .query(
-                "SELECT id, repository_id, target_branch, created_at, updated_at FROM stacks WHERE id = $1",
-                &[&id],
-            )
-            .await
-            .map_err(|e| OperationError::with_context(e, "find_by_id", "Stack", &format!("id: {}", id)))?;
-
-        Ok(rows.first().map(Self::from_row))
     }
 }
 

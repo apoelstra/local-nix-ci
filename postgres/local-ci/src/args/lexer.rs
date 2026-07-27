@@ -10,8 +10,8 @@ pub enum ArgToken {
     /// A PR number. Any string of 1-6 (inclusive) numeric digits will be
     /// lexed as a PR number.
     PrNumber(usize),
-    /// A stack ID. The string `s` followed by exactly 6 numeric digits
-    /// (e.g. `s000123`) will be lexed as a stack ID.
+    /// A stack ID. The string `s` followed by at least 1 numeric digit
+    /// (e.g. `s123` or `s000123`) will be lexed as a stack ID.
     StackId(u32),
     /// A reference to the merge commit of a PR. The string `merge-` followed
     /// by a `PrNumber` will be lexed as this.
@@ -62,9 +62,9 @@ fn parse_as_pr_number(s: &str) -> Option<usize> {
     }
 }
 
-/// Returns true if the string is a valid stack ID (s followed by exactly 6 digits).
+/// Returns true if the string is a valid stack ID (s followed by at least 1 digit).
 fn parse_as_stack_id(s: &str) -> Option<u32> {
-    if s.len() == 7 && s.as_bytes()[0] == b's' && s.as_bytes()[1..].iter().all(u8::is_ascii_digit) {
+    if s.len() > 2 && s.as_bytes()[0] == b's' && s.as_bytes()[1..].iter().all(u8::is_ascii_digit) {
         s[1..].parse().ok()
     } else {
         None

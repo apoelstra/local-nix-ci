@@ -17,6 +17,11 @@ impl DbStackId {
     pub fn bare_i32(self) -> i32 {
         self.0
     }
+
+    /// Interprets an arbitrary i32 as a stack ID.
+    pub fn from_i32(n: i32) -> Self {
+        Self(n)
+    }
 }
 
 impl fmt::Display for DbStackId {
@@ -281,6 +286,37 @@ impl Stack {
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
+    }
+
+    /// Looks up a stack by its ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn find_by_id(
+        tx: &Transaction<'_>,
+        id: DbStackId,
+    ) -> Result<Self, DbQueryError> {
+        let row = tx
+            .borrow()
+            .inner
+            .query_one(
+                r#"
+                SELECT id, repository_id, target_branch, created_at, updated_at
+                FROM stacks WHERE id = $1
+                "#,
+                &[&id],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_stack_by_id",
+                entity_type: EntityType::Stack,
+                raw_id: Some(id.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(Self::from_row(&row))
     }
 
     /// Updates a stack.

@@ -5,6 +5,7 @@ mod commit;
 mod daemon;
 mod pr;
 mod repo_info;
+mod stack;
 mod terminal;
 
 use anyhow::Context as _;
@@ -59,6 +60,11 @@ async fn main() -> anyhow::Result<()> {
             pr::refresh_from_cli(pr_number, &mut db)
                 .await
                 .context("refreshing PR")?;
+        }
+        (Action::Refresh, Target::Stack(stack_id)) => {
+            stack::refresh(stack_id, &mut db)
+                .await
+                .context("refreshing stack")?;
         }
         (Action::Log, Target::Pr(pr_number)) => {
             let log_options = args.log_options.as_ref().unwrap();
