@@ -105,6 +105,10 @@ pub async fn refresh(
                     .run()
                     .context("calling git-push")
             }).await??;
+
+            // After `git push`ing, Github needs a moment to update the pull requests.
+            println!("Sleeping 5 seconds before refreshing pull requests.");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     }
 
