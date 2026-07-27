@@ -45,6 +45,11 @@ pub async fn refresh(
     // we do anything heavy.
     tx.commit().await.context("committing read-only tx")?;
 
+    let target_branch = stack.target_branch.clone();
+    crate::daemon::process_stack_updates(db, stack)
+        .await
+        .context("updating stack state against the database and local repo")?;
+
     let tip_commit_id = commits.first().map(|commit| &commit.git_commit_id);
     let mut all_signed = true;
     for commit in &commits {
@@ -66,7 +71,6 @@ pub async fn refresh(
             let choice = input.trim().to_ascii_lowercase();
             match choice.as_str() {
                 "y" | "yes" => {
-                    let target_branch = &stack.target_branch;
                     repo.repo_shell.with_lock_blocking(|shell| {
                         cmd!(shell, "git push origin {tip_commit_id}:{target_branch}")
                             .run()

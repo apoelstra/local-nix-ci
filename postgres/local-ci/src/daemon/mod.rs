@@ -467,7 +467,7 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
     Ok(work_done)
 }
 
-async fn process_stack_updates(
+pub async fn process_stack_updates(
     db: &mut Db,
     stack: Stack,
 ) -> anyhow::Result<bool> {
