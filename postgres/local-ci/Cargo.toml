@@ -8,7 +8,11 @@ anyhow = "1.0"
 chrono = { version = "0.4.44", default-features = false, features = [ "now" ] }
 tokio = { version = "1.50.0", default-features = false, features = [ "macros", "fs", "process", "rt-multi-thread" ] }
 lcilib = { path = "../lcilib/", default-features = false }
-xshell = { version = "0.2", default-features = false }
+# We must pin an exact version of xshell to get stdin to work with check-and-sign.sh
+# See https://github.com/matklad/xshell/issues/63
+# Will be fixed in 0.3 but this is not yet released (there are prereleases but they use
+# the broken cargo semver syntax so I'm not gonna bother).
+xshell = { version = "=0.2.2", default-features = false }
 
 [lints]
 workspace = true

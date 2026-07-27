@@ -3,7 +3,8 @@ members = ["lcilib", "local-ci"]
 resolver = "2"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzing)'] }
+# This is needed by xshell 0.2.2..
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzing)', 'cfg(trick_rust_analyzer_into_highlighting_interpolated_bits)'] }
 
 [workspace.lints.clippy]
 # Exclude lints we don't think are valuable.
