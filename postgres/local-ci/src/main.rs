@@ -12,6 +12,24 @@ use anyhow::Context as _;
 use args::{Action, Target};
 use lcilib::Db;
 
+fn ask_yes_no(query: impl core::fmt::Display) -> bool {
+    use std::io::{self, Write as _};
+
+    loop {
+        print!("{query} (y/n) ");
+        io::stdout().flush().expect("failed to flush stdout");
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("failed to read user input");
+        let choice = input.trim().to_ascii_lowercase();
+        match choice.as_str() {
+            "y" | "yes" => return true,
+            "n" | "no" => return false,
+            _ => {},
+        }
+    }
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() -> anyhow::Result<()> {
     let args = args::parse_cli();
