@@ -128,5 +128,11 @@ pub async fn refresh(
             .context("refreshing PR")?;
     }
 
+    // After refreshing the PRs, it may be that we can delete or otherwise reduce the stack,
+    // since some PRs have been merged.
+    crate::daemon::process_stack_updates(db, stack)
+        .await
+        .context("updating stack state against the database and local repo")?;
+
     Ok(())
 }
