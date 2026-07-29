@@ -61,7 +61,7 @@ pub async fn refresh(
         // we do anything heavy.
         tx.commit().await.context("committing read-only tx")?;
 
-        tip_commit_id = commits.first().map(|commit| &commit.git_commit_id);
+        tip_commit_id = commits.last().map(|commit| &commit.git_commit_id);
         all_signed = true;
         let mut did_something = false;
         for commit in &commits {
