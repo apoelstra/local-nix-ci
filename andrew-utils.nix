@@ -541,9 +541,17 @@ rec {
     let
       memoName = builtins.unsafeDiscardStringContext
         "${projectName}-generated-cargo-nix-${builtins.toString prNum}-${src.shortId}-${lockFile}";
+      # When processing nested lockfiles in a workspace (e.g., Cargo.lock and fuzz/Cargo.lock),
+      # use the Cargo.toml manifest in the same directory as each lockfile.
+      # This allows crate2nix to resolve path dependencies relative to the correct workspace.
+      # For fuzz/Cargo.lock with path dep ../bitcoin, this resolves it to bitcoin/ not ../bitcoin/.
+      inferredCargoToml =
+        let dir = builtins.dirOf lockFile;
+        in "${dir}/Cargo.toml";
       generatedCargoNix = tools-nix.generatedCargoNix {
         name = memoName;
         src = src.src;
+        cargoToml = inferredCargoToml;
         overrideLockFile = lockFile;
         inherit patches;
       };
@@ -902,4 +910,3 @@ rec {
       }) fuzzTargets);
     in fuzzLibFuzzerDrv;
 }
-
