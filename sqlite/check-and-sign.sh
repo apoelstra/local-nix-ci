@@ -34,8 +34,8 @@ if [[ -z "${LOCAL_CI_PATH:-}" ]]; then
 fi
 
 # Attempt to sign empty message to unlock gpg agent.
-echo "Signing empty message to unlock gpg-agent."
-gpg2 -as < /dev/null > /dev/null
+#echo "Signing empty message to unlock gpg-agent."
+#gpg2 -as < /dev/null > /dev/null
 
 # Check that compute_merge_description.py exists and is executable
 readonly compute_script="$LOCAL_CI_PATH/sqlite/compute_merge_description.py"

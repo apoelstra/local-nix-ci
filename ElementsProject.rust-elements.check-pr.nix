@@ -2,7 +2,7 @@ let
   utils = import ./andrew-utils.nix { };
 in import ./rust.check-pr.nix {
   inherit utils;
-  fullMatrixOverride = {
+  fullMatrixOverrideWithPrev = prev: {
     runFmt = false; # not enabled on rust-elements
 
     # disable integration tests for now; failing on master for obscure "wallet

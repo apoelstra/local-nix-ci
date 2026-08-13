@@ -385,6 +385,12 @@ rec {
           && cargoToml.workspace.metadata.rbmt ? toolchains
           && cargoToml.workspace.metadata.rbmt.toolchains ? nightly
         then cargoToml.workspace.metadata.rbmt.toolchains.nightly
+        else if cargoToml ? package
+          && cargoToml.package ? metadata
+          && cargoToml.package.metadata ? rbmt
+          && cargoToml.package.metadata.rbmt ? toolchains
+          && cargoToml.package.metadata.rbmt.toolchains ? nightly
+        then cargoToml.package.metadata.rbmt.toolchains.nightly
         else if builtins.pathExists "${src}/nightly-version" then
           builtins.readFile "${src}/nightly-version"
         else null;
@@ -395,6 +401,12 @@ rec {
           && cargoToml.workspace.metadata.rbmt ? toolchains
           && cargoToml.workspace.metadata.rbmt.toolchains ? stable
         then cargoToml.workspace.metadata.rbmt.toolchains.stable
+        else if cargoToml ? package
+          && cargoToml.package ? metadata
+          && cargoToml.package.metadata ? rbmt
+          && cargoToml.package.metadata.rbmt ? toolchains
+          && cargoToml.package.metadata.rbmt.toolchains ? stable
+        then cargoToml.package.metadata.rbmt.toolchains.stable
         else null;
     };
 
