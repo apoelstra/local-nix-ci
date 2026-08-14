@@ -634,8 +634,10 @@ rec {
 
                 export CARGO_BIN_NAME="${projectName}"
                 export CARGO_CRATE_NAME="${crate.crateName}"
+                export CARGO_TARGET_TMPDIR="." # lol whatever
                 echo "CARGO_BIN_NAME: $CARGO_BIN_NAME"
                 echo "CARGO_CRATE_NAME: $CARGO_CRATE_NAME"
+                echo "CARGO_TARGET_TMPDIR: $CARGO_TARGET_TMPDIR"
               '';
 
               rust =
@@ -687,6 +689,8 @@ rec {
                 # Needed by leptos-config
                 export CARGO_CRATE_NAME="${crate.crateName}"
                 echo "CARGO_CRATE_NAME: $CARGO_CRATE_NAME"
+                export CARGO_TARGET_TMPDIR="." # lol whatever
+                echo "CARGO_TARGET_TMPDIR: $CARGO_TARGET_TMPDIR"
               '';
               postUnpack = ''
                 set -x
