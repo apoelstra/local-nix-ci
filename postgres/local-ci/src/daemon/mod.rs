@@ -13,7 +13,7 @@ use lcilib::Db;
 use lcilib::db::models::{
     Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack, PullRequest, Repository, ReviewStatus, Stack, UpdateAck, UpdateCommit,
 };
-use lcilib::{gh, git, jj};
+use lcilib::{git, jj};
 use lcilib::jj::is_commit_gpg_signed;
 use std::time::Duration;
 use tokio::time;
@@ -191,10 +191,10 @@ async fn check_pending_acks(
             .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
         let post_result = if pr.author_login == github_username {
             // Post comment instead of approval for own PRs
-            gh::post_pr_comment(&repo.repo_shell, pr.pr_number, &ack.message).await
+            repo.repo_shell.post_pr_comment(pr.pr_number, &ack.message).await
         } else {
             // Post approval review
-            gh::post_pr_approval(&repo.repo_shell, pr.pr_number, &ack.message).await
+            repo.repo_shell.post_pr_approval(pr.pr_number, &ack.message).await
         };
 
         let new_status = match post_result {
@@ -730,7 +730,7 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         .context("failed git or jj fetch")?;
 
     // Get updated PRs from GitHub
-    let pr_infos = gh::list_updated_prs(&repo.repo_shell, last_synced)
+    let pr_infos = repo.repo_shell.list_updated_prs(last_synced)
         .await
         .context("failed sync of recent activity via 'gh' utility")?;
 

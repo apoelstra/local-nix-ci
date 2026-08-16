@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
-use lcilib::{gh, jj, Db};
+use lcilib::{jj, Db};
 use lcilib::db::models::{Repository, Stack};
 use std::collections::HashSet;
 use xshell::cmd;
@@ -130,7 +130,7 @@ pub async fn refresh(
     }
 
     for pr_number in to_refresh {
-        let pr_info = gh::get_pr_info(&repo.repo_shell, pr_number)
+        let pr_info = repo.repo_shell.get_pr_info(pr_number)
             .await
             .context("failed to fetch PR from GitHub")?;
         crate::pr::refresh(&repo, &pr_info, db)

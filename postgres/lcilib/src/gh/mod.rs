@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-mod serde_types;
+// We directly use a bunch of Github serde_types as "data types". Probably we should write a
+// conversion layer. For now just stick pub(crate) on the mod.
+pub(crate) mod serde_types;
 
 use crate::repo::RepoShell;
 use chrono::{DateTime, Utc};
@@ -47,7 +49,7 @@ impl std::error::Error for Error {
 ///
 /// Returns an error if the PR is not found, if the `gh pr view` invocation fails, or if
 /// Github returns JSON we cannot parse.
-pub async fn get_pr_info(shell: &RepoShell, pr_number: usize) -> Result<PrInfo, Error> {
+pub(crate) async fn get_pr_info(shell: &RepoShell, pr_number: usize) -> Result<PrInfo, Error> {
     let pr_num_s = pr_number.to_string();
     let output = shell.with_lock_blocking(|shell| {
         let cmd_str = format!("gh pr view {pr_number} --json {PR_JSON_FIELDS}");
@@ -73,7 +75,7 @@ pub async fn get_pr_info(shell: &RepoShell, pr_number: usize) -> Result<PrInfo, 
 ///
 /// Returns an error if the `gh pr list` invocation fails or if
 /// Github returns JSON we cannot parse.
-pub async fn list_updated_prs(shell: &RepoShell, since: DateTime<Utc>) -> Result<Vec<PrInfo>, Error> {
+pub(crate) async fn list_updated_prs(shell: &RepoShell, since: DateTime<Utc>) -> Result<Vec<PrInfo>, Error> {
     let since_str = since.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let search_query = format!("updated:>={}", since_str);
     let cmd_str = format!(
@@ -100,7 +102,7 @@ pub async fn list_updated_prs(shell: &RepoShell, since: DateTime<Utc>) -> Result
 /// # Errors
 ///
 /// Returns an error if the `gh pr comment` invocation fails.
-pub async fn post_pr_comment(shell: &RepoShell, pr_number: i32, comment: &str) -> Result<(), Error> {
+pub(crate) async fn post_pr_comment(shell: &RepoShell, pr_number: i32, comment: &str) -> Result<(), Error> {
     let pr_num_s = pr_number.to_string();
     let cmd_str = format!("gh pr comment {pr_number} --body '{comment}'");
     shell.with_lock_blocking(|shell| {
@@ -116,7 +118,7 @@ pub async fn post_pr_comment(shell: &RepoShell, pr_number: i32, comment: &str) -
 /// # Errors
 ///
 /// Returns an error if the `gh pr review` invocation fails.
-pub async fn post_pr_approval(shell: &RepoShell, pr_number: i32, message: &str) -> Result<(), Error> {
+pub(crate) async fn post_pr_approval(shell: &RepoShell, pr_number: i32, message: &str) -> Result<(), Error> {
     let pr_num_s = pr_number.to_string();
     let cmd_str = format!("gh pr review {pr_number} --approve --body '{message}'");
     shell.with_lock_blocking(|shell| {

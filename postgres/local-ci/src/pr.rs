@@ -965,7 +965,7 @@ pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<(
         .context("failed to get current repository")?;
 
     // Fetch PR info from GitHub
-    let pr_info = gh::get_pr_info(&repo.repo_shell, pr_number)
+    let pr_info = repo.repo_shell.get_pr_info(pr_number)
         .await
         .context("failed to fetch PR from GitHub")?;
 
@@ -1158,7 +1158,7 @@ pub async fn refresh(
             .any(|comment| comment.body.trim() == rebase_comment);
 
         if !comment_exists {
-            gh::post_pr_comment(&repo.repo_shell, pr_info.number, &rebase_comment)
+            repo.repo_shell.post_pr_comment(pr_info.number, &rebase_comment)
                 .await
                 .context("failed to post rebase comment")?;
 

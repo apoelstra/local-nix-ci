@@ -4,6 +4,9 @@ use core::{fmt, ops};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use chrono::{DateTime, Utc};
+
+use crate::gh::PrInfo;
 use super::Upstream;
 
 #[derive(Debug)]
@@ -39,6 +42,27 @@ impl std::error::Error for RepoShellError {
             Self::GitRevParse(ref e) => Some(e),
             Self::GitRemote { ref err, .. } => Some(err),
             Self::UnknownUpstream { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ForgeError {
+    Github(crate::gh::Error),
+}
+
+impl fmt::Display for ForgeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Github(..) => f.write_str("github error")
+        }
+    }
+}
+
+impl std::error::Error for ForgeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::Github(ref e) => Some(e),
         }
     }
 }
@@ -190,6 +214,46 @@ impl RepoShell {
             assert_eq!(res.len(), 1, "exactly one future spawned");
             res.pop().unwrap()
         }
+    }
+
+    /// Fetches PR information from GitHub using the `gh` CLI tool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the PR is not found, if the `gh pr view` invocation fails, or if
+    /// Github returns JSON we cannot parse.
+    pub async fn get_pr_info(&self, pr_number: usize) -> Result<PrInfo, ForgeError> {
+        // FIXME in all these we could use futures::Map rather than await.map_err, which is
+        // really inefficient. Do this if we add a `futures` dependency.
+        crate::gh::get_pr_info(self, pr_number).await.map_err(ForgeError::Github)
+    }
+
+    /// Lists PRs updated since the given timestamp using the `gh` CLI tool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `gh pr list` invocation fails or if
+    /// Github returns JSON we cannot parse.
+    pub async fn list_updated_prs(&self, since: DateTime<Utc>) -> Result<Vec<PrInfo>, ForgeError> {
+        crate::gh::list_updated_prs(self, since).await.map_err(ForgeError::Github)
+    }
+
+    /// Posts a comment on a PR on the upstream forge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `gh pr comment` invocation fails.
+    pub async fn post_pr_comment(&self, pr_number: i32, comment: &str) -> Result<(), ForgeError> {
+        crate::gh::post_pr_comment(self, pr_number, comment).await.map_err(ForgeError::Github)
+    }
+
+    /// Posts an approval review on a PR on the upstream forge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `gh pr review` invocation fails.
+    pub async fn post_pr_approval(&self, pr_number: i32, message: &str) -> Result<(), ForgeError> {
+        crate::gh::post_pr_approval(self, pr_number, message).await.map_err(ForgeError::Github)
     }
 }
 
