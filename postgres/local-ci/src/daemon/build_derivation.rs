@@ -7,9 +7,10 @@ use lcilib::{
     Db,
     db::CiStatus,
     db::models::{
-        Commit, CommitToTest, CommitType, Repository, RepoShell, UpdateCommit,
+        Commit, CommitToTest, CommitType, Repository, UpdateCommit,
     },
     git::CommitId,
+    repo::RepoShell,
 };
 use std::path::Path;
 use std::time::Duration;

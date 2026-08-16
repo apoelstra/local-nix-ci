@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use xshell::cmd;
 
-use crate::db::models::{RepoShell, RepoShellLock};
+use crate::repo::{RepoShell, RepoShellLock};
 
 mod merge_description;
 

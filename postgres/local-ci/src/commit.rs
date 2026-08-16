@@ -7,10 +7,10 @@ use lcilib::{
         EntityType, Log,
         models::{
             CiStatus, Commit, CommitType, NewCommit, PrCommit, PullRequest,
-            Repository, ReviewStatus, UpdateCommit, RepoShell,
+            Repository, ReviewStatus, UpdateCommit,
         },
     },
-    git, jj, repo,
+    git, jj, repo::{self, RepoShell},
 };
 use std::{
     env, fs,

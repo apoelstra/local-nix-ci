@@ -3,7 +3,7 @@
 mod change_id;
 
 use crate::git::CommitId;
-use crate::db::models::{RepoShell, RepoShellLock};
+use crate::repo::{RepoShell, RepoShellLock};
 use std::ffi::OsStr;
 use std::fmt;
 use xshell::{Cmd, cmd};

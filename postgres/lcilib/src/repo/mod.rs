@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+mod shell;
+
 use crate::db::Db;
 use crate::db::models::{self, NewRepository, Repository};
 use xshell::{Shell, cmd};
+
+pub use shell::{RepoShell, RepoShellLock};
 
 #[derive(Debug, Clone)]
 pub enum Upstream {

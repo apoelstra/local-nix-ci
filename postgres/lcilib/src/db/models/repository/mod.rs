@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-mod shell;
-
 use chrono::{DateTime, Utc};
 use core::{fmt, ops};
 use postgres_types::{FromSql, ToSql};
@@ -9,7 +7,7 @@ use std::path::Path;
 
 use super::{PullRequest, Stack};
 use crate::db::{DbQueryError, EntityType, Transaction, util::log_action};
-pub use shell::{RepoShell, RepoShellLock};
+use crate::repo::RepoShell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
 #[postgres(transparent)]

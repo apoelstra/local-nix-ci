@@ -2,7 +2,7 @@
 
 mod serde_types;
 
-use crate::db::models::RepoShell;
+use crate::repo::RepoShell;
 use chrono::{DateTime, Utc};
 pub use serde_types::PrInfo;
 use std::fmt;
