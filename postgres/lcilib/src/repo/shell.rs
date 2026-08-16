@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 
+use crate::fj::{self, ForgejoRepoData};
 use crate::gh::PrInfo;
 use super::Upstream;
 
@@ -17,6 +18,7 @@ pub enum RepoShellError {
         err: xshell::Error,
         remote: &'static str,
     },
+    LoadForgejo(fj::LoadError),
     UnknownUpstream {
         origin_url: String,
     },
@@ -27,6 +29,7 @@ impl fmt::Display for RepoShellError {
         match *self {
             Self::CreateShell(..) => f.write_str("failed to create xshell shell"),
             Self::GitRevParse(..) => f.write_str("failed to run 'git rev-parse --show-toplevel'"),
+            Self::LoadForgejo(..) => f.write_str("failed to load Forgejo configuration"),
             Self::GitRemote { remote, .. } => write!(f, "failed to run 'git remote get-url {remote}'"),
             Self::UnknownUpstream { ref origin_url } => {
                 write!(f, "unknown upstream type for origin URL {origin_url}")
@@ -40,6 +43,7 @@ impl std::error::Error for RepoShellError {
         match *self {
             Self::CreateShell(ref e) => Some(e),
             Self::GitRevParse(ref e) => Some(e),
+            Self::LoadForgejo(ref e) => Some(e),
             Self::GitRemote { ref err, .. } => Some(err),
             Self::UnknownUpstream { .. } => None,
         }
@@ -84,25 +88,36 @@ pub struct RepoShell {
 ///
 /// Recognizes GitHub URLs (ssh and https) and Forgejo URLs on `gitea.bitcoin.ninja`. The
 /// returned project path uses `/` as its separator.
-fn parse_remote_url(url: &str) -> Result<(Upstream, String), RepoShellError> {
-    let candidates: &[(&str, fn() -> Upstream)] = &[
-        ("git@github.com:", || Upstream::Github),
-        ("https://github.com/", || Upstream::Github),
-        ("https://www.github.com/", || Upstream::Github),
-        ("ssh://git@github.com/", || Upstream::Github),
-        ("git@gitea.bitcoin.ninja:", Upstream::gitea_bitcoin_ninja),
-        ("https://gitea.bitcoin.ninja/", Upstream::gitea_bitcoin_ninja), 
-        ("ssh://git@gitea.bitcoin.ninja/", Upstream::gitea_bitcoin_ninja), 
+fn parse_remote_url(shell: &xshell::Shell, url: &str) -> Result<(Upstream, String), RepoShellError> {
+    let candidates: &[(&str, bool)] = &[
+        ("git@github.com:", true),
+        ("https://github.com/", true),
+        ("https://www.github.com/", true),
+        ("ssh://git@github.com/", true),
+        ("git@gitea.bitcoin.ninja:", false),
+        ("https://gitea.bitcoin.ninja/", false),
+        ("ssh://git@gitea.bitcoin.ninja/", false),
     ];
 
-    for (prefix, make_upstream) in candidates {
+    for (prefix, is_github) in candidates {
         if let Some(rest) = url.strip_prefix(prefix) {
             let mut repo_part = rest;
             for _ in 0..2 {
                 repo_part = repo_part.strip_suffix(".git").unwrap_or(repo_part);
                 repo_part = repo_part.strip_suffix("/").unwrap_or(repo_part);
             }
-            return Ok((make_upstream(), repo_part.to_string()));
+            if *is_github {
+                return Ok((Upstream::Github, repo_part.to_string()));
+            } else {
+                let default_api_url = "https://gitea.bitcoin.ninja".to_owned();
+
+                return Ok((
+                    ForgejoRepoData::load_from_shell(shell, default_api_url)
+                        .map(Upstream::Forgejo)
+                        .map_err(RepoShellError::LoadForgejo)?,
+                    repo_part.to_string(),
+                ));
+            }
         }
     }
 
@@ -151,7 +166,7 @@ impl RepoShell {
             }
         };
 
-        let (upstream, project_name) = parse_remote_url(url.trim())?;
+        let (upstream, project_name) = parse_remote_url(&shell, url.trim())?;
         Ok(Self {
             inner: Arc::new(Mutex::new(shell)),
             upstream,

@@ -4,6 +4,7 @@ mod shell;
 
 use crate::db::Db;
 use crate::db::models::{self, NewRepository, Repository};
+use crate::fj::ForgejoRepoData;
 
 pub use shell::{RepoShell, RepoShellError, RepoShellLock};
 
@@ -11,15 +12,7 @@ pub use shell::{RepoShell, RepoShellError, RepoShellLock};
 #[derive(Debug, Clone)]
 pub enum Upstream {
     Github,
-    Forgejo { https_url: String },
-}
-
-impl Upstream {
-    fn gitea_bitcoin_ninja() -> Self {
-        Self::Forgejo {
-            https_url: "https://gitea.bitcoin.ninja".to_string(),
-        }
-    }
+    Forgejo(ForgejoRepoData),
 }
 
 #[derive(Debug)]
