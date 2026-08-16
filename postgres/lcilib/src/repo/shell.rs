@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use chrono::{DateTime, Utc};
 
 use crate::fj::{self, ForgejoRepoData};
-use crate::gh::PrInfo;
+use crate::gh::{self, PrInfo};
+use crate::git::CommitId;
 use super::Upstream;
 
 #[derive(Debug)]
@@ -52,13 +53,15 @@ impl std::error::Error for RepoShellError {
 
 #[derive(Debug)]
 pub enum ForgeError {
-    Github(crate::gh::Error),
+    Github(gh::Error),
+    Forgejo(fj::Error),
 }
 
 impl fmt::Display for ForgeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::Github(..) => f.write_str("github error")
+            Self::Github(..) => f.write_str("github error"),
+            Self::Forgejo(..) => f.write_str("Forgejo error"),
         }
     }
 }
@@ -67,6 +70,7 @@ impl std::error::Error for ForgeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
             Self::Github(ref e) => Some(e),
+            Self::Forgejo(ref e) => Some(e),
         }
     }
 }
@@ -238,9 +242,15 @@ impl RepoShell {
     /// Returns an error if the PR is not found, if the `gh pr view` invocation fails, or if
     /// Github returns JSON we cannot parse.
     pub async fn get_pr_info(&self, pr_number: usize) -> Result<PrInfo, ForgeError> {
-        // FIXME in all these we could use futures::Map rather than await.map_err, which is
-        // really inefficient. Do this if we add a `futures` dependency.
-        crate::gh::get_pr_info(self, pr_number).await.map_err(ForgeError::Github)
+        let project_name = &self.project_name;
+        match self.upstream {
+            Upstream::Github => gh::get_pr_info(self, pr_number)
+                .await
+                .map_err(ForgeError::Github),
+            Upstream::Forgejo(ref data) => fj::get_pr_info(project_name, data, pr_number)
+                .await
+                .map_err(ForgeError::Forgejo),
+        }
     }
 
     /// Lists PRs updated since the given timestamp using the `gh` CLI tool.
@@ -250,7 +260,15 @@ impl RepoShell {
     /// Returns an error if the `gh pr list` invocation fails or if
     /// Github returns JSON we cannot parse.
     pub async fn list_updated_prs(&self, since: DateTime<Utc>) -> Result<Vec<PrInfo>, ForgeError> {
-        crate::gh::list_updated_prs(self, since).await.map_err(ForgeError::Github)
+        let project_name = &self.project_name;
+        match self.upstream {
+            Upstream::Github => gh::list_updated_prs(self, since)
+                .await
+                .map_err(ForgeError::Github),
+            Upstream::Forgejo(ref data) => fj::list_updated_prs(project_name, data, since)
+                .await
+                .map_err(ForgeError::Forgejo),
+        }
     }
 
     /// Posts a comment on a PR on the upstream forge.
@@ -259,7 +277,15 @@ impl RepoShell {
     ///
     /// Returns an error if the `gh pr comment` invocation fails.
     pub async fn post_pr_comment(&self, pr_number: i32, comment: &str) -> Result<(), ForgeError> {
-        crate::gh::post_pr_comment(self, pr_number, comment).await.map_err(ForgeError::Github)
+        let pname = &self.project_name;
+        match self.upstream {
+            Upstream::Github => gh::post_pr_comment(self, pr_number, comment)
+                .await
+                .map_err(ForgeError::Github),
+            Upstream::Forgejo(ref data) => fj::post_pr_comment(pname, data, pr_number, comment)
+                .await
+                .map_err(ForgeError::Forgejo),
+        }
     }
 
     /// Posts an approval review on a PR on the upstream forge.
@@ -267,8 +293,23 @@ impl RepoShell {
     /// # Errors
     ///
     /// Returns an error if the `gh pr review` invocation fails.
-    pub async fn post_pr_approval(&self, pr_number: i32, message: &str) -> Result<(), ForgeError> {
-        crate::gh::post_pr_approval(self, pr_number, message).await.map_err(ForgeError::Github)
+    pub async fn post_pr_approval(
+        &self,
+        pr_number: i32,
+        tip_commit_id: &CommitId,
+        message: &str,
+    ) -> Result<(), ForgeError> {
+        let project_name = &self.project_name;
+        match self.upstream {
+            Upstream::Github => gh::post_pr_approval(self, pr_number, message)
+                .await
+                .map_err(ForgeError::Github),
+            Upstream::Forgejo(ref data) => {
+                fj::post_pr_approval(project_name, data, pr_number, tip_commit_id, message)
+                    .await
+                    .map_err(ForgeError::Forgejo)
+            },
+        }
     }
 }
 

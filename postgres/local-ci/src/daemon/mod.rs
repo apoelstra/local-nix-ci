@@ -189,12 +189,19 @@ async fn check_pending_acks(
         let github_username = tx.get_github_username().await
             .context("getting GitHub username")?
             .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
+        // Fetch the tip commit git id, needed by Forgejo's approval endpoint.
+        let tip_commit = Commit::find_by_id(&tx, pr.tip_commit_id)
+            .await
+            .context("looking up tip commit for PR")?
+            .ok_or_else(|| anyhow::Error::msg("tip commit not found for PR"))?;
         let post_result = if pr.author_login == github_username {
             // Post comment instead of approval for own PRs
             repo.repo_shell.post_pr_comment(pr.pr_number, &ack.message).await
         } else {
             // Post approval review
-            repo.repo_shell.post_pr_approval(pr.pr_number, &ack.message).await
+            repo.repo_shell
+                .post_pr_approval(pr.pr_number, &tip_commit.git_commit_id, &ack.message)
+                .await
         };
 
         let new_status = match post_result {
