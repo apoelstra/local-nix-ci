@@ -184,22 +184,22 @@ pub(crate) async fn get_pr_info(
     repo_data: &ForgejoRepoData,
     pr_number: usize,
 ) -> Result<gh::PrInfo, Error> {
-    let pr_endpoint = format_args!("repos/{}/pulls/{}", project_name, pr_number);
+    let pr_endpoint = format!("repos/{}/pulls/{}", project_name, pr_number);
     let pr: PullRequest = match repo_data.api_get(pr_endpoint).await {
         Ok(v) => v,
         Err(Error::HttpStatus { status: 404, .. }) => return Err(Error::PrNotFound(pr_number)),
         Err(e) => return Err(e),
     };
 
-    let commits_endpoint = format_args!("repos/{}/pulls/{}/commits", project_name, pr_number);
+    let commits_endpoint = format!("repos/{}/pulls/{}/commits", project_name, pr_number);
     let commits: Vec<CommitEntry> = repo_data.api_get(commits_endpoint).await?;
     // Note that Forgejo shows the commits in the opposite order of Github so we have to reverse.
     let commits: Vec<CommitId> = commits.into_iter().rev().map(|c| c.sha).collect();
 
-    let comments_endpoint = format_args!("repos/{}/issues/{}/comments", project_name, pr_number);
+    let comments_endpoint = format!("repos/{}/issues/{}/comments", project_name, pr_number);
     let comments: Vec<Comment> = repo_data.api_get(comments_endpoint).await?;
 
-    let reviews_endpoint = format_args!("repos/{}/pulls/{}/reviews", project_name, pr_number);
+    let reviews_endpoint = format!("repos/{}/pulls/{}/reviews", project_name, pr_number);
     let reviews: Vec<Review> = repo_data.api_get(reviews_endpoint).await?;
 
     Ok(pr.into_gh_pr_info(commits, comments, reviews))
@@ -220,6 +220,7 @@ pub(crate) async fn list_updated_prs(
 ) -> Result<Vec<gh::PrInfo>, Error> {
     let mut out = Vec::new();
     let mut page = 1;
+    let mut saved_err: Option<Error> = None;
     loop {
         // If you are a masochist, change this format! to format_args! and try to parse the
         // resulting async-related compiler error.
@@ -237,12 +238,18 @@ pub(crate) async fn list_updated_prs(
                 hit_old = true;
                 continue;
             }
-            out.push(pr.into_gh_pr_info(Vec::new(), Vec::new(), Vec::new()));
+            match get_pr_info(project_name, repo_data, pr.number as usize).await {
+                Ok(info) => out.push(info),
+                Err(e) => saved_err = Some(e),
+            }
         }
         if hit_old {
             break;
         }
         page += 1;
+    }
+    if let Some(e) = saved_err {
+        return Err(e);
     }
     Ok(out)
 }
