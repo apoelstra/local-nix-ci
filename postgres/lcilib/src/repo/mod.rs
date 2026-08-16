@@ -4,24 +4,31 @@ mod shell;
 
 use crate::db::Db;
 use crate::db::models::{self, NewRepository, Repository};
-use xshell::{Shell, cmd};
 
-pub use shell::{RepoShell, RepoShellLock};
+pub use shell::{RepoShell, RepoShellError, RepoShellLock};
 
+/// Which API to use when talking to the upstream.
 #[derive(Debug, Clone)]
 pub enum Upstream {
     Github,
-    GiteaBitcoinNinja,
+    Forgejo { https_url: String },
+}
+
+impl Upstream {
+    fn gitea_bitcoin_ninja() -> Self {
+        Self::Forgejo {
+            https_url: "https://gitea.bitcoin.ninja".to_string(),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum RepoError {
-    CreateShell(xshell::Error),
+    CreateShell(RepoShellError),
     DatabaseTransaction(tokio_postgres::Error),
     Database(models::RepositoryError),
     GitCommandFailed(xshell::Error),
     UnknownProjectName,
-    UnknownUpstream,
 }
 
 impl std::fmt::Display for RepoError {
@@ -34,10 +41,6 @@ impl std::fmt::Display for RepoError {
             Self::UnknownProjectName => {
                 write!(f, "Failed to get project name from upstream/origin URLs")
             }
-            Self::UnknownUpstream => write!(
-                f,
-                "Failed to get upstream type (Github, Gitea) from upstream/origin URLs"
-            ),
         }
     }
 }
@@ -50,30 +53,9 @@ impl std::error::Error for RepoError {
             Self::DatabaseTransaction(ref e) => Some(e),
             Self::Database(ref e) => Some(e),
             Self::UnknownProjectName => None,
-            Self::UnknownUpstream => None,
         }
         
     }
-}
-
-fn parse_github_url(url: &str) -> Option<String> {
-    for prefix in [
-        "git@github.com:",
-        "https://github.com/",
-        "https://www.github.com/",
-        "https://gitea.bitcoin.ninja/",
-    ] {
-        if let Some(https_part) = url.strip_prefix(prefix) {
-            let mut repo_part = https_part;
-            for _ in 0..2 {
-                repo_part = repo_part.strip_suffix(".git").unwrap_or(repo_part);
-                repo_part = repo_part.strip_suffix("/").unwrap_or(repo_part);
-            }
-            return Some(repo_part.replace('/', "."));
-        }
-    }
-
-    None
 }
 
 /// # Errors
@@ -82,14 +64,18 @@ fn parse_github_url(url: &str) -> Option<String> {
 /// can be determined from the origin/upstream remote URLs, or if the upstream type cannot
 /// be determined from the remote URLs.
 pub async fn current_repo(db: &mut Db) -> Result<Repository, RepoError> {
-    let sh = Shell::new()
+    let sh = RepoShell::new_at_cwd()
         .map_err(RepoError::CreateShell)?;
-
-    // Get repository root using git
-    let repo_root = cmd!(sh, "git rev-parse --show-toplevel")
-        .read()
-        .map_err(RepoError::GitCommandFailed)?;
-    let repo_root = repo_root.trim();
+    // non UTF-8 characters in paths are annoying because ToSql wants to type them as BYTEA and I
+    // need to investigate whether that will work with a VARCHAR column or what. Probably we should
+    // just return an error here.
+    //
+    // We need the object in the database to actually match a disk path because we use that to
+    // access repos from the daemon etc.
+    let repo_root = sh.repo_root();
+    let repo_root = repo_root
+        .to_str()
+        .expect("FIXME we have not handled non-UTF8 characters in repo paths");
 
     // Find or create the repository record
     let tx = db
@@ -103,27 +89,7 @@ pub async fn current_repo(db: &mut Db) -> Result<Repository, RepoError> {
     if let Some(model) = existing_model {
         Ok(model)
     } else {
-        let mut project_name = None;
-        let mut upstream = None;
-        // Try to get project name from git remotes first
-        for remote in ["origin", "upstream"] {
-            if let Ok(origin_url) = cmd!(sh, "git remote get-url {remote}").read()
-                && let Some(project) = parse_github_url(origin_url.trim())
-            {
-                project_name = Some(project);
-                if origin_url.contains("github.com") {
-                    upstream = Some(Upstream::Github);
-                }
-                if origin_url.contains("gitea.bitcoin.ninja") {
-                    upstream = Some(Upstream::GiteaBitcoinNinja);
-                }
-                break;
-            }
-        }
-
-        let project_name = project_name.ok_or(RepoError::UnknownProjectName)?;
-        // TODO we will want to store the upstream in the database so we can switch on github/gitea.
-        let _upstream = upstream.ok_or(RepoError::UnknownUpstream)?;
+        let project_name = sh.project_name().replace('/', ".");
 
         // Create repository record
         let new_repo = NewRepository {

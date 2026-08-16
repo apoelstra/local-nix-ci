@@ -7,7 +7,7 @@ use std::path::Path;
 
 use super::{PullRequest, Stack};
 use crate::db::{DbQueryError, EntityType, Transaction, util::log_action};
-use crate::repo::RepoShell;
+use crate::repo::{RepoShell, RepoShellError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
 #[postgres(transparent)]
@@ -47,7 +47,7 @@ impl ops::Deref for Repository {
 
 #[derive(Debug)]
 pub enum RepositoryError {
-    CreateShell(xshell::Error),
+    CreateShell(RepoShellError),
     Query(DbQueryError),
     RepoPathNotExist(String),
     NixfilePathNotExist(String),
