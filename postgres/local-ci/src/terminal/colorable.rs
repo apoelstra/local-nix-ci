@@ -2,9 +2,9 @@
 
 use core::fmt;
 
+use super::ColorFormat;
 use lcilib::db::{AckStatus, CiStatus, MergeStatus, ReviewStatus};
 use lcilib::git::CommitId;
-use super::ColorFormat;
 
 /// Object which can be colored on the terminal in a consistent way.
 pub trait Colorable: fmt::Display {
@@ -26,7 +26,6 @@ impl Colorable for CommitId {
         ColorFormat::white(self)
     }
 }
-
 
 impl Colorable for AckStatus {
     fn with_color(&self) -> ColorFormat<&Self> {

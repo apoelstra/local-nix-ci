@@ -5,10 +5,7 @@ use chrono::Utc;
 use lcilib::{
     Db,
     db::CiStatus,
-    db::models::{
-        CommitToTest, DbRepositoryId, PullRequest, Repository, ReviewStatus,
-        Stack,
-    },
+    db::models::{CommitToTest, DbRepositoryId, PullRequest, Repository, ReviewStatus, Stack},
     jj::is_commit_gpg_signed,
 };
 use std::collections::HashMap;
@@ -28,7 +25,8 @@ pub async fn find_stacks(
     Vec<(Stack, Vec<CommitToTest>)>,
 )> {
     // Find all stacks grouped by DB and branch
-    let mut branch_map = HashMap::<(DbRepositoryId, String), Vec<(f64, Stack, Vec<CommitToTest>)>>::new();
+    let mut branch_map =
+        HashMap::<(DbRepositoryId, String), Vec<(f64, Stack, Vec<CommitToTest>)>>::new();
     for stack in Stack::get_all(tx).await? {
         let commits = stack.id.get_commits(tx).await?;
         let priority = util::calculate_stack_priority(&commits, tx)
@@ -236,7 +234,11 @@ pub async fn print_work_summary(
                 && commit.ci_status == CiStatus::Unstarted
                 && commit.should_run_ci
             {
-                let prs: Vec<_> = commit.prs.iter().map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type)).collect();
+                let prs: Vec<_> = commit
+                    .prs
+                    .iter()
+                    .map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type))
+                    .collect();
                 let prs_str = prs.join(", ");
                 log::info(format_args!(
                     "  - {} ({}) ({})",
@@ -294,8 +296,7 @@ pub async fn print_work_summary(
             .get_associated_prs(tx)
             .await
             .context("getting associated PRs for low-priority stack")?;
-        let pr_numbers: Vec<String> =
-            prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
+        let pr_numbers: Vec<String> = prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
 
         let (_total, untested) = stack
             .get_commit_counts(tx)
@@ -376,21 +377,21 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
 
                 time::sleep(Duration::from_secs(1)).await;
                 continue;
-            },
+            }
             Err(e) => {
                 log::warn_backoff(
                     &mut error_limit,
                     &*e.into_boxed_dyn_error(),
                     "Failed to get next commit to test.",
-                ).await;
+                )
+                .await;
                 continue;
             }
         };
 
         // Get repository information
         let tx = db.transaction().await.context("starting transaction")?;
-        let repo = match Repository::get_by_id(&tx, commit.repository_id)
-            .await {
+        let repo = match Repository::get_by_id(&tx, commit.repository_id).await {
             Ok(repo) => repo,
             Err(e) => {
                 log::warn_backoff(
@@ -422,15 +423,24 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
         };
         let commit_desc = format!(
             "commit {} ({}) ({} PR {})",
-            commit.git_commit_id.with_color(), commit.jj_change_id.prefix8(), repo.name, prs_desc,
-            
+            commit.git_commit_id.with_color(),
+            commit.jj_change_id.prefix8(),
+            repo.name,
+            prs_desc,
         );
-        log::info(format_args!("{} for {}", ColorFormat::pale_yellow("Starting CI"), commit_desc));
+        log::info(format_args!(
+            "{} for {}",
+            ColorFormat::pale_yellow("Starting CI"),
+            commit_desc
+        ));
         if commit.prs.is_empty() {
             log::info(format_args!("    {} standalone commit", repo.name));
         } else {
             for (pr, commit_type) in &commit.prs {
-                log::info(format_args!("    {} PR #{} ({}): {}", repo.name, pr.pr_number, commit_type, pr.title));
+                log::info(format_args!(
+                    "    {} PR #{} ({}): {}",
+                    repo.name, pr.pr_number, commit_type, pr.title
+                ));
             }
         }
         log::info("");
@@ -439,7 +449,11 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
         match build_derivation::process_commit_ci(&mut db, &commit, &commit_desc, &repo).await {
             Ok(success) => {
                 if success {
-                    log::info(format_args!("{} for {}", ColorFormat::dull_green("CI SUCCESS"), commit_desc));
+                    log::info(format_args!(
+                        "{} for {}",
+                        ColorFormat::dull_green("CI SUCCESS"),
+                        commit_desc
+                    ));
                     if let Err(e) = mark_commit_status(&mut db, commit.id, CiStatus::Passed).await {
                         log::warn(&*e.into_boxed_dyn_error(), "Failed to mark commit passed.");
                     }
@@ -455,7 +469,11 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                     */
                 } else {
                     // FIXME shouldn't this be an error case?
-                    log::info(format_args!("{} for {}", ColorFormat::dull_red("CI FAILED"), commit_desc));
+                    log::info(format_args!(
+                        "{} for {}",
+                        ColorFormat::dull_red("CI FAILED"),
+                        commit_desc
+                    ));
                     // Error details already logged and commit marked as failed in process_commit_ci
                     if let Err(e) = mark_commit_status(&mut db, commit.id, CiStatus::Failed).await {
                         log::warn(&*e.into_boxed_dyn_error(), "Failed to mark commit failed.");

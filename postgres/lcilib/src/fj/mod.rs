@@ -7,9 +7,9 @@ use core::fmt;
 use chrono::{DateTime, Utc};
 use xshell::cmd;
 
+use self::serde_types::{Comment, CommitEntry, PullRequest, Review};
 use crate::git::CommitId;
 use crate::{gh, repo};
-use self::serde_types::{Comment, CommitEntry, PullRequest, Review};
 
 const USER_AGENT: &str = "curl/8.5.0";
 const LIST_PAGE_SIZE: usize = 50;
@@ -66,7 +66,11 @@ impl ForgejoRepoData {
         let override_https_url = read_git_config(shell, "forgejo.httpsUrl");
 
         let https_url = override_https_url.unwrap_or(default_https_url);
-        Ok(Self { token, username, https_url })
+        Ok(Self {
+            token,
+            username,
+            https_url,
+        })
     }
 
     async fn api_get<T: serde::de::DeserializeOwned>(
@@ -122,7 +126,6 @@ impl ForgejoRepoData {
         }
         Ok(())
     }
-
 }
 
 #[derive(Debug)]
@@ -130,7 +133,11 @@ pub enum Error {
     Shell(String, xshell::Error),
     ShellLock(tokio::task::JoinError),
     Http(String, bitreq::Error),
-    HttpStatus { url: String, status: i32, body: String },
+    HttpStatus {
+        url: String,
+        status: i32,
+        body: String,
+    },
     Json(String, serde_json::Error),
     JsonSerialize(serde_json::Error),
     Repo(repo::RepoError),
@@ -295,13 +302,14 @@ pub(crate) async fn post_pr_approval(
         commit_id: String,
         event: &'a str,
     }
-    repo_data.api_post(
-        endpoint,
-        &Body {
-            body: message,
-            commit_id: commit_id.to_string(),
-            event: "APPROVED",
-        },
-    )
-    .await
+    repo_data
+        .api_post(
+            endpoint,
+            &Body {
+                body: message,
+                commit_id: commit_id.to_string(),
+                event: "APPROVED",
+            },
+        )
+        .await
 }

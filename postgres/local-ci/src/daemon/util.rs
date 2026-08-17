@@ -98,7 +98,10 @@ async fn calculate_commit_priority(
         .context("getting my ACK count")?;
 
     let others_ack_count = total_ack_count - my_ack_count;
-    let is_my_pr = oldest_pr.is_mine(tx).await.context("checking if PR is mine")?;
+    let is_my_pr = oldest_pr
+        .is_mine(tx)
+        .await
+        .context("checking if PR is mine")?;
 
     // Full credit for others' ACKs
     priority += others_ack_count as f64;

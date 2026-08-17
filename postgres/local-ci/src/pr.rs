@@ -8,8 +8,8 @@ use lcilib::{
         EntityType, Log,
         models::{
             Ack, AckStatus, CiStatus, Commit, CommitType, DbCommitId, DbPullRequestId, MergeStatus,
-            NewAck, NewCommit, NewPullRequest, PrCommit, PullRequest, Repository,
-            ReviewStatus, UpdatePullRequest,
+            NewAck, NewCommit, NewPullRequest, PrCommit, PullRequest, Repository, ReviewStatus,
+            UpdatePullRequest,
         },
     },
     gh, git, jj, repo,
@@ -21,7 +21,7 @@ use std::{
 };
 use xshell::{Shell, cmd};
 
-use crate::terminal::{Colorable as _, ColorFormat};
+use crate::terminal::{ColorFormat, Colorable as _};
 
 /// Show information about a PR
 ///
@@ -63,7 +63,10 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         println!();
         println!("Merge Status: {}", pr.merge_status.with_color());
         println!("Review Status: {}", pr.review_status.with_color());
-        println!("Priority: {}", ColorFormat::redgreen(pr.priority, f64::from(pr.priority), -2.0, 2.0));
+        println!(
+            "Priority: {}",
+            ColorFormat::redgreen(pr.priority, f64::from(pr.priority), -2.0, 2.0)
+        );
         println!("OK to Merge: {}", pr.ok_to_merge.with_color());
         println!("Required Reviewers: {}", pr.required_reviewers);
         println!("Created: {}", pr.created_at);
@@ -258,7 +261,8 @@ async fn scan_and_update_acks(
 
     // Scan comments
     for comment in &pr_info.comments {
-        if let Some((ack_text, commit_id)) = git::extract_ack_from_text(&comment.body, &commit_map) {
+        if let Some((ack_text, commit_id)) = git::extract_ack_from_text(&comment.body, &commit_map)
+        {
             let timestamp = parse_github_timestamp(&comment.created_at)?;
             let reviewer = &comment.author.login;
 
@@ -307,7 +311,9 @@ async fn scan_and_update_acks(
         .await
         .context("failed to get existing ACKs")?;
 
-    let current_user = tx.get_github_username().await
+    let current_user = tx
+        .get_github_username()
+        .await
         .context("getting GitHub username")?
         .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
 
@@ -594,10 +600,7 @@ async fn show_pr_info(
         .await
         .context("failed to get commit info from git")?;
 
-    println!(
-        "{} PR #{}: {}",
-        repo.name, pr.pr_number, pr.title
-    );
+    println!("{} PR #{}: {}", repo.name, pr.pr_number, pr.title);
     println!();
     println!(
         "{}",
@@ -685,7 +688,9 @@ async fn create_or_overwrite_ack(
     commit_id: DbCommitId,
     message: &str,
 ) -> anyhow::Result<()> {
-    let reviewer_name = tx.get_github_username().await
+    let reviewer_name = tx
+        .get_github_username()
+        .await
         .context("getting GitHub username")?
         .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
 
@@ -757,7 +762,9 @@ async fn erase_ack(
         .await
         .context("failed to find ACKs for PR")?;
 
-    let reviewer_name = tx.get_github_username().await
+    let reviewer_name = tx
+        .get_github_username()
+        .await
         .context("getting GitHub username")?
         .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
 
@@ -897,15 +904,25 @@ pub async fn reset(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .collect();
 
     if merge_commits.is_empty() {
-        println!("\nNo merge commits found for PR #{}. Nothing to reset.", pr_number);
+        println!(
+            "\nNo merge commits found for PR #{}. Nothing to reset.",
+            pr_number
+        );
         tx.commit().await.context("failed to commit transaction")?;
         return Ok(());
     }
 
     // Show merge commits that will be affected
-    println!("\nThe following {} merge commit(s) will be marked as non-current:", merge_commits.len());
+    println!(
+        "\nThe following {} merge commit(s) will be marked as non-current:",
+        merge_commits.len()
+    );
     for (commit, _) in &merge_commits {
-        println!("  {} ({})", commit.git_commit_id.with_color(), commit.jj_change_id);
+        println!(
+            "  {} ({})",
+            commit.git_commit_id.with_color(),
+            commit.jj_change_id
+        );
     }
 
     // Show warning and confirmation prompt
@@ -935,15 +952,25 @@ pub async fn reset(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
     // Mark all merge commits as non-current
     let mut reset_count = 0;
     for (commit, _) in &merge_commits {
-        commit.id.mark_non_current_for_all_prs_and_stacks(&tx)
+        commit
+            .id
+            .mark_non_current_for_all_prs_and_stacks(&tx)
             .await
-            .with_context(|| format!("failed to mark commit {} as non-current", commit.git_commit_id))?;
+            .with_context(|| {
+                format!(
+                    "failed to mark commit {} as non-current",
+                    commit.git_commit_id
+                )
+            })?;
         reset_count += 1;
     }
 
     tx.commit().await.context("failed to commit transaction")?;
 
-    println!("Successfully reset {} merge commit(s) for PR #{}.", reset_count, pr_number);
+    println!(
+        "Successfully reset {} merge commit(s) for PR #{}.",
+        reset_count, pr_number
+    );
     println!("The daemon will handle stack cleanup automatically.");
 
     Ok(())
@@ -965,13 +992,16 @@ pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<(
         .context("failed to get current repository")?;
 
     // Fetch PR info from GitHub
-    let pr_info = repo.repo_shell.get_pr_info(pr_number)
+    let pr_info = repo
+        .repo_shell
+        .get_pr_info(pr_number)
         .await
         .context("failed to fetch PR from GitHub")?;
 
     // Fetch the head commit to ensure it's available locally
     git::fetch_commit(&repo.repo_shell, &pr_info.head_commit)
-        .await.context("failed to fetch head commit")?;
+        .await
+        .context("failed to fetch head commit")?;
 
     refresh(&repo, &pr_info, db).await
 }
@@ -987,11 +1017,7 @@ pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<(
 /// - Database transaction or operations fail
 /// - PR has no commits
 #[allow(clippy::too_many_lines)] // unsure about this. seems reasonable enough
-pub async fn refresh(
-    repo: &Repository,
-    pr_info: &gh::PrInfo,
-    db: &mut Db,
-) -> anyhow::Result<()> {
+pub async fn refresh(repo: &Repository, pr_info: &gh::PrInfo, db: &mut Db) -> anyhow::Result<()> {
     // Start database transaction
     let tx = db
         .transaction()
@@ -1001,10 +1027,9 @@ pub async fn refresh(
     // Create or find commits for all commits in the PR
     let mut commit_records = Vec::new();
     for commit_oid in pr_info.commit_ids() {
-        let commit_record = if let Some(commit) =
-            Commit::find_by_git_id(&tx, repo.id, commit_oid)
-                .await
-                .context("failed to query commit")?
+        let commit_record = if let Some(commit) = Commit::find_by_git_id(&tx, repo.id, commit_oid)
+            .await
+            .context("failed to query commit")?
         {
             commit
         } else {
@@ -1039,10 +1064,9 @@ pub async fn refresh(
     let merge_status = determine_merge_status_from_github(pr_info);
 
     // Create or update the PR record
-    let pr_record = if let Some(pr) =
-        PullRequest::find_by_number(&tx, repo.id, pr_info.number)
-            .await
-            .context("failed to query pull request")?
+    let pr_record = if let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_info.number)
+        .await
+        .context("failed to query pull request")?
     {
         // Update existing PR
         let updates = UpdatePullRequest {
@@ -1158,7 +1182,8 @@ pub async fn refresh(
             .any(|comment| comment.body.trim() == rebase_comment);
 
         if !comment_exists {
-            repo.repo_shell.post_pr_comment(pr_info.number, &rebase_comment)
+            repo.repo_shell
+                .post_pr_comment(pr_info.number, &rebase_comment)
                 .await
                 .context("failed to post rebase comment")?;
 
@@ -1167,7 +1192,11 @@ pub async fn refresh(
     }
 
     println!("Refreshed PR #{}: {}", pr_info.number, pr_info.title);
-    println!("Commits: {}; tip: {}", commit_records.len(), pr_info.head_commit.with_color());
+    println!(
+        "Commits: {}; tip: {}",
+        commit_records.len(),
+        pr_info.head_commit.with_color()
+    );
 
     Ok(())
 }

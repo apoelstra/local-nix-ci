@@ -114,7 +114,11 @@ pub fn warn<D: fmt::Display>(error: &dyn Error, message: D) {
 /// Each sleep will be longer than the last, to prevent error cascades from filling
 /// whatever log buffer the user has. Call [`reset_error_sleep`] when things are
 /// going well to reset the backoff count.
-pub async fn warn_backoff<D: fmt::Display>(token: &mut BackoffSleepToken, error: &(dyn Error + Send + Sync + 'static), message: D) {
+pub async fn warn_backoff<D: fmt::Display>(
+    token: &mut BackoffSleepToken,
+    error: &(dyn Error + Send + Sync + 'static),
+    message: D,
+) {
     let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
     eprintln!("[{}] [WARN] {}", timestamp, message);
     eprint_error(error);

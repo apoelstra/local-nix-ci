@@ -58,10 +58,13 @@ impl fmt::Display for RepositoryError {
         match *self {
             Self::CreateShell(..) => f.write_str("failed to create repository shell"),
             Self::Query(..) => f.write_str("database query error"),
-            Self::RepoPathNotExist(ref path) => write!(f, "repository path {} does not exist", path),
-            Self::NixfilePathNotExist(ref path) => write!(f, "repository nixfile path {} does not exist", path),
+            Self::RepoPathNotExist(ref path) => {
+                write!(f, "repository path {} does not exist", path)
+            }
+            Self::NixfilePathNotExist(ref path) => {
+                write!(f, "repository nixfile path {} does not exist", path)
+            }
         }
-        
     }
 }
 
@@ -73,7 +76,6 @@ impl std::error::Error for RepositoryError {
             Self::RepoPathNotExist(..) => None,
             Self::NixfilePathNotExist(..) => None,
         }
-        
     }
 }
 
@@ -126,10 +128,7 @@ impl DbRepositoryId {
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn get_stacks(
-        self,
-        tx: &Transaction<'_>,
-    ) -> Result<Vec<Stack>, DbQueryError> {
+    pub async fn get_stacks(self, tx: &Transaction<'_>) -> Result<Vec<Stack>, DbQueryError> {
         let rows = tx
             .inner
             .query(
@@ -157,12 +156,8 @@ impl DbRepositoryId {
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn update_last_synced(
-        &self,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DbQueryError> {
-        tx
-            .inner
+    pub async fn update_last_synced(&self, tx: &Transaction<'_>) -> Result<(), DbQueryError> {
+        tx.inner
             .execute(
                 r#"
                 UPDATE repositories SET last_synced_at = NOW()
@@ -172,14 +167,12 @@ impl DbRepositoryId {
                 &[&self],
             )
             .await
-            .map_err(|error| {
-                DbQueryError {
-                    action: "update_last_synced",
-                    entity_type: EntityType::Repository,
-                    raw_id: Some(self.bare_i32()),
-                    clauses: vec![],
-                    error,
-                }
+            .map_err(|error| DbQueryError {
+                action: "update_last_synced",
+                entity_type: EntityType::Repository,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![],
+                error,
             })?;
 
         Ok(())
@@ -196,8 +189,7 @@ impl Repository {
         if !Path::new(&nixfile_path).exists() {
             return Err(RepositoryError::NixfilePathNotExist(nixfile_path));
         }
-        let repo_shell = RepoShell::new(&repo_path)
-            .map_err(RepositoryError::CreateShell)?;
+        let repo_shell = RepoShell::new(&repo_path).map_err(RepositoryError::CreateShell)?;
 
         Ok(Self {
             id: row.get("id"),
@@ -238,14 +230,12 @@ impl Repository {
                 &[&new_repo.name, &new_repo.path, &new_repo.nixfile_path],
             )
             .await
-            .map_err(|error| {
-                DbQueryError {
-                    action: "insert_into_repositories",
-                    entity_type: EntityType::Repository,
-                    raw_id: None,
-                    clauses: vec![],
-                    error,
-                }
+            .map_err(|error| DbQueryError {
+                action: "insert_into_repositories",
+                entity_type: EntityType::Repository,
+                raw_id: None,
+                clauses: vec![],
+                error,
             })
             .map_err(RepositoryError::Query)?;
 
@@ -270,9 +260,7 @@ impl Repository {
     /// If any repository fails the path checks, it is omitted from the list and an error
     /// is put into the returned error vector. If the database query fails, returns an
     /// empty result vector and an error vector with a single database query error.
-    pub async fn list_all(
-        tx: &Transaction<'_>
-    ) -> (Vec<Self>, Vec<RepositoryError>) {
+    pub async fn list_all(tx: &Transaction<'_>) -> (Vec<Self>, Vec<RepositoryError>) {
         let rows = match tx
             .inner
             .query("SELECT id, name, path, nixfile_path, created_at, last_synced_at FROM repositories ORDER BY name", &[])

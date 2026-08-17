@@ -3,7 +3,7 @@
 mod lexer;
 
 use core::fmt;
-use lcilib::db::{models::DbStackId, EntityType};
+use lcilib::db::{EntityType, models::DbStackId};
 use lexer::{ArgToken, lexed_args};
 use std::process;
 use std::sync::OnceLock;

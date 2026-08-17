@@ -243,7 +243,8 @@ impl DbPullRequestId {
             clauses.len() + 1,
         );
 
-        tx.inner.query_one(&query, &params)
+        tx.inner
+            .query_one(&query, &params)
             .await
             .map(Some)
             .map_err(|error| DbQueryError {
@@ -335,12 +336,13 @@ impl DbPullRequestId {
                 error,
             })?;
 
-        let mut commits_map: std::collections::HashMap<super::DbCommitId, CommitToTest> = std::collections::HashMap::new();
-        
+        let mut commits_map: std::collections::HashMap<super::DbCommitId, CommitToTest> =
+            std::collections::HashMap::new();
+
         for row in &rows {
             let commit_id = row.get("id");
             let commit_type = row.get("commit_type");
-            
+
             let pr = super::PullRequest {
                 id: row.get("pr_id"),
                 repository_id: row.get("pr_repository_id"),
@@ -359,11 +361,13 @@ impl DbPullRequestId {
                 updated_at: row.get("pr_updated_at"),
                 synced_at: row.get("pr_synced_at"),
             };
-            
-            let commit = commits_map.entry(commit_id).or_insert_with(|| CommitToTest::from_row(row));
+
+            let commit = commits_map
+                .entry(commit_id)
+                .or_insert_with(|| CommitToTest::from_row(row));
             commit.prs.push((pr, commit_type));
         }
-        
+
         // Return commits in the original order
         let mut result = Vec::new();
         for row in &rows {
@@ -372,7 +376,7 @@ impl DbPullRequestId {
                 result.push(commit);
             }
         }
-        
+
         Ok(result)
     }
 
@@ -481,14 +485,12 @@ impl PullRequest {
                 &[&self.id, &self.tip_commit_id],
             )
             .await
-            .map_err(|error| {
-                DbQueryError {
-                    action: "get_ack_count",
-                    entity_type: EntityType::PullRequest,
-                    raw_id: Some(self.id.bare_i32()),
-                    clauses: vec![],
-                    error,
-                }
+            .map_err(|error| DbQueryError {
+                action: "get_ack_count",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(self.id.bare_i32()),
+                clauses: vec![],
+                error,
             })?;
 
         Ok(row.get::<_, i64>(0))
@@ -501,7 +503,9 @@ impl PullRequest {
     ///
     /// Returns an error if the database operation fails.
     pub async fn get_my_ack_count(&self, tx: &Transaction<'_>) -> Result<i64, DbQueryError> {
-        let username = tx.get_github_username().await
+        let username = tx
+            .get_github_username()
+            .await
             .map_err(|error| DbQueryError {
                 action: "query global username",
                 entity_type: EntityType::PullRequest,
@@ -509,7 +513,7 @@ impl PullRequest {
                 clauses: vec![],
                 error,
             })?;
-        
+
         let Some(username) = username else {
             return Ok(0);
         };
@@ -528,14 +532,12 @@ impl PullRequest {
                 &[&self.id, &self.tip_commit_id, &username],
             )
             .await
-            .map_err(|error| {
-                DbQueryError {
-                    action: "get_my_ack_count",
-                    entity_type: EntityType::PullRequest,
-                    raw_id: Some(self.id.bare_i32()),
-                    clauses: vec![],
-                    error,
-                }
+            .map_err(|error| DbQueryError {
+                action: "get_my_ack_count",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(self.id.bare_i32()),
+                clauses: vec![],
+                error,
             })?;
 
         Ok(row.get::<_, i64>(0))
@@ -611,7 +613,7 @@ impl PullRequest {
 
         let mut commit = CommitToTest::from_row(row);
         commit.prs.push((pr, commit_type));
-        
+
         Ok(Some(commit))
     }
 
@@ -768,7 +770,9 @@ impl PullRequest {
     ///
     /// Returns an error if the database operation fails.
     pub async fn is_mine(&self, tx: &Transaction<'_>) -> Result<bool, DbQueryError> {
-        let username = tx.get_github_username().await
+        let username = tx
+            .get_github_username()
+            .await
             .map_err(|error| DbQueryError {
                 action: "query global username",
                 entity_type: EntityType::PullRequest,

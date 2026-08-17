@@ -4,10 +4,9 @@ use std::collections::HashSet;
 use tokio_postgres::Error;
 
 use super::models::{
-    Ack, AckStatus, AllowedApprover, Commit, CommitType, DbAckId, DbCommitId,
-    DbPrCommitId, DbPullRequestId, DbRepositoryId, LogEntry, NewAck, NewAllowedApprover,
-    NewCommit, NewPullRequest, NewStack, PrCommit, PullRequest, Stack,
-    UpdateCommit,
+    Ack, AckStatus, AllowedApprover, Commit, CommitType, DbAckId, DbCommitId, DbPrCommitId,
+    DbPullRequestId, DbRepositoryId, LogEntry, NewAck, NewAllowedApprover, NewCommit,
+    NewPullRequest, NewStack, PrCommit, PullRequest, Stack, UpdateCommit,
 };
 use super::util::{self, EntityType};
 use crate::db::{DbQueryError, Transaction};

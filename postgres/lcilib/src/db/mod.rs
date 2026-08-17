@@ -62,7 +62,10 @@ impl Db {
     ///
     /// Returns an error if the transaction cannot be started.
     pub async fn transaction(&mut self) -> Result<Transaction<'_>, tokio_postgres::Error> {
-        self.client.transaction().await.map(|inner| Transaction { inner })
+        self.client
+            .transaction()
+            .await
+            .map(|inner| Transaction { inner })
     }
 
     /// Execute a function within a transaction, automatically committing or rolling back.
@@ -78,17 +81,21 @@ impl Db {
     /// # Panics
     ///
     /// Panics if the provided function panics, or if it leaks the `Arc`.
-    pub async fn with_transaction<'db, R, E, F, Fu>(&'db mut self, f: F) -> Result<R, DbTransactionError<E>>
+    pub async fn with_transaction<'db, R, E, F, Fu>(
+        &'db mut self,
+        f: F,
+    ) -> Result<R, DbTransactionError<E>>
     where
         R: Send,
-        F: FnOnce(
-            Arc<Transaction<'db>>,
-        ) -> Fu,
+        F: FnOnce(Arc<Transaction<'db>>) -> Fu,
         Fu: Future<Output = Result<R, E>>,
     {
-        let tx = Arc::new(self.transaction().await.map_err(DbTransactionError::Construct)?);
+        let tx = Arc::new(
+            self.transaction()
+                .await
+                .map_err(DbTransactionError::Construct)?,
+        );
         match f(Arc::clone(&tx)).await {
-
             Ok(result) => {
                 let tx = Arc::into_inner(tx).expect("we told you not to leak the arc");
                 tx.commit().await.map_err(DbTransactionError::Commit)?;
@@ -165,7 +172,10 @@ impl Transaction<'_> {
     ///
     /// Returns an error if the database operation fails.
     pub async fn get_github_username(&self) -> Result<Option<String>, tokio_postgres::Error> {
-        let row = self.inner.query_one("SELECT github_username FROM global", &[]).await?;
+        let row = self
+            .inner
+            .query_one("SELECT github_username FROM global", &[])
+            .await?;
         let username: Option<String> = row.get("github_username");
         Ok(username)
     }
@@ -176,7 +186,9 @@ impl Transaction<'_> {
     ///
     /// Returns an error if the database operation fails.
     pub async fn set_github_username(&self, username: &str) -> Result<(), tokio_postgres::Error> {
-        self.inner.execute("UPDATE global SET github_username = $1", &[&username]).await?;
+        self.inner
+            .execute("UPDATE global SET github_username = $1", &[&username])
+            .await?;
         Ok(())
     }
 }
@@ -195,7 +207,6 @@ impl<E> fmt::Display for DbTransactionError<E> {
             Self::Commit(..) => f.write_str("failed to commit transaction"),
             Self::Query(..) => f.write_str("failed to execute query within transaction"),
         }
-        
     }
 }
 
@@ -206,7 +217,6 @@ impl<E: std::error::Error + 'static> std::error::Error for DbTransactionError<E>
             Self::Commit(ref e) => Some(e),
             Self::Query(ref e) => Some(e),
         }
-        
     }
 }
 

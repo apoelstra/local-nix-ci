@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::db::{
-    DbQueryError,
+    DbQueryError, Transaction,
     models::{CommitToTest, DbCommitId, PullRequest, Repository},
-    Transaction,
 };
 use crate::git::CommitId;
 
@@ -48,7 +47,6 @@ impl std::error::Error for MergeDescriptionError {
     }
 }
 
-
 /// Extract ACK text and commit ID from a GitHub comment/review body
 pub fn extract_ack_from_text(
     text: &str,
@@ -59,7 +57,7 @@ pub fn extract_ack_from_text(
         if line.trim_start().starts_with('>') {
             continue;
         }
-        
+
         // Split line into alphanumeric words (punctuation acts as separator)
         let words: Vec<&str> = line
             .split(|c: char| !c.is_alphanumeric())
@@ -76,7 +74,9 @@ pub fn extract_ack_from_text(
             }
         }
 
-        let Some(ack_pos) = ack_word_pos else { continue };
+        let Some(ack_pos) = ack_word_pos else {
+            continue;
+        };
 
         // Look for commit IDs (7+ lowercase hex characters) in the same line, occurring after the ACK word
         for word in words.iter().skip(ack_pos) {
@@ -130,7 +130,12 @@ pub async fn compute_merge_description(
     let mut message = if pr.title.is_empty() {
         format!("Merge {}#{}\n\n", project, pr.pr_number)
     } else {
-        format!("Merge {}#{}: {}\n\n", project, pr.pr_number, pr.title.trim())
+        format!(
+            "Merge {}#{}: {}\n\n",
+            project,
+            pr.pr_number,
+            pr.title.trim()
+        )
     };
 
     // Get commit list from database and format using jj
@@ -174,7 +179,11 @@ pub async fn compute_merge_description(
         // any non-tip ACKs or other cruft from the ACK messages.
         let commit_map = {
             let mut map = HashMap::new();
-            commits.last().map(|commit| commit.git_commit_id.populate_prefix_map(&mut map, commit.id));
+            commits.last().map(|commit| {
+                commit
+                    .git_commit_id
+                    .populate_prefix_map(&mut map, commit.id)
+            });
             map
         };
 
@@ -264,10 +273,12 @@ mod tests {
             map.insert("2a20232".to_owned(), dummy_id());
             map
         };
-        extract_ack_from_text("Lol, in that case I just had a tickle in my throat...
+        extract_ack_from_text(
+            "Lol, in that case I just had a tickle in my throat...
 
             ACK 2a20232",
             &map,
-        ).unwrap();
+        )
+        .unwrap();
     }
 }

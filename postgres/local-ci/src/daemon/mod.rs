@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+mod build_derivation;
 mod ci_cycle;
 mod log;
-mod build_derivation;
 pub mod util;
 
 use crate::terminal::ColorFormat;
 
 use anyhow::Context as _;
-use lcilib::db::MergeStatus;
 use lcilib::Db;
+use lcilib::db::MergeStatus;
 use lcilib::db::models::{
-    Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack, PullRequest, Repository, ReviewStatus, Stack, UpdateAck, UpdateCommit,
+    Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack,
+    PullRequest, Repository, ReviewStatus, Stack, UpdateAck, UpdateCommit,
 };
-use lcilib::{git, jj};
 use lcilib::jj::is_commit_gpg_signed;
+use lcilib::{git, jj};
 use std::time::Duration;
 use tokio::time;
 
@@ -75,21 +76,24 @@ async fn real_run_db_maintenance_cycle(
     let mut had_work = false;
 
     // Check for pending ACKs that need to be posted
-    if check_pending_acks(db, log_limit).await
+    if check_pending_acks(db, log_limit)
+        .await
         .context("checking pending ACKs")?
     {
         had_work = true;
     }
 
     // Check for approved PRs that need merge commits created
-    if check_approved_prs(db).await
+    if check_approved_prs(db)
+        .await
         .context("checking approved PRs")?
     {
         had_work = true;
     }
 
     // Check for signed merge commits that need to be pushed
-    if check_signed_merges(db, log_limit).await
+    if check_signed_merges(db, log_limit)
+        .await
         .context("checking signed merges")?
     {
         had_work = true;
@@ -114,10 +118,7 @@ async fn run_pr_sync_cycle() -> anyhow::Result<()> {
                 log::info(format_args!("PR sync cycle completed successfully"));
             }
             Err(e) => {
-                log::warn(
-                    &*e.into_boxed_dyn_error(),
-                    "Failed PR sync cycle.",
-                );
+                log::warn(&*e.into_boxed_dyn_error(), "Failed PR sync cycle.");
             }
         }
     }
@@ -145,7 +146,8 @@ async fn check_pending_acks(
         let repo = Repository::get_by_id(&tx, pr.repository_id)
             .await
             .context("looking up repository for ACK")?;
-        let counts = pr.get_commit_counts(&tx)
+        let counts = pr
+            .get_commit_counts(&tx)
             .await
             .context("getting commit counts for PR")?;
 
@@ -161,32 +163,44 @@ async fn check_pending_acks(
 
         if counts.failed > 0 {
             // If any commit failed, don't post the ACK.
-            log_limit.run(|| log::info(format_args!(
-                "{} PR #{} approved ({} commits; {} approved, {} passed, {}).",
-                repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
-                ColorFormat::dull_red(format_args!("{} failed", counts.failed)),
-            )));
+            log_limit.run(|| {
+                log::info(format_args!(
+                    "{} PR #{} approved ({} commits; {} approved, {} passed, {}).",
+                    repo.name,
+                    pr.pr_number,
+                    counts.total,
+                    counts.approved,
+                    counts.ready,
+                    ColorFormat::dull_red(format_args!("{} failed", counts.failed)),
+                ))
+            });
             continue;
         } else if counts.approved != counts.total {
-            // Then if any commit is unapproved, don't post the ACK.  
-            log_limit.run(|| log::info(format_args!(
-                "{} PR #{} approved ({} commits; {} approved, {} passed).",
-                repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
-            )));
+            // Then if any commit is unapproved, don't post the ACK.
+            log_limit.run(|| {
+                log::info(format_args!(
+                    "{} PR #{} approved ({} commits; {} approved, {} passed).",
+                    repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
+                ))
+            });
             continue;
         } else if counts.untested > 0 {
             // Then if any commits remain untested, don't post the ACK.
-            log_limit.run(|| log::info(format_args!(
-                "{} PR #{} fully approved ({} commits, {} untested).",
-                repo.name, pr.pr_number, counts.total, counts.untested,
-            )));
+            log_limit.run(|| {
+                log::info(format_args!(
+                    "{} PR #{} fully approved ({} commits, {} untested).",
+                    repo.name, pr.pr_number, counts.total, counts.untested,
+                ))
+            });
             continue;
         }
         // At this point, all commits are approved and their CI status is either "skipped"
         // or "passed".
 
         // All conditions met, post the ACK
-        let github_username = tx.get_github_username().await
+        let github_username = tx
+            .get_github_username()
+            .await
             .context("getting GitHub username")?
             .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
         // Fetch the tip commit git id, needed by Forgejo's approval endpoint.
@@ -196,7 +210,9 @@ async fn check_pending_acks(
             .ok_or_else(|| anyhow::Error::msg("tip commit not found for PR"))?;
         let post_result = if pr.author_login == github_username {
             // Post comment instead of approval for own PRs
-            repo.repo_shell.post_pr_comment(pr.pr_number, &ack.message).await
+            repo.repo_shell
+                .post_pr_comment(pr.pr_number, &ack.message)
+                .await
         } else {
             // Post approval review
             repo.repo_shell
@@ -207,13 +223,15 @@ async fn check_pending_acks(
         let new_status = match post_result {
             Ok(()) => AckStatus::Posted,
             Err(e) => {
-                log::warn(&e,
+                log::warn(
+                    &e,
                     format_args!(
-                    "Failed to post ACK for PR #{} from reviewer {}",
-                    pr.pr_number, ack.reviewer_name
-                ));
+                        "Failed to post ACK for PR #{} from reviewer {}",
+                        pr.pr_number, ack.reviewer_name
+                    ),
+                );
                 AckStatus::Failed
-            },
+            }
         };
 
         // Update ACK status to 'posted'
@@ -243,7 +261,8 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
 
     // Step 0: Process existing stacks in case the user has messed with them
     //  since the last call.
-    if process_existing_stacks(db).await
+    if process_existing_stacks(db)
+        .await
         .context("processing existing stacks (pass one)")?
     {
         work_done = true;
@@ -256,7 +275,8 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
         .context("getting approved PRs from database")?;
 
     for pr in approved_prs {
-        if process_approved_pr(db, &pr).await
+        if process_approved_pr(db, &pr)
+            .await
             .with_context(|| format!("processing approved PR {}", pr.pr_number))?
         {
             work_done = true;
@@ -264,7 +284,8 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
     }
 
     // Step 3: Process existing stacks for rebasing and updates
-    if process_existing_stacks(db).await
+    if process_existing_stacks(db)
+        .await
         .context("processing existing stacks (pass two)")?
     {
         work_done = true;
@@ -291,11 +312,7 @@ async fn process_approved_pr(db: &mut Db, pr: &PullRequest) -> anyhow::Result<bo
         let priority = util::calculate_stack_priority(&commits, &tx)
             .await
             .context("calculating stack priority")?;
-        annotated_stacks.push((
-            priority,
-            stack,
-            commits,
-        ));
+        annotated_stacks.push((priority, stack, commits));
     }
     // Sort by reverse priority.
     annotated_stacks.sort_by(|(a, _, _), (b, _, _)| b.total_cmp(a));
@@ -359,7 +376,9 @@ async fn try_extend_stack(
         tip_commit.git_commit_id.as_str(),
         stack_tip,
         None, // description
-    ).await {
+    )
+    .await
+    {
         Ok(jj_change_id) => {
             // Get the git commit ID for the new merge
             let git_commit_id =
@@ -436,17 +455,20 @@ async fn try_extend_stack(
             // and show a summary or something to help predict conflicts but this is okay
             // for now.
             Ok(false)
-        },
+        }
         Err(e) => {
             if let Some(id) = stack_id {
                 log::info(format_args!(
                     "Failed to extend stack {} with PR #{}: {:?}",
-                    id, pr.pr_number, anyhow::Error::from(e)
+                    id,
+                    pr.pr_number,
+                    anyhow::Error::from(e)
                 ));
             } else {
                 log::info(format_args!(
                     "Failed to create new stack with PR #{}: {:?}",
-                    pr.pr_number, anyhow::Error::from(e)
+                    pr.pr_number,
+                    anyhow::Error::from(e)
                 ));
             }
             Ok(false)
@@ -458,13 +480,15 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
     let mut work_done = false;
 
     // Get all stacks grouped by repo/target
-    let all_stacks = db.with_transaction(Stack::get_all)
+    let all_stacks = db
+        .with_transaction(Stack::get_all)
         .await
         .context("getting list of all stacks from database")?;
 
     for stack in all_stacks {
         let id = stack.id;
-        if process_stack_updates(db, stack).await
+        if process_stack_updates(db, stack)
+            .await
             .with_context(|| format!("processing updates for stack {}", id))?
         {
             work_done = true;
@@ -474,11 +498,9 @@ async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
     Ok(work_done)
 }
 
-pub async fn process_stack_updates(
-    db: &mut Db,
-    stack: Stack,
-) -> anyhow::Result<bool> {
-    let mut stack_commits = db.with_transaction(async |tx| stack.id.get_commits(&tx).await)
+pub async fn process_stack_updates(db: &mut Db, stack: Stack) -> anyhow::Result<bool> {
+    let mut stack_commits = db
+        .with_transaction(async |tx| stack.id.get_commits(&tx).await)
         .await
         .with_context(|| format!("getting list of commits for {}", stack.id))?;
 
@@ -490,7 +512,8 @@ pub async fn process_stack_updates(
     };
 
     // Check if first commit's first parent matches target
-    let repo = db.with_transaction(async |tx| Repository::get_by_id(&tx, stack.repository_id).await)
+    let repo = db
+        .with_transaction(async |tx| Repository::get_by_id(&tx, stack.repository_id).await)
         .await
         .with_context(|| format!("repository {} for {}", stack.repository_id, stack.id))?;
     let parents = git::list_parents(&repo.repo_shell, &first_commit.git_commit_id)
@@ -522,14 +545,15 @@ pub async fn process_stack_updates(
         // Mark all commits as not current and delete stack
         db.with_transaction(async |tx| {
             for commit in &stack_commits {
-                commit.id.mark_non_current_for_all_prs_and_stacks(&tx)
+                commit
+                    .id
+                    .mark_non_current_for_all_prs_and_stacks(&tx)
                     .await?;
             }
-            stack.delete(&tx)
-                .await
+            stack.delete(&tx).await
         })
-            .await
-            .context("deleting stack")?;
+        .await
+        .context("deleting stack")?;
 
         // The stack will be recreated naturally by the usual approved-PR logic.
         return Ok(true);
@@ -540,21 +564,31 @@ pub async fn process_stack_updates(
     let mut stack_poisoned = false;
     let mut next_idx = 1;
     for commit in &mut stack_commits {
-        let pr = db.with_transaction(async |tx| commit.id.get_pull_request(&tx).await)
+        let pr = db
+            .with_transaction(async |tx| commit.id.get_pull_request(&tx).await)
             .await
             .with_context(|| format!("getting PR for merge commit {}", commit.git_commit_id))?;
         // Update description (dummy implementation for now)
-        let description = db.with_transaction(async |tx| git::compute_merge_description(&tx, &pr, commit).await)
+        let description = db
+            .with_transaction(async |tx| git::compute_merge_description(&tx, &pr, commit).await)
             .await
-            .with_context(|| format!("computing merge description for merge of PR {} (commit {})", pr.pr_number, commit.git_commit_id))?;
+            .with_context(|| {
+                format!(
+                    "computing merge description for merge of PR {} (commit {})",
+                    pr.pr_number, commit.git_commit_id
+                )
+            })?;
         if let Err(e) =
             jj::update_commit_description(&repo.repo_shell, &commit.jj_change_id, &description)
-            .await
+                .await
         {
-            log::warn(&e, format_args!(
-                "Failed to update description for commit {}",
-                commit.jj_change_id
-            ));
+            log::warn(
+                &e,
+                format_args!(
+                    "Failed to update description for commit {}",
+                    commit.jj_change_id
+                ),
+            );
         }
 
         if commit.stack_sequence_order != Some(next_idx) {
@@ -568,10 +602,7 @@ pub async fn process_stack_updates(
         if pr.merge_status != MergeStatus::Pending {
             log::info(format_args!(
                 "{} PR {} no longer 'pending'; now {}; removing commit {} and rest of stack",
-                stack.id,
-                pr.pr_number,
-                pr.merge_status,
-                commit.git_commit_id,
+                stack.id, pr.pr_number, pr.merge_status, commit.git_commit_id,
             ));
             stack_poisoned = true;
         }
@@ -579,9 +610,7 @@ pub async fn process_stack_updates(
         if pr.review_status != ReviewStatus::Approved {
             log::info(format_args!(
                 "{} PR {} no longer marked as approved; removing commit {} and rest of stack",
-                stack.id,
-                pr.pr_number,
-                commit.git_commit_id,
+                stack.id, pr.pr_number, commit.git_commit_id,
             ));
             stack_poisoned = true;
         }
@@ -589,9 +618,7 @@ pub async fn process_stack_updates(
         if commit.ci_status == CiStatus::Skipped {
             log::info(format_args!(
                 "{} commit {} has been marked 'skipped' (due update to PR {}); removing rest of stack",
-                stack.id,
-                commit.git_commit_id,
-                pr.pr_number,
+                stack.id, commit.git_commit_id, pr.pr_number,
             ));
             stack_poisoned = true;
         }
@@ -603,14 +630,18 @@ pub async fn process_stack_updates(
         // which should never happen, but okay, let's check) or just an accounting change (update
         // description or sign, which may happen externally).
         if !stack_poisoned {
-            match jj::get_current_git_commit_for_change_id(&repo.repo_shell, &commit.jj_change_id).await {
+            match jj::get_current_git_commit_for_change_id(&repo.repo_shell, &commit.jj_change_id)
+                .await
+            {
                 Ok(current_git_id) => {
                     if current_git_id != commit.git_commit_id {
                         // Get tree hash and parents to check what changed
-                        let current_tree =
-                            git::resolve_ref(&repo.repo_shell, format!("{}^{{tree}}", current_git_id))
-                                .await
-                                .context("getting current tree hash")?;
+                        let current_tree = git::resolve_ref(
+                            &repo.repo_shell,
+                            format!("{}^{{tree}}", current_git_id),
+                        )
+                        .await
+                        .context("getting current tree hash")?;
                         let original_tree = git::resolve_ref(
                             &repo.repo_shell,
                             format!("{}^{{tree}}", commit.git_commit_id),
@@ -620,17 +651,22 @@ pub async fn process_stack_updates(
 
                         if current_tree == original_tree {
                             // Tree unchanged -- just update the commit ID in place (lol)
-                            db.with_transaction(async |tx| commit.replace_commit_id(&tx, current_git_id).await)
-                                .await
-                                .context("updating git commit ID")?;
+                            db.with_transaction(async |tx| {
+                                commit.replace_commit_id(&tx, current_git_id).await
+                            })
+                            .await
+                            .context("updating git commit ID")?;
 
                             // Check for lost GPG signature
-                            let was_signed = is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await?;
+                            let was_signed =
+                                is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id)
+                                    .await?;
                             if was_signed {
                                 let is_signed = jj::is_commit_gpg_signed(
                                     &repo.repo_shell,
                                     &commit.jj_change_id,
-                                ).await?;
+                                )
+                                .await?;
                                 if !is_signed {
                                     log::info(format_args!(
                                         "Throwing away GPG signature on change {} due to commit ID change",
@@ -651,10 +687,13 @@ pub async fn process_stack_updates(
                     }
                 }
                 Err(e) => {
-                    log::warn(&e, format_args!(
-                        "Failed to get current git commit for {}",
-                        commit.jj_change_id
-                    ));
+                    log::warn(
+                        &e,
+                        format_args!(
+                            "Failed to get current git commit for {}",
+                            commit.jj_change_id
+                        ),
+                    );
                 }
             }
         }
@@ -664,9 +703,11 @@ pub async fn process_stack_updates(
             // in theory some could succeed but later ones fail, leaving the stack in a bad state
             // where middle commits are missing in the database (though ofc not in the git tree).
             // We should loop through and do a single transaction here.
-            db.with_transaction(async |tx| commit.id.mark_non_current_for_all_prs_and_stacks(&tx).await)
-                .await
-                .context("marking commit as not current for poisoned stack")?;
+            db.with_transaction(async |tx| {
+                commit.id.mark_non_current_for_all_prs_and_stacks(&tx).await
+            })
+            .await
+            .context("marking commit as not current for poisoned stack")?;
         }
     }
 
@@ -694,11 +735,10 @@ async fn mark_commit_status(
             ci_status: Some(new_status),
             ..Default::default()
         };
-        commit
-            .apply_update(&tx, &updates)
-            .await
-            .map(|_| ())
-    }).await.context("running update query")
+        commit.apply_update(&tx, &updates).await.map(|_| ())
+    })
+    .await
+    .context("running update query")
 }
 
 async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
@@ -717,10 +757,10 @@ async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
 
     for repo in repositories {
         if let Err(e) = sync_repository_prs(db, &repo).await {
-            log::warn(&*e.into_boxed_dyn_error(), format_args!(
-                "Failed to sync PRs for repository {}",
-                repo.name
-            ));
+            log::warn(
+                &*e.into_boxed_dyn_error(),
+                format_args!("Failed to sync PRs for repository {}", repo.name),
+            );
         }
     }
 
@@ -737,7 +777,9 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         .context("failed git or jj fetch")?;
 
     // Get updated PRs from GitHub
-    let pr_infos = repo.repo_shell.list_updated_prs(last_synced)
+    let pr_infos = repo
+        .repo_shell
+        .list_updated_prs(last_synced)
         .await
         .context("failed sync of recent activity via 'gh' utility")?;
 
@@ -753,10 +795,13 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
             .await
             .with_context(|| format!("failed to refresh PR #{}", pr_info.number))
         {
-            log::warn(&*e.into_boxed_dyn_error(), format_args!(
-                "Warning: Failed to refresh PR #{} in repository {}",
-                pr_info.number, repo.name,
-            ));
+            log::warn(
+                &*e.into_boxed_dyn_error(),
+                format_args!(
+                    "Warning: Failed to refresh PR #{} in repository {}",
+                    pr_info.number, repo.name,
+                ),
+            );
         }
     }
 

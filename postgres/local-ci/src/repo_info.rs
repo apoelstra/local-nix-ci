@@ -2,7 +2,9 @@
 
 use anyhow::Context as _;
 use lcilib::{
-    db::models::{Ack, DbRepositoryId, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}, repo, Db
+    Db,
+    db::models::{Ack, CommitToTest, DbRepositoryId, PullRequest, Repository, ReviewStatus, Stack},
+    repo,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use xshell::{Shell, cmd};
@@ -28,7 +30,10 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to start database transaction")?;
 
-    println!("{}", ColorFormat::white(format_args!("Repository: {} ({})", repo.name, repo.path)));
+    println!(
+        "{}",
+        ColorFormat::white(format_args!("Repository: {} ({})", repo.name, repo.path))
+    );
     println!("Nixfile: {}", repo.nixfile_path);
     println!("Created: {}", repo.created_at);
     println!();
@@ -49,7 +54,8 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
     let mut all_commits = vec![];
     // ...all PR commits
     for pr in &all_prs {
-        let commits = pr.get_current_non_merge_commits(&tx)
+        let commits = pr
+            .get_current_non_merge_commits(&tx)
             .await
             .with_context(|| format!("getting commits for PR {}", pr.pr_number))?;
         all_commits.extend(commits);
@@ -57,7 +63,9 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
     // ...all single commits (TODO)
     // ...all commits from stacks
     for stack in &all_stacks {
-        let commits = stack.id.get_commits(&tx)
+        let commits = stack
+            .id
+            .get_commits(&tx)
             .await
             .with_context(|| format!("getting commits for stack {}", stack.id))?;
         all_commits.extend(commits);
@@ -83,7 +91,10 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
 
 /// Display PRs organized by status
 fn show_prs(prs: &[PullRequest]) {
-    println!("{}", ColorFormat::white(format_args!("\n=== Pull Requests by Status ===")));
+    println!(
+        "{}",
+        ColorFormat::white(format_args!("\n=== Pull Requests by Status ==="))
+    );
 
     // Ready to merge
     let ready_to_merge: Vec<_> = prs
@@ -149,14 +160,18 @@ fn show_prs(prs: &[PullRequest]) {
 
 /// Display stacks organized by repository
 async fn show_daemon_work(tx: &lcilib::Transaction<'_>) -> anyhow::Result<()> {
-    println!("{}", ColorFormat::white("\n=== Available Work for Daemon ===\n"));
+    println!(
+        "{}",
+        ColorFormat::white("\n=== Available Work for Daemon ===\n")
+    );
 
     // This was just copied straight out of `daemon/ci_cyle.rs` `find_next_commit_to_test`
     let standalone_commits = CommitToTest::get_standalone_approved_commits(&tx)
         .await
         .context("finding standalone approved commits")?;
-    let (high_priority_stacks, low_priority_stacks) =
-        crate::daemon::find_stacks(&tx).await.context("finding stacks")?;
+    let (high_priority_stacks, low_priority_stacks) = crate::daemon::find_stacks(&tx)
+        .await
+        .context("finding stacks")?;
     let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx)
         .await
         .context("finding PRs needing testing")?;
@@ -183,7 +198,9 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         repo: Repository,
     }
     impl PartialEq for RepoKey {
-        fn eq(&self, other: &Self) -> bool { self.id == other.id }
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id
+        }
     }
     impl Eq for RepoKey {}
     impl PartialOrd for RepoKey {
@@ -205,7 +222,9 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         prio: f64,
     }
     impl PartialEq for StackKey<'_> {
-        fn eq(&self, other: &Self) -> bool { self.stack.id == other.stack.id }
+        fn eq(&self, other: &Self) -> bool {
+            self.stack.id == other.stack.id
+        }
     }
     impl Eq for StackKey<'_> {}
     impl PartialOrd for StackKey<'_> {
@@ -215,7 +234,8 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
     }
     impl Ord for StackKey<'_> {
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.target.cmp(&other.target)
+            self.target
+                .cmp(&other.target)
                 .then(self.prio.total_cmp(&other.prio).reverse())
         }
     }
@@ -224,7 +244,10 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         println!("\nNo stacks.");
         return Ok(());
     }
-    println!("{}", ColorFormat::white(format_args!("\n=== Merge Stacks ===")));
+    println!(
+        "{}",
+        ColorFormat::white(format_args!("\n=== Merge Stacks ==="))
+    );
 
     // Group stacks by repository
     let mut stacks_by_repo: BTreeMap<RepoKey, BTreeSet<StackKey<'_>>> = BTreeMap::new();
@@ -236,21 +259,44 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
         let target = stack.target_branch.clone();
 
         // Then insert into a list ordered by name.
-        stacks_by_repo.entry(RepoKey {
-            name: repo.name.clone(),
-            id: repo.id,
-            repo,
-        }).or_default().insert(StackKey { stack, commits, target, prio });
+        stacks_by_repo
+            .entry(RepoKey {
+                name: repo.name.clone(),
+                id: repo.id,
+                repo,
+            })
+            .or_default()
+            .insert(StackKey {
+                stack,
+                commits,
+                target,
+                prio,
+            });
     }
 
     for (RepoKey { repo, .. }, repo_stacks) in stacks_by_repo {
         // Display repository heading
-        println!("{}", ColorFormat::white("\n***** ***** ***** ***** ***** ***** ***** *****"));
-        println!("{}", ColorFormat::white(format_args!("***** {:35} *****", repo.name)));
-        println!("{}", ColorFormat::white("***** ***** ***** ***** ***** ***** ***** *****"));
+        println!(
+            "{}",
+            ColorFormat::white("\n***** ***** ***** ***** ***** ***** ***** *****")
+        );
+        println!(
+            "{}",
+            ColorFormat::white(format_args!("***** {:35} *****", repo.name))
+        );
+        println!(
+            "{}",
+            ColorFormat::white("***** ***** ***** ***** ***** ***** ***** *****")
+        );
 
         let mut last_target = None;
-        for StackKey { stack, commits, target: _, prio } in repo_stacks {
+        for StackKey {
+            stack,
+            commits,
+            target: _,
+            prio,
+        } in repo_stacks
+        {
             let commit_ids: Vec<_> = commits
                 .iter()
                 .map(|commit| commit.git_commit_id.as_str())
@@ -265,21 +311,30 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
             last_target = Some(&stack.target_branch);
 
             print!("\n{}", color(format_args!("Stack {}: ", stack.id)));
-            println!("prio {:1.3}, target {}, {} commits", prio, stack.target_branch, commits.len());
+            println!(
+                "prio {:1.3}, target {}, {} commits",
+                prio,
+                stack.target_branch,
+                commits.len()
+            );
             for commit in &commits {
                 let pr = &commit.prs[0].0;
                 let acks = Ack::find_by_pull_request(tx, pr.id)
                     .await
                     .context("failed to find ACKs for PR")?;
 
-                println!("    PR {} {} ({}): {} (prio {}, by {}, ACKs: {})",
+                println!(
+                    "    PR {} {} ({}): {} (prio {}, by {}, ACKs: {})",
                     ColorFormat::white(pr.pr_number),
                     ColorFormat::white(commit.jj_change_id.prefix8()),
                     commit.git_commit_id.prefix8(),
                     commit.ci_status.with_color(),
                     pr.priority,
                     pr.author_login,
-                    acks.into_iter().map(|a| a.reviewer_name).collect::<Vec<_>>().join(", "),
+                    acks.into_iter()
+                        .map(|a| a.reviewer_name)
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 );
             }
             println!();

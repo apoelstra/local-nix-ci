@@ -136,7 +136,8 @@ impl DbStackId {
             clauses.len() + 1,
         );
 
-        tx.inner.query_one(&query, &params)
+        tx.inner
+            .query_one(&query, &params)
             .await
             .map(Some)
             .map_err(|error| DbQueryError {
@@ -228,17 +229,18 @@ impl DbStackId {
                 error,
             })?;
 
-        let mut commits_map: std::collections::HashMap<super::DbCommitId, CommitToTest> = std::collections::HashMap::new();
-        
+        let mut commits_map: std::collections::HashMap<super::DbCommitId, CommitToTest> =
+            std::collections::HashMap::new();
+
         for row in &rows {
             let commit_id = row.get("id");
-            
+
             let commit = commits_map.entry(commit_id).or_insert_with(|| {
                 let mut ret = CommitToTest::from_row(row);
                 ret.stack_sequence_order = Some(row.get("sequence_order"));
                 ret
             });
-            
+
             // Add PR association if it exists
             if let Ok(pr_id) = row.try_get::<_, super::DbPullRequestId>("pr_id") {
                 let commit_type = row.get("commit_type");
@@ -263,7 +265,7 @@ impl DbStackId {
                 commit.prs.push((pr, commit_type));
             }
         }
-        
+
         // Return commits in the original order
         let mut result = Vec::new();
         for row in &rows {
@@ -272,7 +274,7 @@ impl DbStackId {
                 result.push(commit);
             }
         }
-        
+
         Ok(result)
     }
 }
@@ -293,10 +295,7 @@ impl Stack {
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn find_by_id(
-        tx: &Transaction<'_>,
-        id: DbStackId,
-    ) -> Result<Self, DbQueryError> {
+    pub async fn find_by_id(tx: &Transaction<'_>, id: DbStackId) -> Result<Self, DbQueryError> {
         let row = tx
             .borrow()
             .inner
@@ -416,18 +415,16 @@ impl Stack {
     ///
     /// Returns an error if the database operation fails.
     pub async fn delete(self, tx: &Transaction<'_>) -> Result<(), DbQueryError> {
-        tx.inner.execute(
-            "DELETE FROM stacks WHERE id = $1",
-            &[&self.id],
-        )
-        .await
-        .map_err(|error| DbQueryError {
-            action: "delete_stack",
-            entity_type: EntityType::Stack,
-            raw_id: Some(self.id.bare_i32()),
-            clauses: vec![],
-            error,
-        })
-        .map(|_| ())
+        tx.inner
+            .execute("DELETE FROM stacks WHERE id = $1", &[&self.id])
+            .await
+            .map_err(|error| DbQueryError {
+                action: "delete_stack",
+                entity_type: EntityType::Stack,
+                raw_id: Some(self.id.bare_i32()),
+                clauses: vec![],
+                error,
+            })
+            .map(|_| ())
     }
 }

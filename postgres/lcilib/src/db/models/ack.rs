@@ -149,7 +149,8 @@ impl DbAckId {
             clauses.len() + 1,
         );
 
-        tx.inner.query_one(&query, &params)
+        tx.inner
+            .query_one(&query, &params)
             .await
             .map(Some)
             .map_err(|error| DbQueryError {
@@ -170,17 +171,17 @@ impl DbAckId {
         let query = "DELETE FROM acks WHERE id = $1";
         let params: &[&(dyn ToSql + Sync)] = &[&self];
 
-        let rows_affected = tx
-            .inner
-            .execute(query, params)
-            .await
-            .map_err(|error| DbQueryError {
-                action: "delete",
-                entity_type: EntityType::Ack,
-                raw_id: Some(self.bare_i32()),
-                clauses: vec![],
-                error,
-            })?;
+        let rows_affected =
+            tx.inner
+                .execute(query, params)
+                .await
+                .map_err(|error| DbQueryError {
+                    action: "delete",
+                    entity_type: EntityType::Ack,
+                    raw_id: Some(self.bare_i32()),
+                    clauses: vec![],
+                    error,
+                })?;
 
         log_action(
             tx,
@@ -219,7 +220,8 @@ impl Ack {
     pub async fn find_all_pending_on_approved_prs(
         tx: &Transaction<'_>,
     ) -> Result<Vec<Self>, DbQueryError> {
-        let rows = tx.inner
+        let rows = tx
+            .inner
             .query(
                 r#"
                 SELECT

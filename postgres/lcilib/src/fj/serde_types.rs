@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::git::CommitId;
 use crate::gh;
+use crate::git::CommitId;
 use chrono::{DateTime, Utc};
 
 /// Custom deserializer for the RFC 3339 timestamps that Forgejo returns
@@ -49,7 +49,10 @@ pub struct PullRequest {
     pub merged_at: Option<String>,
     #[serde(default)]
     pub merged: bool,
-    #[serde(rename = "updated_at", deserialize_with = "deserialize_forgejo_datetime")]
+    #[serde(
+        rename = "updated_at",
+        deserialize_with = "deserialize_forgejo_datetime"
+    )]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -88,12 +91,18 @@ impl PullRequest {
         reviews: Vec<Review>,
     ) -> gh::PrInfo {
         let closed = matches!(self.state.as_str(), "closed") && !self.merged;
-        let mergeable = if self.mergeable { "MERGEABLE".to_string() } else { String::new() };
+        let mergeable = if self.mergeable {
+            "MERGEABLE".to_string()
+        } else {
+            String::new()
+        };
         gh::PrInfo {
             title: self.title,
             body: self.body,
             number: self.number,
-            author: gh::serde_types::Author { login: self.user.login },
+            author: gh::serde_types::Author {
+                login: self.user.login,
+            },
             commits: commits
                 .into_iter()
                 .map(|oid| gh::serde_types::Commit { oid })
@@ -101,7 +110,9 @@ impl PullRequest {
             comments: comments
                 .into_iter()
                 .map(|c| gh::serde_types::Comment {
-                    author: gh::serde_types::Author { login: c.user.login },
+                    author: gh::serde_types::Author {
+                        login: c.user.login,
+                    },
                     body: c.body,
                     created_at: c.created_at,
                 })
@@ -109,7 +120,9 @@ impl PullRequest {
             reviews: reviews
                 .into_iter()
                 .map(|r| gh::serde_types::Review {
-                    author: gh::serde_types::Author { login: r.user.login },
+                    author: gh::serde_types::Author {
+                        login: r.user.login,
+                    },
                     body: r.body,
                     state: r.state,
                     submitted_at: r.submitted_at,
@@ -126,5 +139,7 @@ impl PullRequest {
         }
     }
 
-    pub fn updated_at(&self) -> DateTime<Utc> { self.updated_at }
+    pub fn updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
 }

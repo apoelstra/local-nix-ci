@@ -32,11 +32,21 @@ impl fmt::Display for Error {
             Self::ChangeId(_) => f.write_str("failed to parse change ID"),
             Self::ParseOutput(s) => write!(f, "failed to parse output {s}"),
             Self::HasConflicts(s) => write!(f, "newly created change {s} is conflicted"),
-            Self::AlreadyConflicted { conflicted_changes, parents } => {
-                write!(f, "conflicted merge(s) already exist for parents {}: {}", 
-                       parents.join(", "), 
-                       conflicted_changes.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "))
-            },
+            Self::AlreadyConflicted {
+                conflicted_changes,
+                parents,
+            } => {
+                write!(
+                    f,
+                    "conflicted merge(s) already exist for parents {}: {}",
+                    parents.join(", "),
+                    conflicted_changes
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
         }
     }
 }
@@ -73,21 +83,24 @@ async fn jj_new<P: AsRef<OsStr> + Sync>(
     parents: &[P],
     description: Option<&str>,
 ) -> Result<ChangeId, Error> {
-    let jj_new_output = shell.with_lock_blocking(|shell| {
-        let mut jj = jj(&shell).arg("new")
-            .arg("--color")
-            .arg("never")
-            .arg("--no-edit");
-        for p in parents {
-            jj = jj.arg("-r").arg(p);
-        }
-        if let Some(desc) = description{
-            jj = jj.arg("-m").arg(desc);
-        }
+    let jj_new_output = shell
+        .with_lock_blocking(|shell| {
+            let mut jj = jj(&shell)
+                .arg("new")
+                .arg("--color")
+                .arg("never")
+                .arg("--no-edit");
+            for p in parents {
+                jj = jj.arg("-r").arg(p);
+            }
+            if let Some(desc) = description {
+                jj = jj.arg("-m").arg(desc);
+            }
 
-        jj.read_stderr().map_err(Error::Shell)
-    }).await
-    .map_err(Error::ShellLock)??;
+            jj.read_stderr().map_err(Error::Shell)
+        })
+        .await
+        .map_err(Error::ShellLock)??;
 
     for line in jj_new_output.lines() {
         if line.contains("Created new commit") {
@@ -120,15 +133,21 @@ where
     R: AsRef<OsStr> + Send + Sync,
     S: AsRef<OsStr> + Send + Sync,
 {
-    let stdout = shell.with_lock_blocking(|shell| {
-        let mut cmd = jj(&shell).arg("log").arg("-r").arg(revset);
-        if let Some(template) = template {
-            cmd = cmd.arg("--color").arg("never").arg("--no-graph").arg("-T").arg(template);
-        }
-        cmd.read()
-            .map_err(Error::Shell)
-    }).await
-    .map_err(Error::ShellLock)??;
+    let stdout = shell
+        .with_lock_blocking(|shell| {
+            let mut cmd = jj(&shell).arg("log").arg("-r").arg(revset);
+            if let Some(template) = template {
+                cmd = cmd
+                    .arg("--color")
+                    .arg("never")
+                    .arg("--no-graph")
+                    .arg("-T")
+                    .arg(template);
+            }
+            cmd.read().map_err(Error::Shell)
+        })
+        .await
+        .map_err(Error::ShellLock)??;
 
     Ok(stdout.trim().to_string())
 }
@@ -142,7 +161,9 @@ pub async fn get_change_id_for_commit(
     shell: &RepoShell,
     git_commit_id: &CommitId,
 ) -> Result<ChangeId, Error> {
-    jj_log(shell, Some("change_id"), git_commit_id).await.and_then(|s| s.parse().map_err(Error::ChangeId))
+    jj_log(shell, Some("change_id"), git_commit_id)
+        .await
+        .and_then(|s| s.parse().map_err(Error::ChangeId))
 }
 
 /// Check if a commit is GPG signed using jj
@@ -151,11 +172,7 @@ pub async fn get_change_id_for_commit(
 ///
 /// Returns an error if the jj command fails or if we can't determine the repository path.
 pub async fn is_commit_gpg_signed(shell: &RepoShell, change_id: &ChangeId) -> Result<bool, Error> {
-    let output = jj_log(
-        shell,
-        Some("if(signature, \"true\", \"false\")"),
-        change_id,
-    ).await?;
+    let output = jj_log(shell, Some("if(signature, \"true\", \"false\")"), change_id).await?;
     Ok(output.trim() == "true")
 }
 
@@ -165,11 +182,7 @@ pub async fn is_commit_gpg_signed(shell: &RepoShell, change_id: &ChangeId) -> Re
 ///
 /// Returns an error if the jj command fails to execute.
 pub async fn has_conflicts(shell: &RepoShell, change_id: &ChangeId) -> Result<bool, Error> {
-    let output = jj_log(
-        shell,
-        Some("if(conflict,\"x\",\"\")"),
-        change_id,
-    ).await?;
+    let output = jj_log(shell, Some("if(conflict,\"x\",\"\")"), change_id).await?;
     Ok(!output.trim().is_empty())
 }
 
@@ -182,7 +195,10 @@ async fn check_existing_conflicted_merges(
     shell: &RepoShell,
     parents: &[&str],
 ) -> Result<Vec<ChangeId>, Error> {
-    assert!(!parents.is_empty(), "should not have a merge without parents");
+    assert!(
+        !parents.is_empty(),
+        "should not have a merge without parents"
+    );
 
     let revset = format!("({}+) & conflicts()", parents.join(")+ & ("));
     let output = jj_log(shell, Some("change_id.short() ++ \"\\n\""), &revset).await?;
@@ -198,7 +214,7 @@ async fn check_existing_conflicted_merges(
             eprintln!("[warning] failed to parse {} as change ID", line);
         }
     }
-    
+
     Ok(conflicted_changes)
 }
 
@@ -217,7 +233,7 @@ pub async fn create_merge_commit(
     // Check for existing conflicted merges
     let parents = [target_branch, pr_tip_commit];
     let conflicted_changes = check_existing_conflicted_merges(shell, &parents).await?;
-    
+
     if !conflicted_changes.is_empty() {
         return Err(Error::AlreadyConflicted {
             conflicted_changes,
@@ -263,20 +279,22 @@ pub async fn update_commit_description(
     change_id: &ChangeId,
     description: &str,
 ) -> Result<(), Error> {
-    shell.with_lock_blocking(|shell| {
-        jj(&shell)
-            .arg("describe")
-            .arg("--quiet")
-            .arg("-r")
-            .arg(change_id)
-            .arg("-m")
-            .arg(description)
-            .ignore_stdout()
-            .quiet()
-            .run()
-            .map_err(Error::Shell)
-    }).await
-    .map_err(Error::ShellLock)??;
+    shell
+        .with_lock_blocking(|shell| {
+            jj(&shell)
+                .arg("describe")
+                .arg("--quiet")
+                .arg("-r")
+                .arg(change_id)
+                .arg("-m")
+                .arg(description)
+                .ignore_stdout()
+                .quiet()
+                .run()
+                .map_err(Error::Shell)
+        })
+        .await
+        .map_err(Error::ShellLock)??;
 
     Ok(())
 }

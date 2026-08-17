@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 
+use super::Upstream;
 use crate::fj::{self, ForgejoRepoData};
 use crate::gh::{self, PrInfo};
 use crate::git::CommitId;
-use super::Upstream;
 
 #[derive(Debug)]
 pub enum RepoShellError {
@@ -31,10 +31,12 @@ impl fmt::Display for RepoShellError {
             Self::CreateShell(..) => f.write_str("failed to create xshell shell"),
             Self::GitRevParse(..) => f.write_str("failed to run 'git rev-parse --show-toplevel'"),
             Self::LoadForgejo(..) => f.write_str("failed to load Forgejo configuration"),
-            Self::GitRemote { remote, .. } => write!(f, "failed to run 'git remote get-url {remote}'"),
+            Self::GitRemote { remote, .. } => {
+                write!(f, "failed to run 'git remote get-url {remote}'")
+            }
             Self::UnknownUpstream { ref origin_url } => {
                 write!(f, "unknown upstream type for origin URL {origin_url}")
-            },
+            }
         }
     }
 }
@@ -85,14 +87,16 @@ pub struct RepoShell {
     upstream: Upstream,
     // The project name in the form 'owner/repo' that the remote API wants.
     project_name: String,
-
 }
 
 /// Attempts to parse a git remote URL and returns `(upstream, "owner/repo")` on success.
 ///
 /// Recognizes GitHub URLs (ssh and https) and Forgejo URLs on `gitea.bitcoin.ninja`. The
 /// returned project path uses `/` as its separator.
-fn parse_remote_url(shell: &xshell::Shell, url: &str) -> Result<(Upstream, String), RepoShellError> {
+fn parse_remote_url(
+    shell: &xshell::Shell,
+    url: &str,
+) -> Result<(Upstream, String), RepoShellError> {
     let candidates: &[(&str, bool)] = &[
         ("git@github.com:", true),
         ("https://github.com/", true),
@@ -125,7 +129,9 @@ fn parse_remote_url(shell: &xshell::Shell, url: &str) -> Result<(Upstream, Strin
         }
     }
 
-    Err(RepoShellError::UnknownUpstream { origin_url: url.to_owned() })
+    Err(RepoShellError::UnknownUpstream {
+        origin_url: url.to_owned(),
+    })
 }
 
 impl RepoShell {
@@ -157,7 +163,7 @@ impl RepoShell {
     }
 
     fn new_inner(shell: xshell::Shell, path: impl AsRef<Path>) -> Result<Self, RepoShellError> {
-        shell .change_dir(path);
+        shell.change_dir(path);
 
         let url = match xshell::cmd!(&shell, "git remote get-url origin").read() {
             Ok(url) => url,
@@ -165,7 +171,12 @@ impl RepoShell {
                 // Try 'upstream' rather than origin, then give up.
                 match xshell::cmd!(&shell, "git remote get-url upstream").read() {
                     Ok(url) => url,
-                    Err(_) => return Err(RepoShellError::GitRemote { err, remote: "origin" }),
+                    Err(_) => {
+                        return Err(RepoShellError::GitRemote {
+                            err,
+                            remote: "origin",
+                        });
+                    }
                 }
             }
         };
@@ -213,7 +224,7 @@ impl RepoShell {
     ///
     /// Panics if the closure panics, or if any other closure passed to
     /// this function with this lock has panicked.
-    /// 
+    ///
     pub async fn with_lock_blocking<T: Send + 'static>(
         &self,
         op: impl FnOnce(RepoShellLock<'_>) -> T + Send,
@@ -226,10 +237,13 @@ impl RepoShell {
         unsafe {
             let ((), mut res) = async_scoped::TokioScope::scope_and_collect(|scope| {
                 scope.spawn_blocking(|| {
-                    let lock = RepoShellLock { inner: arc.lock().unwrap() };
+                    let lock = RepoShellLock {
+                        inner: arc.lock().unwrap(),
+                    };
                     op(lock)
                 });
-            }).await;
+            })
+            .await;
             assert_eq!(res.len(), 1, "exactly one future spawned");
             res.pop().unwrap()
         }
@@ -308,7 +322,7 @@ impl RepoShell {
                 fj::post_pr_approval(project_name, data, pr_number, tip_commit_id, message)
                     .await
                     .map_err(ForgeError::Forgejo)
-            },
+            }
         }
     }
 }
@@ -316,7 +330,7 @@ impl RepoShell {
 /// An exclusive lock of a [`RepoShell`].
 #[derive(Debug)]
 pub struct RepoShellLock<'sh> {
-    inner: MutexGuard<'sh, xshell::Shell>
+    inner: MutexGuard<'sh, xshell::Shell>,
 }
 
 impl ops::Deref for RepoShellLock<'_> {

@@ -6,9 +6,7 @@ use core::fmt;
 use lcilib::{
     Db,
     db::CiStatus,
-    db::models::{
-        Commit, CommitToTest, CommitType, Repository, UpdateCommit,
-    },
+    db::models::{Commit, CommitToTest, CommitType, Repository, UpdateCommit},
     git::CommitId,
     repo::RepoShell,
 };
@@ -16,15 +14,15 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::{
     fs,
-    process::Command,
     io::{AsyncReadExt as _, BufReader},
+    process::Command,
     time,
 };
 use xshell::cmd;
 
-use crate::terminal::ColorFormat;
-use super::mark_commit_status;
 use super::log;
+use super::mark_commit_status;
+use crate::terminal::ColorFormat;
 
 pub async fn process_commit_ci(
     db: &mut Db,
@@ -35,15 +33,19 @@ pub async fn process_commit_ci(
     let repo_path = Path::new(&repo.path);
 
     // Find Cargo.lock files
-    let (has_cargo_toml, lockfiles) = match find_cargo_lockfiles(&repo.repo_shell, &commit.git_commit_id).await {
-        Ok(files) => files,
-        Err(e) => {
-            log::warn(&e, "Failed to find Cargo.lock files");
-            mark_commit_status(db, commit.id, CiStatus::Failed).await?;
-            return Ok(false);
-        }
-    };
-    assert!(!has_cargo_toml || !lockfiles.is_empty(), "should be an error check above");
+    let (has_cargo_toml, lockfiles) =
+        match find_cargo_lockfiles(&repo.repo_shell, &commit.git_commit_id).await {
+            Ok(files) => files,
+            Err(e) => {
+                log::warn(&e, "Failed to find Cargo.lock files");
+                mark_commit_status(db, commit.id, CiStatus::Failed).await?;
+                return Ok(false);
+            }
+        };
+    assert!(
+        !has_cargo_toml || !lockfiles.is_empty(),
+        "should be an error check above"
+    );
 
     // Build cargo nixes JSON
     let cargo_nixes = if has_cargo_toml {
@@ -57,15 +59,22 @@ pub async fn process_commit_ci(
     };
 
     // Get derivation path with cancellation checking
-    let derivation_path =
-        match get_or_create_derivation_with_cancellation(db, commit, commit_desc, repo, &cargo_nixes).await {
-            Ok(path) => path,
-            Err(e) => {
-                log::warn(&*e.into_boxed_dyn_error(), "Failed to get derivation");
-                mark_commit_status(db, commit.id, CiStatus::Failed).await?;
-                return Ok(false);
-            }
-        };
+    let derivation_path = match get_or_create_derivation_with_cancellation(
+        db,
+        commit,
+        commit_desc,
+        repo,
+        &cargo_nixes,
+    )
+    .await
+    {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn(&*e.into_boxed_dyn_error(), "Failed to get derivation");
+            mark_commit_status(db, commit.id, CiStatus::Failed).await?;
+            return Ok(false);
+        }
+    };
 
     // Build the derivation with cancellation checking
     match build_derivation_with_cancellation(db, commit, repo_path, &derivation_path).await {
@@ -106,7 +115,11 @@ async fn get_or_create_derivation_with_cancellation(
     }
 
     // Build commit JSON for nix-instantiate
-    let is_tip = if commit.prs.iter().all(|(_, commit_type)| *commit_type == CommitType::Normal) {
+    let is_tip = if commit
+        .prs
+        .iter()
+        .all(|(_, commit_type)| *commit_type == CommitType::Normal)
+    {
         "false"
     } else {
         "true"
@@ -117,7 +130,11 @@ async fn get_or_create_derivation_with_cancellation(
     );
 
     // Instantiate derivation with cancellation checking
-    log::info(format_args!("{} for {}", ColorFormat::pale_yellow("Instantiating derivation"), commit_desc));
+    log::info(format_args!(
+        "{} for {}",
+        ColorFormat::pale_yellow("Instantiating derivation"),
+        commit_desc
+    ));
 
     let mut child = Command::new("nix-instantiate")
         .args([
@@ -364,7 +381,10 @@ impl fmt::Display for LockFileError {
             Self::ShellLock(_) => f.write_str("panic while holding shell lock"),
             Self::GitLsTree(_) => f.write_str("failed to invoke git ls-tree"),
             Self::Find(_) => f.write_str("failed to invoke find"),
-            Self::NoLockFiles => write!(f, "found a top-level Cargo.toml but no lockfiles, and no lockfiles in .."),
+            Self::NoLockFiles => write!(
+                f,
+                "found a top-level Cargo.toml but no lockfiles, and no lockfiles in .."
+            ),
         }
     }
 }
@@ -377,7 +397,6 @@ impl std::error::Error for LockFileError {
             Self::Find(ref e) => Some(e),
             Self::NoLockFiles => None,
         }
-        
     }
 }
 
@@ -392,13 +411,15 @@ async fn find_cargo_lockfiles(
     repo_shell: &RepoShell,
     commit_id: &CommitId,
 ) -> Result<(bool, Vec<String>), LockFileError> {
-    let ls_tree_output = repo_shell.with_lock_blocking(|shell| {
-        cmd!(shell, "git ls-tree -r --name-only {commit_id}")
-            .quiet()
-            .output()
-            .map_err(LockFileError::GitLsTree)
-    }).await
-    .map_err(LockFileError::ShellLock)??;
+    let ls_tree_output = repo_shell
+        .with_lock_blocking(|shell| {
+            cmd!(shell, "git ls-tree -r --name-only {commit_id}")
+                .quiet()
+                .output()
+                .map_err(LockFileError::GitLsTree)
+        })
+        .await
+        .map_err(LockFileError::ShellLock)??;
 
     let stdout = String::from_utf8_lossy(&ls_tree_output.stdout);
     let mut lockfiles: Vec<String> = stdout
@@ -410,14 +431,19 @@ async fn find_cargo_lockfiles(
 
     // Only if there are no lockfiles in the commit, search ".." for other lockfiles.
     if has_cargo_toml && lockfiles.is_empty() {
-        let find_output = repo_shell.with_lock_blocking(|shell| {
-            let braces = "{}"; // lol idk how to escape {} in cmd
-            cmd!(shell, "find ../ -maxdepth 1 -name Cargo*.lock -exec realpath {braces} ;")
+        let find_output = repo_shell
+            .with_lock_blocking(|shell| {
+                let braces = "{}"; // lol idk how to escape {} in cmd
+                cmd!(
+                    shell,
+                    "find ../ -maxdepth 1 -name Cargo*.lock -exec realpath {braces} ;"
+                )
                 .quiet()
                 .output()
                 .map_err(LockFileError::Find)
-        }).await
-        .map_err(LockFileError::ShellLock)??;
+            })
+            .await
+            .map_err(LockFileError::ShellLock)??;
 
         let aux_stdout = String::from_utf8_lossy(&find_output.stdout);
         for line in aux_stdout.lines() {

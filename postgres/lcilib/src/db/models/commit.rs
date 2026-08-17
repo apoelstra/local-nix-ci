@@ -210,7 +210,8 @@ impl DbCommitId {
             clauses.len() + 1,
         );
 
-        tx.inner.query_one(&query, &params)
+        tx.inner
+            .query_one(&query, &params)
             .await
             .map(Some)
             .map_err(|error| {
@@ -276,18 +277,19 @@ impl DbCommitId {
         tx: &Transaction<'_>,
         new_commit_id: &CommitId,
     ) -> Result<(), DbQueryError> {
-        tx.inner.execute(
-            "UPDATE commits SET git_commit_id = $1 WHERE id = $2",
-            &[&new_commit_id, self],
-        )
-        .await
-        .map_err(|error| DbQueryError {
-            action: "replace_commit_id",
-            entity_type: EntityType::Commit,
-            raw_id: Some(self.bare_i32()),
-            clauses: vec![format!("git_commit_id = '{new_commit_id}'")],
-            error,
-        })?;
+        tx.inner
+            .execute(
+                "UPDATE commits SET git_commit_id = $1 WHERE id = $2",
+                &[&new_commit_id, self],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "replace_commit_id",
+                entity_type: EntityType::Commit,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![format!("git_commit_id = '{new_commit_id}'")],
+                error,
+            })?;
 
         log_action(
             tx,
@@ -315,32 +317,31 @@ impl DbCommitId {
         &self,
         tx: &Transaction<'_>,
     ) -> Result<(), DbQueryError> {
-        tx.inner.execute(
-            "UPDATE pr_commits SET is_current = false WHERE commit_id = $1",
-            &[self],
-        )
-        .await
-        .map_err(|error| DbQueryError {
-            action: "mark_commit_not_current",
-            entity_type: EntityType::Commit,
-            raw_id: Some(self.bare_i32()),
-            clauses: vec![],
-            error,
-        })?;
+        tx.inner
+            .execute(
+                "UPDATE pr_commits SET is_current = false WHERE commit_id = $1",
+                &[self],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "mark_commit_not_current",
+                entity_type: EntityType::Commit,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
 
         // There should only be at most one stack that any given commit lives in
-        tx.inner.execute(
-            "DELETE FROM stack_commits WHERE commit_id = $1",
-            &[self],
-        )
-        .await
-        .map_err(|error| DbQueryError {
-            action: "delete_commit_from_stack",
-            entity_type: EntityType::Commit,
-            raw_id: Some(self.bare_i32()),
-            clauses: vec![],
-            error,
-        })?;
+        tx.inner
+            .execute("DELETE FROM stack_commits WHERE commit_id = $1", &[self])
+            .await
+            .map_err(|error| DbQueryError {
+                action: "delete_commit_from_stack",
+                entity_type: EntityType::Commit,
+                raw_id: Some(self.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
 
         log_action(
             tx,
@@ -401,7 +402,6 @@ impl Commit {
         .await?;
         ret
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -501,4 +501,3 @@ impl CommitToTest {
         Ok(())
     }
 }
-

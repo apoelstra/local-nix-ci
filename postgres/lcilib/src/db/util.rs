@@ -76,27 +76,28 @@ pub(super) async fn log_action(
     description: Option<&str>,
     reason: Option<&str>,
 ) -> Result<u64, DbQueryError> {
-    tx.inner.execute(
-        r#"
+    tx.inner
+        .execute(
+            r#"
         INSERT INTO logs (entity_type, entity_id, action, description, reason)
         VALUES ($1, $2, $3, $4, $5)
         "#,
-        &[&entity_type, &entity_id, &action, &description, &reason],
-    )
-    .await
-    .map_err(|error| DbQueryError {
-        action: "insert log",
-        entity_type: EntityType::System,
-        raw_id: None,
-        clauses: vec![
-            "entity_type".into(),
-            "entity_id".into(),
-            "action".into(),
-            "description".into(),
-            "reason".into(),
-        ],
-        error,
-    })
+            &[&entity_type, &entity_id, &action, &description, &reason],
+        )
+        .await
+        .map_err(|error| DbQueryError {
+            action: "insert log",
+            entity_type: EntityType::System,
+            raw_id: None,
+            clauses: vec![
+                "entity_type".into(),
+                "entity_id".into(),
+                "action".into(),
+                "description".into(),
+                "reason".into(),
+            ],
+            error,
+        })
 }
 
 /// Determines whether a given table exists.
@@ -107,7 +108,10 @@ pub(super) async fn log_action(
 /// # Errors
 ///
 /// Errors if the `SELECT` query fails.
-pub(super) async fn table_exists(tx: &tokio_postgres::Transaction<'_>, table: &str) -> Result<bool, Error> {
+pub(super) async fn table_exists(
+    tx: &tokio_postgres::Transaction<'_>,
+    table: &str,
+) -> Result<bool, Error> {
     let row = tx
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
@@ -123,7 +127,9 @@ pub(super) async fn table_exists(tx: &tokio_postgres::Transaction<'_>, table: &s
 /// # Errors
 ///
 /// Errors if the SELECT query fails or if no version is found.
-pub(super) async fn get_schema_version(tx: impl Borrow<Transaction<'_>>) -> Result<i32, DbQueryError> {
+pub(super) async fn get_schema_version(
+    tx: impl Borrow<Transaction<'_>>,
+) -> Result<i32, DbQueryError> {
     let row = tx
         .borrow()
         .inner

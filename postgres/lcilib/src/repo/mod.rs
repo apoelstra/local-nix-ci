@@ -47,7 +47,6 @@ impl std::error::Error for RepoError {
             Self::Database(ref e) => Some(e),
             Self::UnknownProjectName => None,
         }
-        
     }
 }
 
@@ -57,8 +56,7 @@ impl std::error::Error for RepoError {
 /// can be determined from the origin/upstream remote URLs, or if the upstream type cannot
 /// be determined from the remote URLs.
 pub async fn current_repo(db: &mut Db) -> Result<Repository, RepoError> {
-    let sh = RepoShell::new_at_cwd()
-        .map_err(RepoError::CreateShell)?;
+    let sh = RepoShell::new_at_cwd().map_err(RepoError::CreateShell)?;
     // non UTF-8 characters in paths are annoying because ToSql wants to type them as BYTEA and I
     // need to investigate whether that will work with a VARCHAR column or what. Probably we should
     // just return an error here.
@@ -86,7 +84,9 @@ pub async fn current_repo(db: &mut Db) -> Result<Repository, RepoError> {
 
         // Create repository record
         let new_repo = NewRepository {
-            nixfile_path: format!("/home/apoelstra/code/local-nix-ci/main/{project_name}.check-pr.nix"), // Default, can be configured later
+            nixfile_path: format!(
+                "/home/apoelstra/code/local-nix-ci/main/{project_name}.check-pr.nix"
+            ), // Default, can be configured later
             name: project_name,
             path: repo_root.to_owned(),
         };

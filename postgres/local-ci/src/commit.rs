@@ -6,11 +6,12 @@ use lcilib::{
     db::{
         EntityType, Log,
         models::{
-            CiStatus, Commit, CommitType, NewCommit, PrCommit, PullRequest,
-            Repository, ReviewStatus, UpdateCommit,
+            CiStatus, Commit, CommitType, NewCommit, PrCommit, PullRequest, Repository,
+            ReviewStatus, UpdateCommit,
         },
     },
-    git, jj, repo::{self, RepoShell},
+    git, jj,
+    repo::{self, RepoShell},
 };
 use std::{
     env, fs,
@@ -18,7 +19,7 @@ use std::{
 };
 use xshell::{Shell, cmd};
 
-use crate::terminal::{Colorable as _, ColorFormat};
+use crate::terminal::{ColorFormat, Colorable as _};
 
 /// Show information about a commit
 ///
@@ -38,11 +39,11 @@ pub async fn info(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
         .await
         .with_context(|| {
-        format!(
-            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
-            commit_ref
-        )
-    })?;
+            format!(
+                "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+                commit_ref
+            )
+        })?;
 
     let tx = db
         .transaction()
@@ -125,11 +126,11 @@ pub async fn next(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
         .await
         .with_context(|| {
-        format!(
-            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
-            commit_ref
-        )
-    })?;
+            format!(
+                "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+                commit_ref
+            )
+        })?;
 
     // Look up the commit in the database
     let Some(commit) = Commit::find_by_git_id(&tx, repo.id, &commit_hash)
@@ -180,16 +181,20 @@ pub async fn review(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
         .await
         .with_context(|| {
-        format!(
-            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
-            commit_ref
-        )
-    })?;
+            format!(
+                "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+                commit_ref
+            )
+        })?;
 
     real_review(&repo, &commit_hash, db).await
 }
 
-pub async fn real_review(repo: &Repository, commit_hash: &git::CommitId, db: &mut Db) -> anyhow::Result<()> {
+pub async fn real_review(
+    repo: &Repository,
+    commit_hash: &git::CommitId,
+    db: &mut Db,
+) -> anyhow::Result<()> {
     let tx = db
         .transaction()
         .await
@@ -218,11 +223,17 @@ pub async fn real_review(repo: &Repository, commit_hash: &git::CommitId, db: &mu
         println!("{} Approve but skip CI", ColorFormat::white("1c)"));
         println!();
         println!("{} View existing review", ColorFormat::white("2a)"));
-        println!("{} Erase review (mark unreviewed)", ColorFormat::white("2b)"));
+        println!(
+            "{} Erase review (mark unreviewed)",
+            ColorFormat::white("2b)")
+        );
         println!();
         println!("{} View diff (50-line context)", ColorFormat::white("3a)"));
         println!("{} View diff (3-line context)", ColorFormat::white("3b)"));
-        println!("{} View diff (5000-line context)", ColorFormat::white("3c)"));
+        println!(
+            "{} View diff (5000-line context)",
+            ColorFormat::white("3c)")
+        );
         println!("{} View diff (stat)", ColorFormat::white("3d)"));
         println!();
         println!("{} Cancel", ColorFormat::white("4)"));
@@ -335,12 +346,14 @@ async fn show_commit_info(
     commit: &Commit,
 ) -> anyhow::Result<()> {
     // Get commit details from git
-    let commit_info =
-        git::get_commit_info(&repo.repo_shell, commit_hash)
-            .await
-            .context("failed to get commit info from git")?;
+    let commit_info = git::get_commit_info(&repo.repo_shell, commit_hash)
+        .await
+        .context("failed to get commit info from git")?;
 
-    println!("{}", ColorFormat::white(format_args!("{} {}", repo.name, commit_hash)));
+    println!(
+        "{}",
+        ColorFormat::white(format_args!("{} {}", repo.name, commit_hash))
+    );
     println!("Author: {}", commit_info.author);
     println!("Date: {}", commit_info.date);
     println!();
@@ -465,27 +478,37 @@ async fn show_diff(
     commit_hash: &git::CommitId,
     context: Option<u32>,
 ) -> anyhow::Result<()> {
-    shell.with_lock_blocking(|shell| {
-        if let Some(lines) = context {
-            let lines = lines.to_string();
-            cmd!(shell, "git show --color-moved-ws=ignore-all-space --unified={lines} {commit_hash}")
+    shell
+        .with_lock_blocking(|shell| {
+            if let Some(lines) = context {
+                let lines = lines.to_string();
+                cmd!(
+                    shell,
+                    "git show --color-moved-ws=ignore-all-space --unified={lines} {commit_hash}"
+                )
                 .run()
                 .context("failed to run git show")
-        } else {
-            cmd!(shell, "git show --color-moved-ws=ignore-all-space {commit_hash}")
+            } else {
+                cmd!(
+                    shell,
+                    "git show --color-moved-ws=ignore-all-space {commit_hash}"
+                )
                 .run()
                 .context("failed to run git show")
-        }
-    }).await?
+            }
+        })
+        .await?
 }
 
 /// Show git diff stat
 async fn show_diff_stat(shell: &RepoShell, commit_hash: &git::CommitId) -> anyhow::Result<()> {
-    shell.with_lock_blocking(|shell| {
-        cmd!(shell, "git show --stat {commit_hash}")
-            .run()
-            .context("failed to run git show --stat")
-    }).await?
+    shell
+        .with_lock_blocking(|shell| {
+            cmd!(shell, "git show --stat {commit_hash}")
+                .run()
+                .context("failed to run git show --stat")
+        })
+        .await?
 }
 
 /// Show logs for a commit
@@ -509,12 +532,14 @@ pub async fn log(
         .context("failed to get current repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref).await.with_context(|| {
-        format!(
-            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
-            commit_ref
-        )
-    })?;
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+                commit_ref
+            )
+        })?;
 
     let tx = db
         .transaction()
@@ -568,12 +593,14 @@ pub async fn reset(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to get current repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref).await.with_context(|| {
-        format!(
-            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
-            commit_ref
-        )
-    })?;
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+                commit_ref
+            )
+        })?;
 
     let tx = db
         .transaction()
@@ -605,7 +632,10 @@ pub async fn reset(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to reset commit")?;
 
-    println!("Reset commit {} - CI status set to unstarted, derivation cleared.", commit_hash.with_color());
+    println!(
+        "Reset commit {} - CI status set to unstarted, derivation cleared.",
+        commit_hash.with_color()
+    );
 
     tx.commit().await.context("failed to commit transaction")?;
 
@@ -626,17 +656,19 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to get current repository")?;
 
     // Resolve the reference to a commit hash
-    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref).await.with_context(|| {
-        format!(
-            "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
-            commit_ref
-        )
-    })?;
+    let commit_hash = git::resolve_ref(&repo.repo_shell, commit_ref)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to resolve reference '{}'. Try 'git fetch' if this is a remote reference.",
+                commit_ref
+            )
+        })?;
 
     // Get commit details from git
-    let commit_info =
-        git::get_commit_info(&repo.repo_shell, &commit_hash)
-            .await.context("failed to get commit info from git")?;
+    let commit_info = git::get_commit_info(&repo.repo_shell, &commit_hash)
+        .await
+        .context("failed to get commit info from git")?;
 
     // Start database transaction
     let tx = db
@@ -651,7 +683,10 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
     {
         println!("Commit {} already exists in database.", commit_hash);
         println!("Created: {}", existing_commit.created_at);
-        println!("Review Status: {}", existing_commit.review_status.with_color());
+        println!(
+            "Review Status: {}",
+            existing_commit.review_status.with_color()
+        );
         println!("CI Status: {}", existing_commit.ci_status.with_color());
     } else {
         // Create new commit record
@@ -670,7 +705,10 @@ pub async fn refresh(commit_ref: &str, db: &mut Db) -> anyhow::Result<()> {
             .await
             .context("failed to create commit record")?;
 
-        println!("Successfully added commit {} to database.", commit_hash.with_color());
+        println!(
+            "Successfully added commit {} to database.",
+            commit_hash.with_color()
+        );
         println!("Author: {}", commit_info.author);
         println!("Date: {}", commit_info.date);
         println!(
