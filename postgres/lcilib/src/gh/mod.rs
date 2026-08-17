@@ -77,24 +77,26 @@ pub(crate) async fn get_pr_info(shell: &RepoShell, pr_number: usize) -> Result<P
 /// Github returns JSON we cannot parse.
 pub(crate) async fn list_updated_prs(shell: &RepoShell, since: DateTime<Utc>) -> Result<Vec<PrInfo>, Error> {
     let since_str = since.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let search_query = format!("updated:>={}", since_str);
-    let cmd_str = format!(
-        "gh pr list --search '{}' --json {}",
-        search_query, PR_JSON_FIELDS
-    );
+    // Insanely, Github does not support boolean OR, nor does "updated" retrieve PRs that have
+    // been merged. So we have to do two separate queries.
+    let mut ret = vec![];
+    for search_query in [format!("updated:>={}", since_str), format!("merged:>={}", since_str)] {
+        let cmd_str = format!(
+            "gh pr list --search '{}' --json {}",
+            search_query, PR_JSON_FIELDS
+        );
 
-    let output = shell.with_lock_blocking(|shell| {
-        cmd!(
-            shell,
-            "gh pr list --search {search_query} --json {PR_JSON_FIELDS}"
-        )
-        .read()
-        .map_err(|e| Error::Shell(cmd_str.clone(), e))
-    }).await
-    .map_err(Error::ShellLock)??;
-            
+        let output = shell.with_lock_blocking(|shell| {
+            cmd!(shell, "gh pr list --search {search_query} --json {PR_JSON_FIELDS}")
+                .read()
+                .map_err(|e| Error::Shell(cmd_str.clone(), e))
+        }).await
+        .map_err(Error::ShellLock)??;
 
-    serde_json::from_str(&output).map_err(|e| Error::Json(output, e))
+        let prs: Vec<_> = serde_json::from_str(&output).map_err(|e| Error::Json(output, e))?;
+        ret.extend(prs);
+    }
+    Ok(ret)
 }
 
 /// Posts a comment on a GitHub PR using the `gh` CLI tool.
