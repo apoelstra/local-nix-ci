@@ -40,7 +40,7 @@ pub enum OperationError {
     /// Wrapped operation error with additional context
     Wrapped {
         /// The underlying operation error
-        inner: Box<OperationError>,
+        inner: Box<Self>,
         /// The operation that failed
         operation: String,
         /// The entity type being operated on

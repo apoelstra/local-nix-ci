@@ -116,16 +116,15 @@ fn parse_remote_url(
             }
             if *is_github {
                 return Ok((Upstream::Github, repo_part.to_string()));
-            } else {
-                let default_api_url = "https://gitea.bitcoin.ninja".to_owned();
-
-                return Ok((
-                    ForgejoRepoData::load_from_shell(shell, default_api_url)
-                        .map(Upstream::Forgejo)
-                        .map_err(RepoShellError::LoadForgejo)?,
-                    repo_part.to_string(),
-                ));
             }
+            let default_api_url = "https://gitea.bitcoin.ninja".to_owned();
+
+            return Ok((
+                ForgejoRepoData::load_from_shell(shell, default_api_url)
+                    .map(Upstream::Forgejo)
+                    .map_err(RepoShellError::LoadForgejo)?,
+                repo_part.to_string(),
+            ));
         }
     }
 
@@ -136,6 +135,12 @@ fn parse_remote_url(
 
 impl RepoShell {
     /// Constructs a new repo shell from the current directory.
+    ///
+    /// # Errors
+    ///
+    /// Errors if we cannot figure out the upstream type of the repository in the given path.
+    ///
+    /// Also errors if `std::env::current_dir` fails.
     #[inline]
     pub fn new_at_cwd() -> Result<Self, RepoShellError> {
         let shell = xshell::Shell::new().map_err(RepoShellError::CreateShell)?;
@@ -190,6 +195,7 @@ impl RepoShell {
     }
 
     /// Accessor for the repo root directory.
+    #[allow(clippy::missing_panics_doc)]
     pub fn repo_root(&self) -> std::path::PathBuf {
         let lock = self.inner.lock().unwrap();
         lock.current_dir()
@@ -224,7 +230,6 @@ impl RepoShell {
     ///
     /// Panics if the closure panics, or if any other closure passed to
     /// this function with this lock has panicked.
-    ///
     pub async fn with_lock_blocking<T: Send + 'static>(
         &self,
         op: impl FnOnce(RepoShellLock<'_>) -> T + Send,

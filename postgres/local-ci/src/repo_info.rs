@@ -166,18 +166,18 @@ async fn show_daemon_work(tx: &lcilib::Transaction<'_>) -> anyhow::Result<()> {
     );
 
     // This was just copied straight out of `daemon/ci_cyle.rs` `find_next_commit_to_test`
-    let standalone_commits = CommitToTest::get_standalone_approved_commits(&tx)
+    let standalone_commits = CommitToTest::get_standalone_approved_commits(tx)
         .await
         .context("finding standalone approved commits")?;
-    let (high_priority_stacks, low_priority_stacks) = crate::daemon::find_stacks(&tx)
+    let (high_priority_stacks, low_priority_stacks) = crate::daemon::find_stacks(tx)
         .await
         .context("finding stacks")?;
-    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx)
+    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(tx)
         .await
         .context("finding PRs needing testing")?;
 
     crate::daemon::print_work_summary(
-        &tx,
+        tx,
         &standalone_commits,
         &high_priority_stacks,
         &prs_needing_testing,
@@ -191,7 +191,7 @@ async fn show_daemon_work(tx: &lcilib::Transaction<'_>) -> anyhow::Result<()> {
 
 /// Display stacks organized by repository
 async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::Result<()> {
-    /// Key type to allow using repositories as a BTreeMap key sorted by name.
+    /// Key type to allow using repositories as a [`BTreeMap`] key sorted by name.
     struct RepoKey {
         name: String,
         id: DbRepositoryId,

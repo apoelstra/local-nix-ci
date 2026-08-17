@@ -66,24 +66,24 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
                 .await
                 .context("quering gpg-signed status of commit")?
             {
-                if let Some((pr, _)) = commit.prs.first() {
-                    if crate::ask_yes_no(format_args!(
+                if let Some((pr, _)) = commit.prs.first()
+                    && crate::ask_yes_no(format_args!(
                         "Merge for {} PR {} is not signed. Invoke check-and-sign.sh on it?",
                         ColorFormat::white(&repo.name),
                         ColorFormat::white(pr.pr_number),
-                    )) {
-                        let pr_number = pr.pr_number.to_string();
-                        let change_id = &commit.jj_change_id;
+                    ))
+                {
+                    let pr_number = pr.pr_number.to_string();
+                    let change_id = &commit.jj_change_id;
 
-                        repo.repo_shell
-                            .with_lock_blocking(|shell| {
-                                cmd!(shell, "check-and-sign.sh {pr_number} {change_id}")
-                                    .run()
-                                    .context("calling check-and-sign.sh")
-                            })
-                            .await??;
-                        did_something = true;
-                    }
+                    repo.repo_shell
+                        .with_lock_blocking(|shell| {
+                            cmd!(shell, "check-and-sign.sh {pr_number} {change_id}")
+                                .run()
+                                .context("calling check-and-sign.sh")
+                        })
+                        .await??;
+                    did_something = true;
                 }
                 all_signed = false;
             }
@@ -102,27 +102,27 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
         }
     }
 
-    if let (Some(tip_commit_id), true) = (tip_commit_id, all_signed) {
-        if crate::ask_yes_no(format_args!(
+    if let (Some(tip_commit_id), true) = (tip_commit_id, all_signed)
+        && crate::ask_yes_no(format_args!(
             "All {} commits in stack {stack_id} (repo {}, target branch {}) are signed.\n\
              Do you want to attempt to push them?",
             ColorFormat::white(commits.len()),
             ColorFormat::white(&repo.name),
             ColorFormat::white(&stack.target_branch),
-        )) {
-            let target_branch = &stack.target_branch;
-            repo.repo_shell
-                .with_lock_blocking(|shell| {
-                    cmd!(shell, "git push origin {tip_commit_id}:{target_branch}")
-                        .run()
-                        .context("calling git-push")
-                })
-                .await??;
+        ))
+    {
+        let target_branch = &stack.target_branch;
+        repo.repo_shell
+            .with_lock_blocking(|shell| {
+                cmd!(shell, "git push origin {tip_commit_id}:{target_branch}")
+                    .run()
+                    .context("calling git-push")
+            })
+            .await??;
 
-            // After `git push`ing, Github needs a moment to update the pull requests.
-            println!("Sleeping 5 seconds before refreshing pull requests.");
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        }
+        // After `git push`ing, Github needs a moment to update the pull requests.
+        println!("Sleeping 5 seconds before refreshing pull requests.");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
 
     let mut to_refresh = HashSet::new();

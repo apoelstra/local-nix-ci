@@ -16,13 +16,13 @@ pub async fn calculate_stack_priority(
     let mut total_priority = 0.0;
 
     let mut position = 0;
-    for commit in commits.iter() {
+    for commit in commits {
         let commit_priority = calculate_commit_priority(commit, tx)
             .await
             .context("calculating commit priority")?;
 
         // Apply position weighting: (1/2)^position
-        let weight = 0.5_f64.powi(i32::try_from(position)?);
+        let weight = 0.5_f64.powi(position);
         total_priority += commit_priority * weight;
 
         // Only increment "position" for untested commits. Otherwise we get perverse stuff

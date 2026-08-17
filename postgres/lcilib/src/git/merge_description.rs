@@ -48,9 +48,9 @@ impl std::error::Error for MergeDescriptionError {
 }
 
 /// Extract ACK text and commit ID from a GitHub comment/review body
-pub fn extract_ack_from_text(
+pub fn extract_ack_from_text<B: core::hash::BuildHasher>(
     text: &str,
-    commit_map: &HashMap<String, DbCommitId>,
+    commit_map: &HashMap<String, DbCommitId, B>,
 ) -> Option<(String, DbCommitId)> {
     for line in text.lines() {
         // Skip quoted lines (starting with > after trimming)
@@ -179,17 +179,15 @@ pub async fn compute_merge_description(
         // any non-tip ACKs or other cruft from the ACK messages.
         let commit_map = {
             let mut map = HashMap::new();
-            commits.last().map(|commit| {
-                commit
-                    .git_commit_id
-                    .populate_prefix_map(&mut map, commit.id)
-            });
+            if let Some(commit) = commits.last() {
+                commit.git_commit_id.populate_prefix_map(&mut map, commit.id);
+            }
             map
         };
 
         message.push_str("\n\nACKs for top commit:\n");
         for (name, ack_msg) in &acks {
-            if let Some((ack_msg, _)) = extract_ack_from_text(&ack_msg, &commit_map) {
+            if let Some((ack_msg, _)) = extract_ack_from_text(ack_msg, &commit_map) {
                 message.push_str(&format!("  {}:\n    {}\n", name, ack_msg));
             }
         }

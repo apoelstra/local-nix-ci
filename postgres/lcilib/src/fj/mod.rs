@@ -273,11 +273,12 @@ pub(crate) async fn post_pr_comment(
     pr_number: i32,
     comment: &str,
 ) -> Result<(), Error> {
-    let endpoint = format!("repos/{}/issues/{}/comments", project_name, pr_number);
     #[derive(serde::Serialize)]
     struct Body<'a> {
         body: &'a str,
     }
+
+    let endpoint = format!("repos/{}/issues/{}/comments", project_name, pr_number);
     repo_data.api_post(endpoint, &Body { body: comment }).await
 }
 
@@ -295,13 +296,14 @@ pub(crate) async fn post_pr_approval(
     commit_id: &CommitId,
     message: &str,
 ) -> Result<(), Error> {
-    let endpoint = format!("repos/{}/pulls/{}/reviews", project_name, pr_number);
     #[derive(serde::Serialize)]
     struct Body<'a> {
         body: &'a str,
         commit_id: String,
         event: &'a str,
     }
+
+    let endpoint = format!("repos/{}/pulls/{}/reviews", project_name, pr_number);
     repo_data
         .api_post(
             endpoint,

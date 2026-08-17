@@ -172,7 +172,7 @@ async fn check_pending_acks(
                     counts.approved,
                     counts.ready,
                     ColorFormat::dull_red(format_args!("{} failed", counts.failed)),
-                ))
+                ));
             });
             continue;
         } else if counts.approved != counts.total {
@@ -181,7 +181,7 @@ async fn check_pending_acks(
                 log::info(format_args!(
                     "{} PR #{} approved ({} commits; {} approved, {} passed).",
                     repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
-                ))
+                ));
             });
             continue;
         } else if counts.untested > 0 {
@@ -190,7 +190,7 @@ async fn check_pending_acks(
                 log::info(format_args!(
                     "{} PR #{} fully approved ({} commits, {} untested).",
                     repo.name, pr.pr_number, counts.total, counts.untested,
-                ))
+                ));
             });
             continue;
         }
@@ -562,8 +562,7 @@ pub async fn process_stack_updates(db: &mut Db, stack: Stack) -> anyhow::Result<
     // Update descriptions and check for commit changes
     let mut work_done = false;
     let mut stack_poisoned = false;
-    let mut next_idx = 1;
-    for commit in &mut stack_commits {
+    for (next_idx, commit) in (1..).zip(stack_commits.iter_mut()) {
         let pr = db
             .with_transaction(async |tx| commit.id.get_pull_request(&tx).await)
             .await
@@ -597,7 +596,6 @@ pub async fn process_stack_updates(db: &mut Db, stack: Stack) -> anyhow::Result<
             // removal that went bad).
             stack_poisoned = true;
         }
-        next_idx += 1;
 
         if pr.merge_status != MergeStatus::Pending {
             log::info(format_args!(

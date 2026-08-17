@@ -8,6 +8,7 @@ unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzing)', 'cfg(trick_rust
 
 [workspace.lints.clippy]
 # Exclude lints we don't think are valuable.
+if_not_else = "allow" # Too many false positives
 needless_question_mark = "allow" # https://github.com/rust-bitcoin/rust-bitcoin/pull/2134
 manual_range_contains = "allow" # More readable than clippy's format.
 match_bool = "allow" # Adds extra indentation and LOC.
@@ -36,7 +37,7 @@ copy_iterator = "warn"
 default_trait_access = "warn"
 doc_link_with_quotes = "warn"
 doc_markdown = "warn"
-empty_enum = "warn"
+empty_enums = "warn"
 enum_glob_use = "warn"
 expl_impl_clone_on_copy = "warn"
 explicit_deref_methods = "warn"
@@ -46,8 +47,6 @@ filter_map_next = "warn"
 flat_map_option = "warn"
 float_cmp = "warn"
 fn_params_excessive_bools = "warn"
-from_iter_instead_of_collect = "warn"
-if_not_else = "warn"
 ignored_unit_patterns = "warn"
 implicit_clone = "warn"
 implicit_hasher = "warn"
@@ -119,7 +118,7 @@ struct_excessive_bools = "warn"
 too_many_lines = "warn"
 transmute_ptr_to_ptr = "warn"
 trivially_copy_pass_by_ref = "warn"
-unchecked_duration_subtraction = "warn"
+unchecked_time_subtraction = "warn"
 unicode_not_nfc = "warn"
 unnecessary_box_returns = "warn"
 unnecessary_join = "warn"

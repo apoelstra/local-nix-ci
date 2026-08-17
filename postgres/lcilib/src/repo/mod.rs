@@ -50,11 +50,19 @@ impl std::error::Error for RepoError {
     }
 }
 
+/// Constructs a [`Repository`] by looking up the repo at the CWD in the database, creating one
+/// if it doesn't exist.
+///
 /// # Errors
 ///
 /// Returns an error if the git command to get the repository root fails, if no project name
 /// can be determined from the origin/upstream remote URLs, or if the upstream type cannot
 /// be determined from the remote URLs.
+///
+/// # Panics
+///
+/// Panics if the path to the repo root has any non-UTF8 characters. (This is a bug but it's
+/// a little annoying to fix. Please file an issue if it affects you.)
 pub async fn current_repo(db: &mut Db) -> Result<Repository, RepoError> {
     let sh = RepoShell::new_at_cwd().map_err(RepoError::CreateShell)?;
     // non UTF-8 characters in paths are annoying because ToSql wants to type them as BYTEA and I

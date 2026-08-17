@@ -42,7 +42,7 @@ impl fmt::Display for Error {
                     parents.join(", "),
                     conflicted_changes
                         .iter()
-                        .map(|c| c.to_string())
+                        .map(ChangeId::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -237,7 +237,7 @@ pub async fn create_merge_commit(
     if !conflicted_changes.is_empty() {
         return Err(Error::AlreadyConflicted {
             conflicted_changes,
-            parents: parents.iter().map(|s| s.to_string()).collect(),
+            parents: parents.iter().map(<&str>::to_string).collect(),
         });
     }
 

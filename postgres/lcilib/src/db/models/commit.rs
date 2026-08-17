@@ -437,13 +437,13 @@ impl CommitToTest {
     /// Gets all approved commits that are untested and have no PR associations.
     ///
     /// Returns commits that are:
-    /// - Approved (ReviewStatus::Approved)
-    /// - Untested (CiStatus::Unstarted)
-    /// - Should run CI (should_run_ci = true)
-    /// - Have no entries in the pr_commits table
+    /// - Approved ([`ReviewStatus::Approved`])
+    /// - Untested ([`CiStatus::Unstarted`])
+    /// - Should run CI (`should_run_ci` = true)
+    /// - Have no entries in the `pr_commits` table
     ///
     /// Note: If a commit was previously associated with a PR, it will still have an entry
-    /// in the pr_commits table with is_current = false, and will therefore be excluded
+    /// in the `pr_commits` table with `is_current` = false, and will therefore be excluded
     /// from this query. Currently the CI system provides no way for users to force a
     /// test of such commits. We will figure this out later once there is a need for
     /// this functionality.

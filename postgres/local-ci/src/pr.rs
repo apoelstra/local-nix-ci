@@ -712,7 +712,7 @@ async fn create_or_overwrite_ack(
     let new_ack = NewAck {
         pull_request_id,
         commit_id,
-        reviewer_name: reviewer_name.to_string(),
+        reviewer_name,
         message: message.to_string(),
         status: AckStatus::Pending,
     };
