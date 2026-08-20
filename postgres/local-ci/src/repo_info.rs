@@ -190,6 +190,7 @@ async fn show_daemon_work(tx: &lcilib::Transaction<'_>) -> anyhow::Result<()> {
 }
 
 /// Display stacks organized by repository
+#[allow(clippy::mutable_key_type)]  // RepoKey has a `repo` field with interior mutability, fine
 async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::Result<()> {
     /// Key type to allow using repositories as a [`BTreeMap`] key sorted by name.
     struct RepoKey {
