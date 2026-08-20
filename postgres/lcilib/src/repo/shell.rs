@@ -10,6 +10,7 @@ use super::Upstream;
 use crate::fj::{self, ForgejoRepoData};
 use crate::gh::{self, PrInfo};
 use crate::git::CommitId;
+use crate::PrNumber;
 
 #[derive(Debug)]
 pub enum RepoShellError {
@@ -260,7 +261,7 @@ impl RepoShell {
     ///
     /// Returns an error if the PR is not found, if the `gh pr view` invocation fails, or if
     /// Github returns JSON we cannot parse.
-    pub async fn get_pr_info(&self, pr_number: usize) -> Result<PrInfo, ForgeError> {
+    pub async fn get_pr_info(&self, pr_number: PrNumber) -> Result<PrInfo, ForgeError> {
         let project_name = &self.project_name;
         match self.upstream {
             Upstream::Github => gh::get_pr_info(self, pr_number)
@@ -295,7 +296,7 @@ impl RepoShell {
     /// # Errors
     ///
     /// Returns an error if the `gh pr comment` invocation fails.
-    pub async fn post_pr_comment(&self, pr_number: i32, comment: &str) -> Result<(), ForgeError> {
+    pub async fn post_pr_comment(&self, pr_number: PrNumber, comment: &str) -> Result<(), ForgeError> {
         let pname = &self.project_name;
         match self.upstream {
             Upstream::Github => gh::post_pr_comment(self, pr_number, comment)
@@ -314,7 +315,7 @@ impl RepoShell {
     /// Returns an error if the `gh pr review` invocation fails.
     pub async fn post_pr_approval(
         &self,
-        pr_number: i32,
+        pr_number: PrNumber,
         tip_commit_id: &CommitId,
         message: &str,
     ) -> Result<(), ForgeError> {

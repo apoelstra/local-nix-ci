@@ -31,7 +31,7 @@ pub struct BranchInfo {
 
 #[derive(serde::Deserialize, Debug)]
 pub struct PullRequest {
-    pub number: i32,
+    pub number: crate::PrNumber,
     #[serde(default)]
     pub title: String,
     #[serde(default)]

@@ -4,6 +4,7 @@ use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use lcilib::{
     Db,
+    PrNumber,
     db::{
         EntityType, Log,
         models::{
@@ -31,7 +32,7 @@ use crate::terminal::{ColorFormat, Colorable as _};
 /// - Failed to get current repository information
 /// - Database transaction fails
 /// - Repository or PR lookup fails
-pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
+pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     let repo = repo::current_repo(db)
         .await
         .context("failed to get current repository")?;
@@ -42,7 +43,7 @@ pub async fn info(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to start database transaction")?;
 
     // Look up the PR in the database
-    if let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
+    if let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number)
         .await
         .context("failed to query pull request")?
     {
@@ -180,7 +181,7 @@ async fn determine_next_action_for_pr(
 /// - Database transaction fails
 /// - Repository or PR lookup fails
 /// - No next action available
-pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
+pub async fn next(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     let repo = repo::current_repo(db)
         .await
         .context("failed to get current repository")?;
@@ -191,7 +192,7 @@ pub async fn next(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to start database transaction")?;
 
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
+    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number)
         .await
         .context("failed to query pull request")?
     else {
@@ -448,7 +449,7 @@ fn determine_merge_status_from_github(pr_info: &gh::PrInfo) -> MergeStatus {
 /// - Repository or PR lookup fails
 /// - Editor invocation fails
 #[allow(clippy::too_many_lines)] // yeah half these are just printlns
-pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
+pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     let repo = repo::current_repo(db)
         .await
         .context("failed to get current repository")?;
@@ -459,7 +460,7 @@ pub async fn review(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to start database transaction")?;
 
     // Look up the PR in the database
-    let Some(mut pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
+    let Some(mut pr) = PullRequest::find_by_number(&tx, repo.id, pr_number)
         .await
         .context("failed to query pull request")?
     else {
@@ -796,7 +797,7 @@ async fn erase_ack(
 /// - Repository or PR lookup fails
 /// - Date parsing fails
 pub async fn log(
-    pr_number: usize,
+    pr_number: PrNumber,
     since: Option<&str>,
     until: Option<&str>,
     db: &mut Db,
@@ -811,7 +812,7 @@ pub async fn log(
         .context("failed to start database transaction")?;
 
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
+    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number)
         .await
         .context("failed to query pull request")?
     else {
@@ -858,7 +859,7 @@ pub async fn log(
 /// - Database transaction fails
 /// - Repository or PR lookup fails
 /// - User input fails
-pub async fn reset(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
+pub async fn reset(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     let repo = repo::current_repo(db)
         .await
         .context("failed to get current repository")?;
@@ -869,7 +870,7 @@ pub async fn reset(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to start database transaction")?;
 
     // Look up the PR in the database
-    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number.try_into()?)
+    let Some(pr) = PullRequest::find_by_number(&tx, repo.id, pr_number)
         .await
         .context("failed to query pull request")?
     else {
@@ -986,7 +987,7 @@ pub async fn reset(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
 /// - Git fetch of head commit fails
 /// - Database transaction or operations fail
 /// - PR has no commits
-pub async fn refresh_from_cli(pr_number: usize, db: &mut Db) -> anyhow::Result<()> {
+pub async fn refresh_from_cli(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     let repo = repo::current_repo(db)
         .await
         .context("failed to get current repository")?;

@@ -11,6 +11,7 @@ use super::models::{
 use super::util::{self, EntityType};
 use crate::db::{DbQueryError, Transaction};
 use crate::git::CommitId;
+use crate::PrNumber;
 
 /// Error type for database operations with contextual information
 #[derive(Debug)]
@@ -500,7 +501,7 @@ impl PullRequest {
     pub async fn find_by_number(
         tx: &Transaction<'_>,
         repository_id: DbRepositoryId,
-        pr_number: i32,
+        pr_number: PrNumber,
     ) -> Result<Option<Self>, OperationError> {
         let rows = tx
             .inner

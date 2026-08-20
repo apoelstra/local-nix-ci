@@ -20,7 +20,7 @@ pub use commit::{CiStatus, Commit, CommitToTest, DbCommitId, NewCommit, UpdateCo
 pub use log::Log;
 pub use log_entry::{DbLogEntryId, LogEntry};
 pub use pr_commit::{DbPrCommitId, PrCommit};
-pub use pull_request::{DbPullRequestId, NewPullRequest, PullRequest, UpdatePullRequest};
+pub use pull_request::{DbPullRequestId, NewPullRequest, PrNumber, PullRequest, UpdatePullRequest};
 pub use repository::{DbRepositoryId, NewRepository, Repository, RepositoryError};
 pub use stack::{DbStackId, NewStack, Stack, StackCommit, UpdateStack};
 pub use user_priority_offset::{DbUserPriorityOffsetId, NewUserPriorityOffset, UserPriorityOffset};

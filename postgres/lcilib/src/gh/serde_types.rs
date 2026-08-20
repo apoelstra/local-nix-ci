@@ -43,7 +43,7 @@ pub struct PrInfo {
     pub title: String,
     #[serde(default)]
     pub body: String,
-    pub number: i32,
+    pub number: crate::PrNumber,
     pub author: Author,
     #[serde(default)]
     pub commits: Vec<Commit>,

@@ -3,6 +3,7 @@
 mod lexer;
 
 use core::fmt;
+use lcilib::PrNumber;
 use lcilib::db::{EntityType, models::DbStackId};
 use lexer::{ArgToken, lexed_args};
 use std::process;
@@ -56,7 +57,7 @@ impl fmt::Display for Action {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Pr(usize),
+    Pr(PrNumber),
     Commit(String),
     Stack(StackId),
     None,

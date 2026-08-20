@@ -9,7 +9,7 @@ use xshell::cmd;
 
 use self::serde_types::{Comment, CommitEntry, PullRequest, Review};
 use crate::git::CommitId;
-use crate::{gh, repo};
+use crate::{gh, repo, PrNumber};
 
 const USER_AGENT: &str = "curl/8.5.0";
 const LIST_PAGE_SIZE: usize = 50;
@@ -142,7 +142,7 @@ pub enum Error {
     JsonSerialize(serde_json::Error),
     Repo(repo::RepoError),
     NotForgejoRemote,
-    PrNotFound(usize),
+    PrNotFound(PrNumber),
 }
 
 impl fmt::Display for Error {
@@ -189,7 +189,7 @@ impl std::error::Error for Error {
 pub(crate) async fn get_pr_info(
     project_name: &str,
     repo_data: &ForgejoRepoData,
-    pr_number: usize,
+    pr_number: PrNumber,
 ) -> Result<gh::PrInfo, Error> {
     let pr_endpoint = format!("repos/{}/pulls/{}", project_name, pr_number);
     let pr: PullRequest = match repo_data.api_get(pr_endpoint).await {
@@ -245,7 +245,7 @@ pub(crate) async fn list_updated_prs(
                 hit_old = true;
                 continue;
             }
-            match get_pr_info(project_name, repo_data, pr.number as usize).await {
+            match get_pr_info(project_name, repo_data, pr.number).await {
                 Ok(info) => out.push(info),
                 Err(e) => saved_err = Some(e),
             }
@@ -270,7 +270,7 @@ pub(crate) async fn list_updated_prs(
 pub(crate) async fn post_pr_comment(
     project_name: &str,
     repo_data: &ForgejoRepoData,
-    pr_number: i32,
+    pr_number: PrNumber,
     comment: &str,
 ) -> Result<(), Error> {
     #[derive(serde::Serialize)]
@@ -292,7 +292,7 @@ pub(crate) async fn post_pr_comment(
 pub(crate) async fn post_pr_approval(
     project_name: &str,
     repo_data: &ForgejoRepoData,
-    pr_number: i32,
+    pr_number: PrNumber,
     commit_id: &CommitId,
     message: &str,
 ) -> Result<(), Error> {

@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use core::borrow::Borrow;
-use core::fmt;
+use core::{fmt, str};
 use postgres_types::{FromSql, ToSql};
 
 use super::{CommitCounts, CommitToTest, DbCommitId, DbRepositoryId, MergeStatus, ReviewStatus};
@@ -25,12 +25,55 @@ impl fmt::Display for DbPullRequestId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
+#[postgres(transparent)]
+pub struct PrNumber(i32);
+
+impl str::FromStr for PrNumber {
+    type Err = core::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+       let n = s.parse::<i32>()?;
+       if n >= 0 {
+           Ok(Self(n))
+       } else {
+           // guaranteed to fail, but I can't directly construct a ParseIntError other than
+           // by doing a hack like this.
+           s.parse::<u8>().map(i32::from).map(Self)
+       }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PrNumber {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>
+    {
+        use serde::de::Error as _;
+        u32::deserialize(d)?
+            .try_into()
+            .map_err(D::Error::custom)
+            .map(Self)
+    }
+}
+
+impl fmt::Display for PrNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Because it's a massive PITA to implement FromSql manually we don't restrict constructing
+        // via FromSQL. FIXME once we do this, we can change this check to an assertion.
+        if self.0 >= 0 {
+            write!(f, "#{}", self.0)
+        } else {
+            write!(f, "#[invalid PR number {}]", self.0)
+        }
+    }
+}
+
 /// Pull request model
 #[derive(Debug, Clone)]
 pub struct PullRequest {
     pub id: DbPullRequestId,
     pub repository_id: DbRepositoryId,
-    pub pr_number: i32,
+    pub pr_number: PrNumber,
     pub title: String,
     pub body: String,
     pub author_login: String,
@@ -49,7 +92,7 @@ pub struct PullRequest {
 #[derive(Debug, Clone)]
 pub struct NewPullRequest {
     pub repository_id: DbRepositoryId,
-    pub pr_number: i32,
+    pub pr_number: PrNumber,
     pub title: String,
     pub body: String,
     pub author_login: String,

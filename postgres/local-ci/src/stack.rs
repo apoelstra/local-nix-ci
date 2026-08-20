@@ -128,7 +128,7 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
     let mut to_refresh = HashSet::new();
     for commit in commits {
         for (pr, _) in &commit.prs {
-            to_refresh.insert(usize::try_from(pr.pr_number).unwrap());
+            to_refresh.insert(pr.pr_number);
         }
     }
 

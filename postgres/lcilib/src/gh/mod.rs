@@ -5,6 +5,7 @@
 pub(crate) mod serde_types;
 
 use crate::repo::RepoShell;
+use crate::PrNumber;
 use chrono::{DateTime, Utc};
 pub use serde_types::PrInfo;
 use std::fmt;
@@ -18,7 +19,7 @@ pub enum Error {
     Shell(String, xshell::Error),
     ShellLock(tokio::task::JoinError),
     Json(String, serde_json::Error),
-    PrNotFound(usize),
+    PrNotFound(PrNumber),
 }
 
 impl fmt::Display for Error {
@@ -49,7 +50,7 @@ impl std::error::Error for Error {
 ///
 /// Returns an error if the PR is not found, if the `gh pr view` invocation fails, or if
 /// Github returns JSON we cannot parse.
-pub(crate) async fn get_pr_info(shell: &RepoShell, pr_number: usize) -> Result<PrInfo, Error> {
+pub(crate) async fn get_pr_info(shell: &RepoShell, pr_number: PrNumber) -> Result<PrInfo, Error> {
     let pr_num_s = pr_number.to_string();
     let output = shell
         .with_lock_blocking(|shell| {
@@ -120,7 +121,7 @@ pub(crate) async fn list_updated_prs(
 /// Returns an error if the `gh pr comment` invocation fails.
 pub(crate) async fn post_pr_comment(
     shell: &RepoShell,
-    pr_number: i32,
+    pr_number: PrNumber,
     comment: &str,
 ) -> Result<(), Error> {
     let pr_num_s = pr_number.to_string();
@@ -142,7 +143,7 @@ pub(crate) async fn post_pr_comment(
 /// Returns an error if the `gh pr review` invocation fails.
 pub(crate) async fn post_pr_approval(
     shell: &RepoShell,
-    pr_number: i32,
+    pr_number: PrNumber,
     message: &str,
 ) -> Result<(), Error> {
     let pr_num_s = pr_number.to_string();

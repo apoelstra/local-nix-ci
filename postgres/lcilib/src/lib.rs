@@ -8,3 +8,4 @@ pub mod jj;
 pub mod repo;
 
 pub use self::db::{Db, Transaction};
+pub use self::db::models::PrNumber;
