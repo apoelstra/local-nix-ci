@@ -335,3 +335,49 @@ pub async fn get_commit_info<C: AsRef<OsStr> + Sync>(
         .await
         .map_err(Error::ShellLock)?
 }
+
+/// Computes the merge base of two commits/refs.
+///
+/// # Errors
+///
+/// Returns an error if the git command fails or the output cannot be parsed as a commit ID.
+pub async fn merge_base<A, B>(shell: &RepoShell, a: A, b: B) -> Result<CommitId, Error>
+where
+    A: AsRef<OsStr> + Sync,
+    B: AsRef<OsStr> + Sync,
+{
+    let output = shell
+        .with_lock_blocking(|shell| {
+            cmd!(shell, "git merge-base {a} {b}")
+                .read()
+                .map_err(Error::Shell)
+        })
+        .await
+        .map_err(Error::ShellLock)??;
+
+    CommitId::from_str(output.trim())
+}
+
+/// Runs `git range-diff <base_a>..<tip_a> <base_b>..<tip_b>`, letting git auto-page.
+///
+/// # Errors
+///
+/// Returns an error if the git command fails.
+pub async fn range_diff(
+    shell: &RepoShell,
+    base_a: &CommitId,
+    tip_a: &CommitId,
+    base_b: &CommitId,
+    tip_b: &CommitId,
+) -> Result<(), Error> {
+    let range_a = format!("{}..{}", base_a, tip_a);
+    let range_b = format!("{}..{}", base_b, tip_b);
+    shell
+        .with_lock_blocking(|shell| {
+            cmd!(shell, "git range-diff {range_a} {range_b}")
+                .run()
+                .map_err(Error::Shell)
+        })
+        .await
+        .map_err(Error::ShellLock)?
+}

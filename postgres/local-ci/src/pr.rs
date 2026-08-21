@@ -484,6 +484,12 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         anyhow::bail!("Tip commit not found for PR #{}", pr_number);
     };
 
+    let previous_tips = pr
+        .get_previous_tips(&tx)
+        .await
+        .context("failed to get previous tip commits")?;
+    let previous_tips: Vec<_> = previous_tips.into_iter().take(10).collect();
+
     // Show PR info first
     show_pr_info(&repo, &pr, &tip_commit).await?;
 
@@ -507,8 +513,20 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         println!();
         println!("3x) View total diff (not implemented)");
         println!();
-        println!("{} Cancel", ColorFormat::white("4)"));
-        print!("Choice (1a-4): ");
+        for (i, tip) in previous_tips.iter().enumerate() {
+            let letter = (b'a' + u8::try_from(i).unwrap()) as char;
+            println!(
+                "{} View range-diff vs {} (Review: {}, CI: {})",
+                ColorFormat::white(format_args!("4{})", letter)),
+                tip.git_commit_id.with_color(),
+                tip.review_status.with_color(),
+                tip.ci_status.with_color(),
+            );
+        }
+        println!("{} View range-diff vs other PR", ColorFormat::white("4z)"));
+        println!();
+        println!("{} Cancel", ColorFormat::white("5)"));
+        print!("Choice (1a-5): ");
         io::stdout().flush()?;
 
         let mut input = String::new();
@@ -587,12 +605,36 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
                 println!("Priority set from {} to {}.", pr.priority, new_priority);
                 pr.priority = new_priority;
             }
-            "4" => {
+            "5" => {
                 println!("Cancelled.");
                 break;
             }
+            c if c.starts_with("4") && c.len() == 2 => {
+                let suffix = c.chars().nth(1).unwrap();
+                if suffix == 'z' {
+                    handle_range_diff_vs_other_pr(&tx, &repo, &pr, &tip_commit).await?;
+                } else if suffix.is_ascii_lowercase() {
+                    let idx = (suffix as u8 - b'a') as usize;
+                    if let Some(prev_tip) = previous_tips.get(idx) {
+                        handle_range_diff(
+                            &tx,
+                            &repo,
+                            &pr,
+                            &tip_commit.git_commit_id,
+                            &pr.target_branch,
+                            &prev_tip.git_commit_id,
+                            &pr.target_branch,
+                        )
+                        .await?;
+                    } else {
+                        println!("Invalid choice.");
+                    }
+                } else {
+                    println!("Invalid choice.");
+                }
+            }
             _ => {
-                println!("Invalid choice. Please enter 1a, 1b, 2a, 2b, or 4.");
+                println!("Invalid choice.");
             }
         }
     }
@@ -640,6 +682,182 @@ async fn show_pr_info(
     println!("Created: {}", pr.created_at);
     println!("Updated: {}", pr.updated_at);
 
+    Ok(())
+}
+
+/// Handle "View range-diff vs other PR" (option 4z).
+async fn handle_range_diff_vs_other_pr(
+    tx: &lcilib::Transaction<'_>,
+    repo: &Repository,
+    pr: &PullRequest,
+    tip_commit: &Commit,
+) -> anyhow::Result<()> {
+    print!("Enter other PR number: ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let other_pr_number: PrNumber = match input.trim().parse() {
+        Ok(n) => n,
+        Err(_) => {
+            println!("Invalid PR number.");
+            return Ok(());
+        }
+    };
+
+    let Some(other_pr) = PullRequest::find_by_number(tx, repo.id, other_pr_number)
+        .await
+        .context("failed to query other pull request")?
+    else {
+        println!(
+            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it.",
+            other_pr_number, other_pr_number
+        );
+        return Ok(());
+    };
+
+    let Some(other_tip) = Commit::find_by_id(tx, other_pr.tip_commit_id)
+        .await
+        .context("failed to find other PR tip commit")?
+    else {
+        println!("Tip commit not found for PR #{}.", other_pr_number);
+        return Ok(());
+    };
+
+    handle_range_diff(
+        tx,
+        repo,
+        pr,
+        &tip_commit.git_commit_id,
+        &pr.target_branch,
+        &other_tip.git_commit_id,
+        &other_pr.target_branch,
+    )
+    .await
+}
+
+/// Show a range-diff and prompt for follow-up action.
+async fn handle_range_diff(
+    tx: &lcilib::Transaction<'_>,
+    repo: &Repository,
+    pr: &PullRequest,
+    cur_tip: &lcilib::git::CommitId,
+    cur_target: &str,
+    other_tip: &lcilib::git::CommitId,
+    other_target: &str,
+) -> anyhow::Result<()> {
+    let cur_base = git::merge_base(&repo.repo_shell, cur_tip, cur_target)
+        .await
+        .context("failed to compute merge-base for current tip")?;
+    let other_base = git::merge_base(&repo.repo_shell, other_tip, other_target)
+        .await
+        .context("failed to compute merge-base for other tip")?;
+
+    git::range_diff(&repo.repo_shell, &other_base, other_tip, &cur_base, cur_tip)
+        .await
+        .context("failed to run git range-diff")?;
+
+    println!();
+    println!(
+        "{} Approve all commits based on this range-diff",
+        ColorFormat::white("1)")
+    );
+    println!(
+        "{} Add review comment to all commits",
+        ColorFormat::white("2)")
+    );
+    println!("{} Do nothing", ColorFormat::white("3)"));
+    print!("Choice (1-3): ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let choice = input.trim();
+
+    let (approve, action_label) = match choice {
+        "1" => (true, "Approve"),
+        "2" => (false, "Comment"),
+        _ => return Ok(()),
+    };
+
+    let default_msg = format!(
+        "Approved based on range-diff between {}..{} and {}..{} (target {})",
+        other_base.prefix8(),
+        other_tip.prefix8(),
+        cur_base.prefix8(),
+        cur_tip.prefix8(),
+        cur_target,
+    );
+
+    let Some(message) = edit_range_diff_message(&default_msg, action_label)? else {
+        println!("Cancelled.");
+        return Ok(());
+    };
+
+    apply_range_diff_review(tx, pr, approve, &message).await?;
+    println!(
+        "{} applied to all commits.",
+        if approve { "Approval" } else { "Comment" }
+    );
+    Ok(())
+}
+
+/// Open editor for the range-diff review message. Returns None if editor exits non-zero.
+fn edit_range_diff_message(
+    default_text: &str,
+    action_label: &str,
+) -> anyhow::Result<Option<String>> {
+    let shell = Shell::new()?;
+    let temp_dir = shell
+        .create_temp_dir()
+        .context("failed to create temporary directory")?;
+    let temp_file_path = temp_dir.path().join("range_diff_review.txt");
+
+    let prefill = format!(
+        "{}\n# {} message. Lines starting with # will be removed.",
+        default_text, action_label
+    );
+    fs::write(&temp_file_path, prefill.as_bytes()).context("failed to write temp file")?;
+
+    let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+    if cmd!(shell, "{editor} {temp_file_path}").run().is_err() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&temp_file_path).context("failed to read edited file")?;
+    let message: String = content
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(Some(message))
+}
+
+/// Update all commits in the PR: set review_text, and optionally set review_status=Approved.
+async fn apply_range_diff_review(
+    tx: &lcilib::Transaction<'_>,
+    pr: &PullRequest,
+    approve: bool,
+    message: &str,
+) -> anyhow::Result<()> {
+    let commits = pr
+        .get_commits(tx)
+        .await
+        .context("failed to get PR commits")?;
+    for (commit, _) in &commits {
+        let updates = lcilib::db::models::UpdateCommit {
+            review_status: if approve {
+                Some(ReviewStatus::Approved)
+            } else {
+                None
+            },
+            review_text: Some(Some(message.to_string())),
+            ..Default::default()
+        };
+        commit
+            .update(tx, &updates)
+            .await
+            .context("failed to update commit review")?;
+    }
     Ok(())
 }
 
