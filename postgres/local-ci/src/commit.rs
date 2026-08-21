@@ -221,6 +221,7 @@ pub async fn real_review(
         println!("{} Review and Approve", ColorFormat::white("1a)"));
         println!("{} Review and Reject", ColorFormat::white("1b)"));
         println!("{} Approve but skip CI", ColorFormat::white("1c)"));
+        println!("{} Approve with no comment (skip editor)", ColorFormat::white("1d)"));
         println!();
         println!("{} View existing review", ColorFormat::white("2a)"));
         println!(
@@ -285,6 +286,20 @@ pub async fn real_review(
                     break;
                 }
             }
+            "1d" => {
+                let update = UpdateCommit {
+                    review_status: Some(ReviewStatus::Approved),
+                    review_text: Some(None),
+                    ..Default::default()
+                };
+                commit
+                    .id
+                    .apply_update(&tx, &update)
+                    .await
+                    .context("failed to update commit with review")?;
+                println!("Commit approved with no comment.");
+                break;
+            }
             "2a" => {
                 if let Some(ref review_text) = commit.review_text {
                     println!("\nExisting review:");
@@ -328,7 +343,7 @@ pub async fn real_review(
                 break;
             }
             _ => {
-                println!("Invalid choice. Please enter 1a, 1b, 1c, 2a, 2b, 3a, 3b, 3c, 3d, or 4.");
+                println!("Invalid choice. Please enter 1a, 1b, 1c, 1d, 2a, 2b, 3a, 3b, 3c, 3d, or 4.");
             }
         }
     }

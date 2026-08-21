@@ -482,6 +482,13 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     // Show PR info first
     show_pr_info(&repo, &pr, &tip_commit).await?;
 
+    let current_user = tx
+        .get_github_username()
+        .await
+        .context("getting GitHub username")?
+        .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
+    let is_author = pr.author_login == current_user;
+
     loop {
         // Show menu
         println!("\nWhat would you like to do?");
@@ -505,7 +512,7 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
 
         match choice {
             "1a" => {
-                if let Some(ack_message) = handle_ack_with_editor(&tip_commit, true)? {
+                if let Some(ack_message) = handle_ack_with_editor(&tip_commit, true, is_author)? {
                     create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message)
                         .await
                         .context("failed to create ACK")?;
@@ -524,7 +531,7 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
                 }
             }
             "1b" => {
-                if let Some(ack_message) = handle_ack_with_editor(&tip_commit, false)? {
+                if let Some(ack_message) = handle_ack_with_editor(&tip_commit, false, is_author)? {
                     create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message)
                         .await
                         .context("failed to create NACK")?;
@@ -632,7 +639,7 @@ async fn show_pr_info(
 }
 
 /// Handle ACK/NACK with text editor
-fn handle_ack_with_editor(commit: &Commit, is_ack: bool) -> anyhow::Result<Option<String>> {
+fn handle_ack_with_editor(commit: &Commit, is_ack: bool, is_author: bool) -> anyhow::Result<Option<String>> {
     // Create temporary directory and file
     let shell = Shell::new()?;
     let temp_dir = shell
@@ -643,7 +650,11 @@ fn handle_ack_with_editor(commit: &Commit, is_ack: bool) -> anyhow::Result<Optio
 
     let action_text = if is_ack { "ACK" } else { "NACK" };
     let default_message = if is_ack {
-        format!("ACK {}; successfully ran local tests", commit.git_commit_id)
+        if is_author {
+            format!("On {} successfully ran local tests", commit.git_commit_id)
+        } else {
+            format!("ACK {}; successfully ran local tests", commit.git_commit_id)
+        }
     } else {
         format!("NACK {}; needs changes", commit.git_commit_id)
     };
