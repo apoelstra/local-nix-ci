@@ -128,10 +128,10 @@ pub async fn compute_merge_description(
 
     // Build description
     let mut message = if pr.title.is_empty() {
-        format!("Merge {}#{}\n\n", project, pr.pr_number)
+        format!("Merge {}{}\n\n", project, pr.pr_number)
     } else {
         format!(
-            "Merge {}#{}: {}\n\n",
+            "Merge {}{}: {}\n\n",
             project,
             pr.pr_number,
             pr.title.trim()

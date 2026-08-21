@@ -217,24 +217,24 @@ pub(crate) async fn get_pr_info(
     repo_data: &ForgejoRepoData,
     pr_number: PrNumber,
 ) -> Result<gh::PrInfo, Error> {
-    let pr_endpoint = format!("repos/{}/pulls/{}", project_name, pr_number);
+    let pr_endpoint = format!("repos/{}/pulls/{:#}", project_name, pr_number);
     let pr: PullRequest = match repo_data.api_get(&pr_endpoint).await {
         Ok(v) => v,
         Err(ApiError::HttpStatus { status: 404, .. }) => return Err(Error::PrNotFound(pr_number)),
         Err(e) => return Err(Error::ApiGet(pr_endpoint, e)),
     };
 
-    let commits_endpoint = format!("repos/{}/pulls/{}/commits", project_name, pr_number);
+    let commits_endpoint = format!("repos/{}/pulls/{:#}/commits", project_name, pr_number);
     let commits: Vec<CommitEntry> = repo_data.api_get(&commits_endpoint).await
         .map_err(|e| Error::ApiGet(commits_endpoint, e))?;
     // Note that Forgejo shows the commits in the opposite order of Github so we have to reverse.
     let commits: Vec<CommitId> = commits.into_iter().rev().map(|c| c.sha).collect();
 
-    let comments_endpoint = format!("repos/{}/issues/{}/comments", project_name, pr_number);
+    let comments_endpoint = format!("repos/{}/issues/{:#}/comments", project_name, pr_number);
     let comments: Vec<Comment> = repo_data.api_get(&comments_endpoint).await
         .map_err(|e| Error::ApiGet(comments_endpoint, e))?;
 
-    let reviews_endpoint = format!("repos/{}/pulls/{}/reviews", project_name, pr_number);
+    let reviews_endpoint = format!("repos/{}/pulls/{:#}/reviews", project_name, pr_number);
     let reviews: Vec<Review> = repo_data.api_get(&reviews_endpoint).await
         .map_err(|e| Error::ApiGet(reviews_endpoint, e))?;
 
@@ -308,7 +308,7 @@ pub(crate) async fn post_pr_comment(
         body: &'a str,
     }
 
-    let endpoint = format!("repos/{}/issues/{}/comments", project_name, pr_number);
+    let endpoint = format!("repos/{}/issues/{:#}/comments", project_name, pr_number);
     repo_data.api_post(&endpoint, &Body { body: comment }).await
         .map_err(|e| Error::ApiPost(endpoint, e))
 }
@@ -334,7 +334,7 @@ pub(crate) async fn post_pr_approval(
         event: &'a str,
     }
 
-    let endpoint = format!("repos/{}/pulls/{}/reviews", project_name, pr_number);
+    let endpoint = format!("repos/{}/pulls/{:#}/reviews", project_name, pr_number);
     repo_data
         .api_post(
             &endpoint,

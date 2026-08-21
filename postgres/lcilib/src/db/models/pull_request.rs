@@ -58,11 +58,15 @@ impl<'de> serde::Deserialize<'de> for PrNumber {
 
 impl fmt::Display for PrNumber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Because it's a massive PITA to implement FromSql manually we don't restrict constructing
-        // via FromSQL. FIXME once we do this, we can change this check to an assertion.
         if self.0 >= 0 {
-            write!(f, "#{}", self.0)
+            if f.alternate() {
+                write!(f, "{}", self.0)
+            } else {
+                write!(f, "#{}", self.0)
+            }
         } else {
+            // Because it's a massive PITA to implement FromSql manually we don't restrict constructing
+            // via FromSQL. FIXME once we do this, we can change this check to an assertion.
             write!(f, "#[invalid PR number {}]", self.0)
         }
     }
