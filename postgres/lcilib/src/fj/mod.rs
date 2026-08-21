@@ -75,8 +75,8 @@ impl ForgejoRepoData {
 
     async fn api_get<T: serde::de::DeserializeOwned>(
         &self,
-        endpoint: impl fmt::Display,
-    ) -> Result<T, Error> {
+        endpoint: &impl fmt::Display,
+    ) -> Result<T, ApiError> {
         let url = format!("{}/api/v1/{}", self.https_url, endpoint);
         let response = bitreq::get(&url)
             .with_header("Authorization", format!("token {}", self.token))
@@ -84,10 +84,10 @@ impl ForgejoRepoData {
             .with_header("User-Agent", USER_AGENT)
             .send_async()
             .await
-            .map_err(|e| Error::Http(url.clone(), e))?;
+            .map_err(|e| ApiError::Http(url.clone(), e))?;
         if response.status_code < 200 || response.status_code >= 300 {
             let body = response.as_str().unwrap_or("").to_string();
-            return Err(Error::HttpStatus {
+            return Err(ApiError::HttpStatus {
                 url,
                 status: response.status_code,
                 body,
@@ -95,17 +95,17 @@ impl ForgejoRepoData {
         }
         let body = response
             .as_str()
-            .map_err(|e| Error::Http(url.clone(), e))?
+            .map_err(|e| ApiError::Http(url.clone(), e))?
             .to_string();
-        serde_json::from_str(&body).map_err(|e| Error::Json(body, e))
+        serde_json::from_str(&body).map_err(|e| ApiError::Json(body, e))
     }
 
     async fn api_post<B: serde::Serialize>(
         &self,
-        endpoint: impl fmt::Display,
+        endpoint: &impl fmt::Display,
         body: &B,
-    ) -> Result<(), Error> {
-        let body_json = serde_json::to_string(body).map_err(Error::JsonSerialize)?;
+    ) -> Result<(), ApiError> {
+        let body_json = serde_json::to_string(body).map_err(ApiError::JsonSerialize)?;
         let url = format!("{}/api/v1/{}", self.https_url, endpoint);
         let response = bitreq::post(&url)
             .with_header("Authorization", format!("token {}", self.token))
@@ -115,10 +115,10 @@ impl ForgejoRepoData {
             .with_body(body_json.as_str())
             .send_async()
             .await
-            .map_err(|e| Error::Http(url.clone(), e))?;
+            .map_err(|e| ApiError::Http(url.clone(), e))?;
         if response.status_code < 200 || response.status_code >= 300 {
             let body = response.as_str().unwrap_or("").to_string();
-            return Err(Error::HttpStatus {
+            return Err(ApiError::HttpStatus {
                 url,
                 status: response.status_code,
                 body,
@@ -129,9 +129,8 @@ impl ForgejoRepoData {
 }
 
 #[derive(Debug)]
-pub enum Error {
-    Shell(String, xshell::Error),
-    ShellLock(tokio::task::JoinError),
+pub enum ApiError {
+    JsonSerialize(serde_json::Error),
     Http(String, bitreq::Error),
     HttpStatus {
         url: String,
@@ -139,10 +138,41 @@ pub enum Error {
         body: String,
     },
     Json(String, serde_json::Error),
-    JsonSerialize(serde_json::Error),
+}
+
+impl fmt::Display for ApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::JsonSerialize(_) => f.write_str("failed to serialize JSON body"),
+            Self::Http(url, _) => write!(f, "HTTP request failed: {}", url),
+            Self::HttpStatus { url, status, body } => {
+                write!(f, "HTTP {} from {}: {}", status, url, body)
+            }
+            Self::Json(json, _) => write!(f, "failed to parse JSON response: {}", json),
+        }
+    }
+}
+
+impl std::error::Error for ApiError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::JsonSerialize(e) => Some(e),
+            Self::Http(_, e) => Some(e),
+            Self::Json(_, e) => Some(e),
+            Self::HttpStatus { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Error {
+    Shell(String, xshell::Error),
+    ShellLock(tokio::task::JoinError),
     Repo(repo::RepoError),
     NotForgejoRemote,
     PrNotFound(PrNumber),
+    ApiGet(String, ApiError),
+    ApiPost(String, ApiError),
 }
 
 impl fmt::Display for Error {
@@ -150,17 +180,13 @@ impl fmt::Display for Error {
         match self {
             Self::Shell(cmd, _) => write!(f, "failed to invoke command: {}", cmd),
             Self::ShellLock(_) => f.write_str("panic while holding shell lock"),
-            Self::Http(url, _) => write!(f, "HTTP request failed: {}", url),
-            Self::HttpStatus { url, status, body } => {
-                write!(f, "HTTP {} from {}: {}", status, url, body)
-            }
-            Self::Json(json, _) => write!(f, "failed to parse JSON response: {}", json),
-            Self::JsonSerialize(_) => f.write_str("failed to serialize JSON body"),
             Self::Repo(_) => f.write_str("failed to detect repository upstream"),
             Self::NotForgejoRemote => {
                 f.write_str("origin remote is not a recognized Forgejo remote")
             }
             Self::PrNotFound(n) => write!(f, "PR #{} not found", n),
+            Self::ApiGet(endpoint, _) => write!(f, "failed API GET request to {endpoint}"),
+            Self::ApiPost(endpoint, _) => write!(f, "failed API POST request to {endpoint}"),
         }
     }
 }
@@ -170,11 +196,11 @@ impl std::error::Error for Error {
         match self {
             Self::Shell(_, e) => Some(e),
             Self::ShellLock(e) => Some(e),
-            Self::Http(_, e) => Some(e),
-            Self::Json(_, e) => Some(e),
-            Self::JsonSerialize(e) => Some(e),
             Self::Repo(e) => Some(e),
-            _ => None,
+            Self::ApiGet(_, e) => Some(e),
+            Self::ApiPost(_, e) => Some(e),
+            Self::NotForgejoRemote => None,
+            Self::PrNotFound(..) => None,
         }
     }
 }
@@ -192,22 +218,25 @@ pub(crate) async fn get_pr_info(
     pr_number: PrNumber,
 ) -> Result<gh::PrInfo, Error> {
     let pr_endpoint = format!("repos/{}/pulls/{}", project_name, pr_number);
-    let pr: PullRequest = match repo_data.api_get(pr_endpoint).await {
+    let pr: PullRequest = match repo_data.api_get(&pr_endpoint).await {
         Ok(v) => v,
-        Err(Error::HttpStatus { status: 404, .. }) => return Err(Error::PrNotFound(pr_number)),
-        Err(e) => return Err(e),
+        Err(ApiError::HttpStatus { status: 404, .. }) => return Err(Error::PrNotFound(pr_number)),
+        Err(e) => return Err(Error::ApiGet(pr_endpoint, e)),
     };
 
     let commits_endpoint = format!("repos/{}/pulls/{}/commits", project_name, pr_number);
-    let commits: Vec<CommitEntry> = repo_data.api_get(commits_endpoint).await?;
+    let commits: Vec<CommitEntry> = repo_data.api_get(&commits_endpoint).await
+        .map_err(|e| Error::ApiGet(commits_endpoint, e))?;
     // Note that Forgejo shows the commits in the opposite order of Github so we have to reverse.
     let commits: Vec<CommitId> = commits.into_iter().rev().map(|c| c.sha).collect();
 
     let comments_endpoint = format!("repos/{}/issues/{}/comments", project_name, pr_number);
-    let comments: Vec<Comment> = repo_data.api_get(comments_endpoint).await?;
+    let comments: Vec<Comment> = repo_data.api_get(&comments_endpoint).await
+        .map_err(|e| Error::ApiGet(comments_endpoint, e))?;
 
     let reviews_endpoint = format!("repos/{}/pulls/{}/reviews", project_name, pr_number);
-    let reviews: Vec<Review> = repo_data.api_get(reviews_endpoint).await?;
+    let reviews: Vec<Review> = repo_data.api_get(&reviews_endpoint).await
+        .map_err(|e| Error::ApiGet(reviews_endpoint, e))?;
 
     Ok(pr.into_gh_pr_info(commits, comments, reviews))
 }
@@ -235,7 +264,8 @@ pub(crate) async fn list_updated_prs(
             "repos/{}/pulls?state=open&sort=recentupdate&limit={}&page={}",
             project_name, LIST_PAGE_SIZE, page
         );
-        let prs: Vec<PullRequest> = repo_data.api_get(endpoint).await?;
+        let prs: Vec<PullRequest> = repo_data.api_get(&endpoint).await
+            .map_err(|e| Error::ApiPost(endpoint, e))?;
         if prs.is_empty() {
             break;
         }
@@ -279,7 +309,8 @@ pub(crate) async fn post_pr_comment(
     }
 
     let endpoint = format!("repos/{}/issues/{}/comments", project_name, pr_number);
-    repo_data.api_post(endpoint, &Body { body: comment }).await
+    repo_data.api_post(&endpoint, &Body { body: comment }).await
+        .map_err(|e| Error::ApiPost(endpoint, e))
 }
 
 /// Posts an approving review on a Forgejo PR. Mirrors [`gh::post_pr_approval`], but requires
@@ -306,7 +337,7 @@ pub(crate) async fn post_pr_approval(
     let endpoint = format!("repos/{}/pulls/{}/reviews", project_name, pr_number);
     repo_data
         .api_post(
-            endpoint,
+            &endpoint,
             &Body {
                 body: message,
                 commit_id: commit_id.to_string(),
@@ -314,4 +345,5 @@ pub(crate) async fn post_pr_approval(
             },
         )
         .await
+        .map_err(|e| Error::ApiPost(endpoint, e))
 }
