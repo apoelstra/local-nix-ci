@@ -103,7 +103,12 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         if !previous_tips.is_empty() {
             println!("\nPrevious tip commits:");
             for tip in &previous_tips {
-                println!("  {}", tip.git_commit_id);
+                println!(
+                    "  {} - Review: {}, CI: {}",
+                    tip.git_commit_id.with_color(),
+                    tip.review_status.with_color(),
+                    tip.ci_status.with_color()
+                );
             }
         }
 
