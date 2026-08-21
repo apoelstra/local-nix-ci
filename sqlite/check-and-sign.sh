@@ -18,7 +18,7 @@ if [[ $# -ne 2 ]]; then
     exit 1
 fi
 
-readonly pr_num="$1"
+readonly pr_num="${1#\#}" # strip initial #
 readonly jj_change_id="$2"
 
 # Validate pr_num is a positive integer
