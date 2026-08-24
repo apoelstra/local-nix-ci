@@ -481,7 +481,7 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to find tip commit")?
     else {
-        anyhow::bail!("Tip commit not found for PR #{}", pr_number);
+        anyhow::bail!("Tip commit not found for PR {}", pr_number);
     };
 
     let previous_tips = pr

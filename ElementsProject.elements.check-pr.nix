@@ -38,6 +38,7 @@ let
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
     argsMatrix = fullMatrix;
     forceSequential = true; # see docs in andrew-utils.nix for what this does
+    sequentialWidth = 1;
 
     singleCheckDrv = {
       projectName,

@@ -54,6 +54,19 @@ let
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
     argsMatrix = fullMatrix;
+    # See docs in andrew-utils.nix for these parameters.
+    forceSequential = true;
+    # We can set the sequentialWidth pretty high, because it's interpreted as a batch size, and
+    # Nix will do a complete batch before starting the next. Not very many high-memory derivations
+    # will show up in a given batch, and even if they did, it's okay since as they complete the
+    # system load will reduce and we'll recover.
+    #
+    # Without forceSequential, every time a derivation finishes Nix immediately spawns a new one
+    # so that it's always at/near max-jobs. This means that no matter the initial distribution
+    # of jobs, it'll wind up doing max-jobs many of the longest-running ones at once... which are
+    # exactly the high-memory ones. So all we need to do to avoid memory exhaustion is to disrupt
+    # that process.
+    sequentialWidth = 128;
 
     singleCheckDrv = {
         projectName

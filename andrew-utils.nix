@@ -413,40 +413,60 @@ rec {
   derivationName = drv:
     builtins.unsafeDiscardStringContext (builtins.baseNameOf (builtins.toString drv));
 
-  # Wrapper around linkFarm, partially written by ChatGPT o3, which injects an
-  # artificial dependency between each derivation and the next, forcing Nix to
-  # evaluate them sequentially. For whatever reason the Bitcoin/Elements
-  # functional tests cannot successfully run, even with -j1, when too many are
-  # being run in parallel.
+  # Wrapper around linkFarm, written by ChatGPT 5.6 Sol, which divides the
+  # derivations into batches of `width` and injects artificial dependencies
+  # between consecutive batches. Every derivation in a batch depends on every
+  # derivation in the preceding batch, so Nix cannot start a new batch until the
+  # entire preceding batch has finished. A width of 1 forces fully sequential
+  # evaluation. For whatever reason the Bitcoin/Elements functional tests cannot
+  # successfully run, even with -j1, when too many are being run in parallel.
+  #
+  # With libsecp256k1 we just need to throttle the parallelism so it doesn't use
+  # all my RAM at once.
   #
   # This assumes all derivations are stdenvs and is unlikely to work with e.g.
   # the crate2nix stuff.
   sequentialLinkFarm =
   let
-    chained = name: items:
-      # foldl' that threads the “previous” wrapper through the list
-      builtins.foldl' (acc: item:
+    batchesOf = width: items:
+      if items == []
+      then []
+      else [ (nixpkgs.lib.take width items) ]
+        ++ batchesOf width (nixpkgs.lib.drop width items);
+
+    chained = width: items:
+      # foldl' that threads the previous batch of wrappers through the list
+      builtins.foldl' (acc: batch:
         let
-          prevDrv = acc.prev;         # may be null for the first item
-          realDrv = item.value;
-          wrapper = if prevDrv == null
-          then realDrv
-          else realDrv.overrideAttrs (old: {
-            postUnpack = ''
-              echo ${prevDrv} > .serial-depends
-              ${old.postUnpack or ""}
-            '';
-          });
+          wrap = item:
+            let
+              realDrv = item.value;
+              wrapper = if acc.prev == []
+              then realDrv
+              else realDrv.overrideAttrs (old: {
+                postUnpack = ''
+                  ${builtins.concatStringsSep "\n" (map (prevDrv:
+                    "echo ${prevDrv} >> .serial-depends"
+                  ) acc.prev)}
+                  ${old.postUnpack or ""}
+                '';
+              });
+            in {
+              inherit (item) name;
+              path = wrapper;
+            };
+          wrappedBatch = map wrap batch;
         in {
-          prev = wrapper;
-          list = acc.list ++ [ { name = item.name; path = wrapper; } ];
+          prev = map (item: item.path) wrappedBatch;
+          list = acc.list ++ wrappedBatch;
         })
         # initial accumulator
-        { prev = null; list = [ ]; }
-        items;
-  in name: items:
+        { prev = []; list = []; }
+        (batchesOf width items);
+  in width: name: items:
+    assert width > 0;
     let
-      chainedResult = chained name items;
+      chainedResult = chained width items;
     in nixpkgs.linkFarm name chainedResult.list;
 
   # Given a bunch of data, do a full PR check.
@@ -490,6 +510,7 @@ rec {
     , memoGeneratedCargoNix ? x: { name = ""; value = null; }
     , memoCalledCargoNix ? x: { name = ""; value = null; }
     , forceSequential ? false
+    , sequentialWidth ? 1
     }:
     let
       mtxs' = matrix argsMatrix;
@@ -519,7 +540,7 @@ rec {
     in if forceSequential
       # sequentialLinkFarm assumes the form of toFarm is { value = X, name = Y } rather
       # than { path = X, name = Y } as the normal linkFarm does. See next comment for why.
-      then sequentialLinkFarm name toFarm
+      then sequentialLinkFarm sequentialWidth name toFarm
       # With the real linkFarm, providing an attrset is dramatically faster since it
       # disables goofy "in case of duplicate names make sure the last item takes priority"
       # logic. With sequentialLinkFarm we don't bother since presumably if you're doing
