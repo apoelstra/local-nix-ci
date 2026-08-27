@@ -42,6 +42,7 @@ import ./rust.check-pr.nix {
 
         cp depend/secp256k1-HEAD-revision.txt depend2/
         rm depend2/secp256k1/.gitignore # dropped by crate2nix I think
+        rm -r depend2/secp256k1/autotools-aux # dropped by crate2nix I think
         rm depend/secp256k1/*/*.orig || true # These files are weird seem to depend on `diff` weirdness
         rm depend2/secp256k1/*/*.orig || true
         diff -r depend/ depend2
