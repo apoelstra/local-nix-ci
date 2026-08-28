@@ -67,7 +67,7 @@ pub struct Comment {
 
 #[derive(serde::Deserialize, Debug)]
 pub struct Review {
-    pub user: User,
+    pub user: Option<User>,
     #[serde(default)]
     pub body: String,
     #[serde(default)]
@@ -121,7 +121,7 @@ impl PullRequest {
                 .into_iter()
                 .map(|r| gh::serde_types::Review {
                     author: gh::serde_types::Author {
-                        login: r.user.login,
+                        login: r.user.map(|u| u.login).unwrap_or("<null user>".to_owned())
                     },
                     body: r.body,
                     state: r.state,
