@@ -484,7 +484,7 @@ impl PullRequest {
             EntityType::PullRequest,
             pr.id.bare_i32(),
             "pr_created",
-            Some(&format!("Created PR #{}", pr.pr_number)),
+            Some(&format!("Created PR {}", pr.pr_number)),
             None,
         )
         .await
@@ -641,7 +641,7 @@ impl PullRequest {
             self.id.bare_i32(),
             "commit_added",
             Some(&format!(
-                "Added commit {} to PR #{}",
+                "Added commit {} to PR {}",
                 commit_id, self.pr_number
             )),
             None,

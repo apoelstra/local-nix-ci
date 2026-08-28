@@ -49,7 +49,7 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     {
         println!(
             "{}: {}",
-            ColorFormat::white(format_args!("{} PR #{}", repo.name, pr.pr_number)),
+            ColorFormat::white(format_args!("{} PR {}", repo.name, pr.pr_number)),
             pr.title
         );
         println!();
@@ -138,7 +138,7 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
             .context("failed to determine next action")?;
         println!("\nNext action: {}", next_action);
     } else {
-        println!("PR #{} not found in database.", pr_number);
+        println!("PR {} not found in database.", pr_number);
         println!(
             "Use 'local-ci refresh pr {}' to download it from GitHub.",
             pr_number
@@ -202,7 +202,7 @@ pub async fn next(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to query pull request")?
     else {
         anyhow::bail!(
-            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
+            "PR {} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
             pr_number,
             pr_number
         );
@@ -470,7 +470,7 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to query pull request")?
     else {
         anyhow::bail!(
-            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
+            "PR {} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
             pr_number,
             pr_number
         );
@@ -655,7 +655,7 @@ async fn show_pr_info(
         .await
         .context("failed to get commit info from git")?;
 
-    println!("{} PR #{}: {}", repo.name, pr.pr_number, pr.title);
+    println!("{} PR {}: {}", repo.name, pr.pr_number, pr.title);
     println!();
     println!(
         "{}",
@@ -709,7 +709,7 @@ async fn handle_range_diff_vs_other_pr(
         .context("failed to query other pull request")?
     else {
         println!(
-            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it.",
+            "PR {} not found in database. Use 'local-ci refresh pr {}' to download it.",
             other_pr_number, other_pr_number
         );
         return Ok(());
@@ -719,7 +719,7 @@ async fn handle_range_diff_vs_other_pr(
         .await
         .context("failed to find other PR tip commit")?
     else {
-        println!("Tip commit not found for PR #{}.", other_pr_number);
+        println!("Tip commit not found for PR {}.", other_pr_number);
         return Ok(());
     };
 
@@ -1051,7 +1051,7 @@ pub async fn log(
         .context("failed to query pull request")?
     else {
         anyhow::bail!(
-            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
+            "PR {} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
             pr_number,
             pr_number
         );
@@ -1109,7 +1109,7 @@ pub async fn reset(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         .context("failed to query pull request")?
     else {
         anyhow::bail!(
-            "PR #{} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
+            "PR {} not found in database. Use 'local-ci refresh pr {}' to download it from GitHub.",
             pr_number,
             pr_number
         );
@@ -1120,7 +1120,7 @@ pub async fn reset(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to find tip commit")?
     else {
-        anyhow::bail!("Tip commit not found for PR #{}", pr_number);
+        anyhow::bail!("Tip commit not found for PR {}", pr_number);
     };
 
     // Show current PR info
@@ -1140,7 +1140,7 @@ pub async fn reset(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
 
     if merge_commits.is_empty() {
         println!(
-            "\nNo merge commits found for PR #{}. Nothing to reset.",
+            "\nNo merge commits found for PR {}. Nothing to reset.",
             pr_number
         );
         tx.commit().await.context("failed to commit transaction")?;
@@ -1171,7 +1171,7 @@ pub async fn reset(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     println!("consider un-reviewing the PR or reducing its priority first.");
     println!();
 
-    print!("Are you sure you want to reset PR #{}? (y/N): ", pr_number);
+    print!("Are you sure you want to reset PR {}? (y/N): ", pr_number);
     io::stdout().flush()?;
 
     let mut input = String::new();
@@ -1203,7 +1203,7 @@ pub async fn reset(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
     tx.commit().await.context("failed to commit transaction")?;
 
     println!(
-        "Successfully reset {} merge commit(s) for PR #{}.",
+        "Successfully reset {} merge commit(s) for PR {}.",
         reset_count, pr_number
     );
     println!("The daemon will handle stack cleanup automatically.");
@@ -1426,7 +1426,7 @@ pub async fn refresh(repo: &Repository, pr_info: &gh::PrInfo, db: &mut Db) -> an
         }
     }
 
-    println!("Refreshed PR #{}: {}", pr_info.number, pr_info.title);
+    println!("Refreshed PR {}: {}", pr_info.number, pr_info.title);
     println!(
         "Commits: {}; tip: {}",
         commit_records.len(),

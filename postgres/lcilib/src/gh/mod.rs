@@ -28,7 +28,7 @@ impl fmt::Display for Error {
             Self::Shell(cmd, _) => write!(f, "failed to invoke command: {}", cmd),
             Self::ShellLock(_) => f.write_str("panic while holding shell lock"),
             Self::Json(json, _) => write!(f, "failed to parse JSON response: {}", json),
-            Self::PrNotFound(pr_number) => write!(f, "PR #{} not found", pr_number),
+            Self::PrNotFound(pr_number) => write!(f, "PR {} not found", pr_number),
         }
     }
 }

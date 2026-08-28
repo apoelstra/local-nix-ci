@@ -106,7 +106,7 @@ fn show_prs(prs: &[PullRequest]) {
         println!("Ready to Merge ({}):", ready_to_merge.len());
         for pr in ready_to_merge {
             println!(
-                "  PR #{}: {} (priority: {})",
+                "  PR {}: {} (priority: {})",
                 pr.pr_number, pr.title, pr.priority
             );
         }
@@ -122,7 +122,7 @@ fn show_prs(prs: &[PullRequest]) {
     if !needs_review.is_empty() {
         println!("Needs Review ({}):", needs_review.len());
         for pr in needs_review {
-            println!("  PR #{}: {}", pr.pr_number, pr.title);
+            println!("  PR {}: {}", pr.pr_number, pr.title);
         }
         println!();
     }
@@ -136,7 +136,7 @@ fn show_prs(prs: &[PullRequest]) {
     if !rejected.is_empty() {
         println!("Rejected/Needs Changes ({}):", rejected.len());
         for pr in rejected {
-            println!("  PR #{}: {}", pr.pr_number, pr.title);
+            println!("  PR {}: {}", pr.pr_number, pr.title);
         }
         println!();
     }
@@ -153,7 +153,7 @@ fn show_prs(prs: &[PullRequest]) {
             approved_not_ready.len()
         );
         for pr in approved_not_ready {
-            println!("  PR #{}: {}", pr.pr_number, pr.title);
+            println!("  PR {}: {}", pr.pr_number, pr.title);
         }
     }
 }

@@ -237,7 +237,7 @@ pub async fn print_work_summary(
                 let prs: Vec<_> = commit
                     .prs
                     .iter()
-                    .map(|(pr, commit_type)| format!("PR #{}, {}", pr.pr_number, commit_type))
+                    .map(|(pr, commit_type)| format!("PR {}, {}", pr.pr_number, commit_type))
                     .collect();
                 let prs_str = prs.join(", ");
                 log::info(format_args!(
@@ -438,7 +438,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
         } else {
             for (pr, commit_type) in &commit.prs {
                 log::info(format_args!(
-                    "    {} PR #{} ({}): {}",
+                    "    {} PR {} ({}): {}",
                     repo.name, pr.pr_number, commit_type, pr.title
                 ));
             }

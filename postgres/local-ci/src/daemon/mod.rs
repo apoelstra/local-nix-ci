@@ -154,7 +154,7 @@ async fn check_pending_acks(
         if counts.total == 0 {
             log_limit.run(|| {
                 log::info(format_args!(
-                    "ACK for PR #{} not posted: no non-merge commits found",
+                    "ACK for PR {} not posted: no non-merge commits found",
                     pr.pr_number
                 ));
             });
@@ -165,7 +165,7 @@ async fn check_pending_acks(
             // If any commit failed, don't post the ACK.
             log_limit.run(|| {
                 log::info(format_args!(
-                    "{} PR #{} approved ({} commits; {} approved, {} passed, {}).",
+                    "{} PR {} approved ({} commits; {} approved, {} passed, {}).",
                     repo.name,
                     pr.pr_number,
                     counts.total,
@@ -179,7 +179,7 @@ async fn check_pending_acks(
             // Then if any commit is unapproved, don't post the ACK.
             log_limit.run(|| {
                 log::info(format_args!(
-                    "{} PR #{} approved ({} commits; {} approved, {} passed).",
+                    "{} PR {} approved ({} commits; {} approved, {} passed).",
                     repo.name, pr.pr_number, counts.total, counts.approved, counts.ready,
                 ));
             });
@@ -188,7 +188,7 @@ async fn check_pending_acks(
             // Then if any commits remain untested, don't post the ACK.
             log_limit.run(|| {
                 log::info(format_args!(
-                    "{} PR #{} fully approved ({} commits, {} untested).",
+                    "{} PR {} fully approved ({} commits, {} untested).",
                     repo.name, pr.pr_number, counts.total, counts.untested,
                 ));
             });
@@ -226,7 +226,7 @@ async fn check_pending_acks(
                 log::warn(
                     &e,
                     format_args!(
-                        "Failed to post ACK for PR #{} from reviewer {}",
+                        "Failed to post ACK for PR {} from reviewer {}",
                         pr.pr_number, ack.reviewer_name
                     ),
                 );
@@ -245,7 +245,7 @@ async fn check_pending_acks(
 
         if new_status == AckStatus::Posted {
             log::info(format_args!(
-                "Posted ACK for PR #{} from reviewer {}",
+                "Posted ACK for PR {} from reviewer {}",
                 pr.pr_number, ack.reviewer_name
             ));
         }
@@ -395,7 +395,7 @@ async fn try_extend_stack(
                 should_run_ci: true,
                 ci_status: CiStatus::Unstarted,
                 nix_derivation: None,
-                review_text: Some(format!("Stack merge commit for PR #{}", pr.pr_number)),
+                review_text: Some(format!("Stack merge commit for PR {}", pr.pr_number)),
             };
 
             let stack_merge_commit = Commit::create(tx, new_commit).await.map_err(|e| {
@@ -422,7 +422,7 @@ async fn try_extend_stack(
                     .context("failed to add commit to stack")?;
 
                 log::info(format_args!(
-                    "Extended stack {} with PR #{}",
+                    "Extended stack {} with PR {}",
                     stack_id, pr.pr_number
                 ));
             } else {
@@ -443,7 +443,7 @@ async fn try_extend_stack(
                     .context("failed to add commit to new stack")?;
 
                 log::info(format_args!(
-                    "Created direct merge and new stack for PR #{}",
+                    "Created direct merge and new stack for PR {}",
                     pr.pr_number
                 ));
             }
@@ -459,14 +459,14 @@ async fn try_extend_stack(
         Err(e) => {
             if let Some(id) = stack_id {
                 log::info(format_args!(
-                    "Failed to extend stack {} with PR #{}: {:?}",
+                    "Failed to extend stack {} with PR {}: {:?}",
                     id,
                     pr.pr_number,
                     anyhow::Error::from(e)
                 ));
             } else {
                 log::info(format_args!(
-                    "Failed to create new stack with PR #{}: {:?}",
+                    "Failed to create new stack with PR {}: {:?}",
                     pr.pr_number,
                     anyhow::Error::from(e)
                 ));
@@ -779,7 +779,7 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
         .repo_shell
         .list_updated_prs(last_synced)
         .await
-        .context("failed sync of recent activity via 'gh' utility")?;
+        .context("failed to list updated PRs")?;
 
     if !pr_infos.is_empty() {
         log::info(format_args!(
@@ -791,12 +791,12 @@ async fn sync_repository_prs(db: &mut Db, repo: &Repository) -> anyhow::Result<(
     for pr_info in &pr_infos {
         if let Err(e) = crate::pr::refresh(repo, pr_info, db)
             .await
-            .with_context(|| format!("failed to refresh PR #{}", pr_info.number))
+            .with_context(|| format!("failed to refresh PR {}", pr_info.number))
         {
             log::warn(
                 &*e.into_boxed_dyn_error(),
                 format_args!(
-                    "Warning: Failed to refresh PR #{} in repository {}",
+                    "Warning: Failed to refresh PR {} in repository {}",
                     pr_info.number, repo.name,
                 ),
             );

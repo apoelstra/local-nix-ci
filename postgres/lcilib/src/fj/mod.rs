@@ -184,7 +184,7 @@ impl fmt::Display for Error {
             Self::NotForgejoRemote => {
                 f.write_str("origin remote is not a recognized Forgejo remote")
             }
-            Self::PrNotFound(n) => write!(f, "PR #{} not found", n),
+            Self::PrNotFound(n) => write!(f, "PR {} not found", n),
             Self::ApiGet(endpoint, _) => write!(f, "failed API GET request to {endpoint}"),
             Self::ApiPost(endpoint, _) => write!(f, "failed API POST request to {endpoint}"),
         }

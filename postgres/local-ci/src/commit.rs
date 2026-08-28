@@ -405,7 +405,7 @@ async fn show_commit_info(
                 (false, commit_type) => format!("old {:?}", commit_type).to_lowercase(),
             };
 
-            println!("  PR #{}: {} ({})", pr.pr_number, pr.title, status);
+            println!("  PR {}: {} ({})", pr.pr_number, pr.title, status);
         }
     }
 
