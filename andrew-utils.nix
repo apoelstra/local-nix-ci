@@ -655,7 +655,7 @@ rec {
 
                 export CARGO_BIN_NAME="${projectName}"
                 export CARGO_CRATE_NAME="${crate.crateName}"
-                export CARGO_TARGET_TMPDIR="." # lol whatever
+                export CARGO_TARGET_TMPDIR="."  # lol whatever. needs to relative and needs to exist
                 echo "CARGO_BIN_NAME: $CARGO_BIN_NAME"
                 echo "CARGO_CRATE_NAME: $CARGO_CRATE_NAME"
                 echo "CARGO_TARGET_TMPDIR: $CARGO_TARGET_TMPDIR"
@@ -691,7 +691,8 @@ rec {
                 envString = builtins.concatStringsSep " " (map (bin:
                   let
                     var = "CARGO_BIN_EXE_${bin.name}";
-                    val = "./target/debug/${bin.name}";
+                    # Needs to be absolute or Command::new fucks this up.
+                    val = "$PWD/target/debug/${bin.name}";
                   in "\"${var}=${val}\"")
                   mainToml.bin);
               in if mainToml ? bin
@@ -710,7 +711,7 @@ rec {
                 # Needed by leptos-config
                 export CARGO_CRATE_NAME="${crate.crateName}"
                 echo "CARGO_CRATE_NAME: $CARGO_CRATE_NAME"
-                export CARGO_TARGET_TMPDIR="." # lol whatever
+                export CARGO_TARGET_TMPDIR="."  # lol whatever. needs to relative and needs to exist
                 echo "CARGO_TARGET_TMPDIR: $CARGO_TARGET_TMPDIR"
               '';
               postUnpack = ''
