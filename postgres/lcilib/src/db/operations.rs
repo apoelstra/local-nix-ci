@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::collections::HashSet;
 use tokio_postgres::Error;
 
 use super::models::{
-    Ack, AckStatus, AllowedApprover, Commit, CommitType, DbAckId, DbCommitId, DbPrCommitId,
+    Ack, AllowedApprover, Commit, CommitType, DbAckId, DbCommitId, DbPrCommitId,
     DbPullRequestId, DbRepositoryId, LogEntry, NewAck, NewAllowedApprover, NewCommit,
     NewPullRequest, NewStack, PrCommit, PullRequest, Stack, UpdateCommit,
 };
@@ -825,79 +824,6 @@ impl Ack {
             .map_err(|e| OperationError::with_context(e, "find_by_id", "Ack", &format!("id: {}", id)))?;
 
         Ok(rows.first().map(Self::from_row))
-    }
-
-    /// Find ACKs for pull request
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_by_pull_request(
-        tx: &Transaction<'_>,
-        pull_request_id: DbPullRequestId,
-    ) -> Result<Vec<Self>, OperationError> {
-        let rows = tx
-            .inner
-            .query(
-                r#"
-                SELECT id, pull_request_id, commit_id, reviewer_name, message, status, created_at, updated_at
-                FROM acks WHERE pull_request_id = $1 ORDER BY created_at ASC
-                "#,
-                &[&pull_request_id],
-            )
-            .await
-            .map_err(|e| OperationError::with_context(e, "find_by_pull_request", "Ack", &format!("pull_request_id: {}", pull_request_id)))?;
-
-        Ok(rows.iter().map(Self::from_row).collect())
-    }
-
-    /// Find pending ACKs
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_pending(tx: &Transaction<'_>) -> Result<Vec<Self>, OperationError> {
-        let rows = tx
-            .inner
-            .query(
-                r#"
-                SELECT id, pull_request_id, commit_id, reviewer_name, message, status, created_at, updated_at
-                FROM acks WHERE status = 'pending' ORDER BY created_at ASC
-                "#,
-                &[],
-            )
-            .await
-            .map_err(|e| OperationError::new(e, "find_pending", "Ack", None))?;
-
-        Ok(rows.iter().map(Self::from_row).collect())
-    }
-
-    /// Delete external ACKs for a pull request that match the given criteria
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn delete_external_acks_not_in_set(
-        tx: &Transaction<'_>,
-        pull_request_id: DbPullRequestId,
-        keep_keys: &HashSet<String>,
-    ) -> Result<(), OperationError> {
-        // Find external ACKs that should be deleted
-        let existing_acks = Self::find_by_pull_request(tx, pull_request_id).await?;
-
-        for ack in existing_acks {
-            if ack.status == AckStatus::External {
-                let key = format!("{}:{}", ack.reviewer_name, ack.message);
-                if !keep_keys.contains(&key) {
-                    ack.id
-                        .delete(tx)
-                        .await
-                        .map_err(OperationError::AckDeleteQuery)?;
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 

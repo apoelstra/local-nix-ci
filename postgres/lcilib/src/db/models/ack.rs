@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use core::fmt;
+use std::collections::HashSet;
 use postgres_types::{FromSql, ToSql};
 
 use super::{AckStatus, DbCommitId, DbPullRequestId};
@@ -252,6 +253,67 @@ impl Ack {
             })?;
 
         Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Find ACKs for pull request on its tip commit
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn find_by_pull_request(
+        tx: &Transaction<'_>,
+        pull_request_id: DbPullRequestId,
+    ) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx
+            .inner
+            .query(
+                r#"
+                SELECT a.id, a.pull_request_id, a.commit_id, a.reviewer_name, a.message, a.status, a.created_at, a.updated_at
+                FROM acks a
+                JOIN pull_requests pr ON a.pull_request_id = pr.id
+                WHERE a.pull_request_id = $1
+                  AND a.commit_id = pr.tip_commit_id
+                ORDER BY a.created_at ASC
+                "#,
+                &[&pull_request_id],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "find_ack_by_pull_request",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(pull_request_id.bare_i32()),
+                clauses: vec![format!("pull_request_id = {pull_request_id}")],
+                error,
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Delete external ACKs for a pull request that match the given criteria
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn delete_external_acks_not_in_set(
+        tx: &Transaction<'_>,
+        pull_request_id: DbPullRequestId,
+        keep_keys: &HashSet<String>,
+    ) -> Result<(), DbQueryError> {
+        // Find external ACKs that should be deleted
+        let existing_acks = Self::find_by_pull_request(tx, pull_request_id).await?;
+
+        for ack in existing_acks {
+            if ack.status == AckStatus::External {
+                let key = format!("{}:{}", ack.reviewer_name, ack.message);
+                if !keep_keys.contains(&key) {
+                    ack.id
+                        .delete(tx)
+                        .await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Updates an ack.
