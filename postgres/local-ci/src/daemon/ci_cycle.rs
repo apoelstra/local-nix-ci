@@ -238,12 +238,12 @@ pub async fn print_work_summary(
 
         if counts.unapproved > 0 {
             log::info(format_args!(
-                "{} PR#{} {} commits left to test ({} unapproved) (PR {})",
+                "{} PR {} {} commits left to test ({} unapproved) (PR {})",
                 repo.name, pr.pr_number, counts.untested, counts.unapproved, pr.review_status
             ));
         } else {
             log::info(format_args!(
-                "{} PR#{} {} commits left to test (PR {})",
+                "{} PR {} {} commits left to test (PR {})",
                 repo.name, pr.pr_number, counts.untested, pr.review_status
             ));
         };
@@ -322,7 +322,7 @@ pub async fn print_work_summary(
             .get_associated_prs(tx)
             .await
             .context("getting associated PRs for low-priority stack")?;
-        let pr_numbers: Vec<String> = prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
+        let pr_numbers: Vec<String> = prs.iter().map(|pr| format!(" {}", pr.pr_number)).collect();
 
         let (_total, untested) = stack
             .get_commit_counts(tx)
