@@ -333,7 +333,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
                     pr.priority,
                     pr.author_login,
                     acks.into_iter()
-                        .map(|a| format!("{} ({:.2})", a.reviewer_name, a.reviewer_score))
+                        .map(|a| format!("{} ({:.2})", a.reviewer_name, a.review_score))
                         .collect::<Vec<_>>()
                         .join(", "),
                 );

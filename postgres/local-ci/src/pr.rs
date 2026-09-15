@@ -59,7 +59,7 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
             .collect();
         let approvers_list: String = counted_acks
             .iter()
-            .map(|a| format!("{} ({:.2})", a.reviewer_name, a.reviewer_score))
+            .map(|a| format!("{} ({:.2})", a.reviewer_name, a.review_score))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -139,7 +139,7 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
                     "  {} by {} ({:.2}) ({}): {}",
                     ack.created_at.format("%Y-%m-%d %H:%M:%S"),
                     ack.reviewer_name,
-                    ack.reviewer_score,
+                    ack.review_score,
                     ack.status.with_color(),
                     ack.message
                 );
@@ -994,7 +994,7 @@ async fn show_existing_acks(
                 "  {} by {} ({:.2}) ({}): {}",
                 ack.created_at.format("%Y-%m-%d %H:%M:%S"),
                 ack.reviewer_name,
-                ack.reviewer_score,
+                ack.review_score,
                 ack.status,
                 ack.message
             );

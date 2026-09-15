@@ -42,7 +42,7 @@ pub struct Ack {
     pub reviewer_name: String,
     pub message: String,
     pub status: AckStatus,
-    pub reviewer_score: f32,
+    pub review_score: f32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -216,7 +216,7 @@ impl Ack {
             reviewer_name: row.get("reviewer_name"),
             message: row.get("message"),
             status: row.get("status"),
-            reviewer_score: row.get("reviewer_score"),
+            review_score: row.get("review_score"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -230,7 +230,7 @@ impl Ack {
             reviewer_name: row.get("reviewer_name"),
             message: row.get("message"),
             status: row.get("status"),
-            reviewer_score: 0.0,
+            review_score: 0.0,
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -239,7 +239,7 @@ impl Ack {
     /// Retrieves the list of all ACKs which are 'pending' or 'failed' and
     /// which apply to approved PRs.
     ///
-    /// Note: `reviewer_score` in the returned ACKs is always 0.0 since this
+    /// Note: `review_score` in the returned ACKs is always 0.0 since this
     /// method does not know which upstream to use for the maintainers lookup.
     ///
     /// # Errors
@@ -284,7 +284,7 @@ impl Ack {
 
     /// Find ACKs for pull request on its tip commit.
     ///
-    /// Populates `reviewer_score` from the `maintainers` table using the domain
+    /// Populates `review_score` from the `maintainers` table using the domain
     /// derived from `upstream` (github.com or git.rust-bitcoin.org). Reviewers
     /// not in the table get a score of 0.0.
     ///
@@ -310,7 +310,7 @@ impl Ack {
                     a.status,
                     a.created_at,
                     a.updated_at,
-                    COALESCE(m.review_score, 0.0::real) AS reviewer_score
+                    COALESCE(m.review_score, 0.0::real) AS review_score
                 FROM acks a
                 JOIN pull_requests pr ON a.pull_request_id = pr.id
                 LEFT JOIN maintainers m
@@ -392,7 +392,7 @@ impl Ack {
         let ret = match self.id.apply_update_no_log(tx, updates).await? {
             Some(row) => {
                 let mut updated = Self::from_row_no_score(&row);
-                updated.reviewer_score = self.reviewer_score;
+                updated.review_score = self.review_score;
                 Ok(updated)
             }
             None => Ok(self.clone()),
