@@ -3,7 +3,7 @@
 use anyhow::Context as _;
 use chrono::Utc;
 use lcilib::{
-    Db, db::{CiStatus, models::{CommitToTest, DbRepositoryId, PullRequest, Repository, ReviewStatus, Stack}}, jj::is_commit_gpg_signed
+    Db, db::{CiStatus, models::{Ack, AckStatus, CommitToTest, DbRepositoryId, PullRequest, Repository, ReviewStatus, Stack}}, jj::is_commit_gpg_signed
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -13,6 +13,8 @@ use crate::terminal::{ColorFormat, Colorable as _};
 
 use super::mark_commit_status;
 use super::{build_derivation, log, util};
+
+const TEST_COMMITS_ACK_THRESHOLD: f64 = 1.0;
 
 /// Returns all the high-priority and low-priority stacks across all repos.
 pub async fn find_stacks(
@@ -83,8 +85,7 @@ pub async fn prs_needing_testing(
             .get_ack_weight(tx, repo.repo_shell.upstream())
             .await
             .with_context(|| format!("getting ack weight for unreviewed PR {}", pr.pr_number))?;
-        println!("checking {} {} -- wght {}", repo.name, pr.pr_number, weight);
-        if weight >= 1.0 {
+        if weight >= TEST_COMMITS_ACK_THRESHOLD {
             prs_needing_testing.push(pr);
         }
     }
@@ -227,6 +228,15 @@ pub async fn print_work_summary(
     }
     for pr in prs_needing_testing {
         let repo = Repository::get_by_id(tx, pr.repository_id).await?;
+        let acks = Ack::find_by_pull_request(&tx, pr.id, repo.repo_shell.upstream())
+            .await
+            .context("failed to find ACKs for PR")?;
+        let approvers_list: String = acks
+            .iter()
+            .filter(|a| a.status == AckStatus::Posted || a.status == AckStatus::External)
+            .map(|a| format!("{} ({:.2})", a.reviewer_name, a.review_score))
+            .collect::<Vec<_>>()
+            .join(", ");
 
         let counts = pr
             .id
@@ -234,17 +244,19 @@ pub async fn print_work_summary(
             .await
             .context("getting PR commit counts")?;
 
-        if counts.unapproved > 0 {
-            log::info(format_args!(
-                "{} PR {} {} commits left to test ({} unapproved) (PR {})",
-                repo.name, pr.pr_number, counts.untested, counts.unapproved, pr.review_status
-            ));
-        } else {
-            log::info(format_args!(
-                "{} PR {} {} commits left to test (PR {})",
-                repo.name, pr.pr_number, counts.untested, pr.review_status
-            ));
-        };
+        {
+            // Scope needed so that 'preamble' won't live across any await points below, which
+            // would cause borrowck errors. Just doing 'drop(preamble)' is not sufficient.
+            let preamble = format_args!(
+                "{} PR {} {} commits left to test (PR {}) ({})",
+                repo.name, pr.pr_number, counts.untested, pr.review_status, approvers_list,
+            );
+            if counts.unapproved > 0 {
+                log::info(format_args!("{} ({} unapproved)", preamble, counts.unapproved));
+            } else {
+                log::info(preamble);
+            };
+        }
 
         // Get commits that need testing for this PR
         let commits_to_test = pr

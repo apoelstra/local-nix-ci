@@ -53,13 +53,10 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
             .await
             .context("failed to find ACKs for PR")?;
 
-        let counted_acks: Vec<&Ack> = acks
+        let approvers_list: String = acks
             .iter()
             .filter(|a| a.status == AckStatus::Posted || a.status == AckStatus::External)
-            .collect();
-        let approvers_list: String = counted_acks
-            .iter()
-            .map(|a| format!("{} ({:.2})", a.reviewer_name, a.review_score))
+             .map(|a| format!("{} ({:.2})", a.reviewer_name, a.review_score))
             .collect::<Vec<_>>()
             .join(", ");
 
