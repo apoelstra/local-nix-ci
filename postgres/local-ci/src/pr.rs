@@ -13,7 +13,8 @@ use lcilib::{
             UpdatePullRequest,
         },
     },
-    gh, git, jj, repo,
+    gh, git, jj,
+    repo::{self, Upstream},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -47,6 +48,21 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         .await
         .context("failed to query pull request")?
     {
+        // Fetch ACKs early so we can display the approvals total near the top.
+        let acks = Ack::find_by_pull_request(&tx, pr.id, repo.repo_shell.upstream())
+            .await
+            .context("failed to find ACKs for PR")?;
+
+        let counted_acks: Vec<&Ack> = acks
+            .iter()
+            .filter(|a| a.status == AckStatus::Posted || a.status == AckStatus::External)
+            .collect();
+        let approvers_list: String = counted_acks
+            .iter()
+            .map(|a| format!("{} ({:.2})", a.reviewer_name, a.reviewer_score))
+            .collect::<Vec<_>>()
+            .join(", ");
+
         println!(
             "{}: {}",
             ColorFormat::white(format_args!("{} PR {}", repo.name, pr.pr_number)),
@@ -70,6 +86,7 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         );
         println!("OK to Merge: {}", pr.ok_to_merge.with_color());
         println!("Required Reviewers: {}", pr.required_reviewers);
+        println!("Approvals: {}", approvers_list);
         println!("Created: {}", pr.created_at);
         println!("Updated: {}", pr.updated_at);
         println!("Last Synced: {}", pr.synced_at);
@@ -113,19 +130,16 @@ pub async fn info(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         }
 
         // Show ACKs
-        let acks = Ack::find_by_pull_request(&tx, pr.id)
-            .await
-            .context("failed to find ACKs for PR")?;
-
         if acks.is_empty() {
             println!("\nACKs: None");
         } else {
             println!("\nACKs:");
-            for ack in acks {
+            for ack in &acks {
                 println!(
-                    "  {} by {} ({}): {}",
+                    "  {} by {} ({:.2}) ({}): {}",
                     ack.created_at.format("%Y-%m-%d %H:%M:%S"),
                     ack.reviewer_name,
+                    ack.reviewer_score,
                     ack.status.with_color(),
                     ack.message
                 );
@@ -249,6 +263,7 @@ async fn scan_and_update_acks(
     pr_info: &gh::PrInfo,
     pr_record: &PullRequest,
     commit_records: &[Commit],
+    upstream: &Upstream,
 ) -> anyhow::Result<()> {
     use chrono::{DateTime, Utc};
     use std::collections::HashMap;
@@ -313,7 +328,7 @@ async fn scan_and_update_acks(
     }
 
     // Get all existing ACKs for this PR
-    let existing_acks = Ack::find_by_pull_request(tx, pr_record.id)
+    let existing_acks = Ack::find_by_pull_request(tx, pr_record.id, upstream)
         .await
         .context("failed to get existing ACKs")?;
 
@@ -536,7 +551,7 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         match choice {
             "1a" => {
                 if let Some(ack_message) = handle_ack_with_editor(&tip_commit, true, is_author)? {
-                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message)
+                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message, repo.repo_shell.upstream())
                         .await
                         .context("failed to create ACK")?;
 
@@ -555,7 +570,7 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
             }
             "1b" => {
                 if let Some(ack_message) = handle_ack_with_editor(&tip_commit, false, is_author)? {
-                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message)
+                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message, repo.repo_shell.upstream())
                         .await
                         .context("failed to create NACK")?;
 
@@ -573,10 +588,10 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
                 }
             }
             "2a" => {
-                show_existing_acks(&tx, pr.id).await?;
+                show_existing_acks(&tx, pr.id, repo.repo_shell.upstream()).await?;
             }
             "2b" => {
-                erase_ack(&tx, pr.id, tip_commit.id)
+                erase_ack(&tx, pr.id, tip_commit.id, repo.repo_shell.upstream())
                     .await
                     .context("failed to erase ACK")?;
                 println!("ACK erased successfully.");
@@ -922,6 +937,7 @@ async fn create_or_overwrite_ack(
     pull_request_id: DbPullRequestId,
     commit_id: DbCommitId,
     message: &str,
+    upstream: &Upstream,
 ) -> anyhow::Result<()> {
     let reviewer_name = tx
         .get_github_username()
@@ -930,7 +946,7 @@ async fn create_or_overwrite_ack(
         .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
 
     // Delete any existing ACKs by this reviewer for this PR
-    let existing_acks = Ack::find_by_pull_request(tx, pull_request_id)
+    let existing_acks = Ack::find_by_pull_request(tx, pull_request_id, upstream)
         .await
         .context("failed to find existing ACKs for PR")?;
 
@@ -963,8 +979,9 @@ async fn create_or_overwrite_ack(
 async fn show_existing_acks(
     tx: &lcilib::Transaction<'_>,
     pull_request_id: DbPullRequestId,
+    upstream: &Upstream,
 ) -> anyhow::Result<()> {
-    let acks = Ack::find_by_pull_request(tx, pull_request_id)
+    let acks = Ack::find_by_pull_request(tx, pull_request_id, upstream)
         .await
         .context("failed to find ACKs for PR")?;
 
@@ -974,9 +991,10 @@ async fn show_existing_acks(
         println!("\nExisting ACKs:");
         for ack in acks {
             println!(
-                "  {} by {} ({}): {}",
+                "  {} by {} ({:.2}) ({}): {}",
                 ack.created_at.format("%Y-%m-%d %H:%M:%S"),
                 ack.reviewer_name,
+                ack.reviewer_score,
                 ack.status,
                 ack.message
             );
@@ -991,9 +1009,10 @@ async fn erase_ack(
     tx: &lcilib::Transaction<'_>,
     pull_request_id: DbPullRequestId,
     commit_id: DbCommitId,
+    upstream: &Upstream,
 ) -> anyhow::Result<()> {
     // Find existing ACK by this reviewer for this commit
-    let acks = Ack::find_by_pull_request(tx, pull_request_id)
+    let acks = Ack::find_by_pull_request(tx, pull_request_id, upstream)
         .await
         .context("failed to find ACKs for PR")?;
 
@@ -1399,7 +1418,7 @@ pub async fn refresh(repo: &Repository, pr_info: &gh::PrInfo, db: &mut Db) -> an
     }
 
     // Scan for ACKs in GitHub comments and reviews
-    scan_and_update_acks(&tx, pr_info, &pr_record, &commit_records)
+    scan_and_update_acks(&tx, pr_info, &pr_record, &commit_records, repo.repo_shell.upstream())
         .await
         .context("failed to scan and update ACKs")?;
 

@@ -74,7 +74,7 @@ pub async fn overview(db: &mut Db) -> anyhow::Result<()> {
     // Get all ACKs for PRs in this repository
     let mut all_acks = Vec::new();
     for pr in &all_prs {
-        let pr_acks = Ack::find_by_pull_request(&tx, pr.id)
+        let pr_acks = Ack::find_by_pull_request(&tx, pr.id, repo.repo_shell.upstream())
             .await
             .context("failed to get ACKs for PR")?;
         all_acks.extend(pr_acks);
@@ -320,7 +320,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
             );
             for commit in &commits {
                 let pr = &commit.prs[0].0;
-                let acks = Ack::find_by_pull_request(tx, pr.id)
+                let acks = Ack::find_by_pull_request(tx, pr.id, repo.repo_shell.upstream())
                     .await
                     .context("failed to find ACKs for PR")?;
 
@@ -333,7 +333,7 @@ async fn show_stacks(tx: &lcilib::Transaction<'_>, stacks: &[Stack]) -> anyhow::
                     pr.priority,
                     pr.author_login,
                     acks.into_iter()
-                        .map(|a| a.reviewer_name)
+                        .map(|a| format!("{} ({:.2})", a.reviewer_name, a.reviewer_score))
                         .collect::<Vec<_>>()
                         .join(", "),
                 );

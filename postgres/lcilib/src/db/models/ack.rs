@@ -7,6 +7,7 @@ use postgres_types::{FromSql, ToSql};
 
 use super::{AckStatus, DbCommitId, DbPullRequestId};
 use crate::db::{DbQueryError, EntityType, Transaction, util::log_action};
+use crate::repo::Upstream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
 #[postgres(transparent)]
@@ -25,6 +26,13 @@ impl fmt::Display for DbAckId {
     }
 }
 
+fn domain_for_upstream(upstream: &Upstream) -> &'static str {
+    match *upstream {
+        Upstream::Github => "github.com",
+        Upstream::Forgejo(_) => "git.rust-bitcoin.org",
+    }
+}
+
 /// ACK model
 #[derive(Debug, Clone)]
 pub struct Ack {
@@ -34,6 +42,7 @@ pub struct Ack {
     pub reviewer_name: String,
     pub message: String,
     pub status: AckStatus,
+    pub reviewer_score: f32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -207,6 +216,21 @@ impl Ack {
             reviewer_name: row.get("reviewer_name"),
             message: row.get("message"),
             status: row.get("status"),
+            reviewer_score: row.get("reviewer_score"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }
+    }
+
+    pub(crate) fn from_row_no_score(row: &tokio_postgres::Row) -> Self {
+        Self {
+            id: row.get("id"),
+            pull_request_id: row.get("pull_request_id"),
+            commit_id: row.get("commit_id"),
+            reviewer_name: row.get("reviewer_name"),
+            message: row.get("message"),
+            status: row.get("status"),
+            reviewer_score: 0.0,
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -214,6 +238,9 @@ impl Ack {
 
     /// Retrieves the list of all ACKs which are 'pending' or 'failed' and
     /// which apply to approved PRs.
+    ///
+    /// Note: `reviewer_score` in the returned ACKs is always 0.0 since this
+    /// method does not know which upstream to use for the maintainers lookup.
     ///
     /// # Errors
     ///
@@ -252,10 +279,14 @@ impl Ack {
                 error,
             })?;
 
-        Ok(rows.iter().map(Self::from_row).collect())
+        Ok(rows.iter().map(Self::from_row_no_score).collect())
     }
 
-    /// Find ACKs for pull request on its tip commit
+    /// Find ACKs for pull request on its tip commit.
+    ///
+    /// Populates `reviewer_score` from the `maintainers` table using the domain
+    /// derived from `upstream` (github.com or git.rust-bitcoin.org). Reviewers
+    /// not in the table get a score of 0.0.
     ///
     /// # Errors
     ///
@@ -263,19 +294,33 @@ impl Ack {
     pub async fn find_by_pull_request(
         tx: &Transaction<'_>,
         pull_request_id: DbPullRequestId,
+        upstream: &Upstream,
     ) -> Result<Vec<Self>, DbQueryError> {
+        let domain = domain_for_upstream(upstream);
         let rows = tx
             .inner
             .query(
                 r#"
-                SELECT a.id, a.pull_request_id, a.commit_id, a.reviewer_name, a.message, a.status, a.created_at, a.updated_at
+                SELECT
+                    a.id,
+                    a.pull_request_id,
+                    a.commit_id,
+                    a.reviewer_name,
+                    a.message,
+                    a.status,
+                    a.created_at,
+                    a.updated_at,
+                    COALESCE(m.review_score, 0.0::real) AS reviewer_score
                 FROM acks a
                 JOIN pull_requests pr ON a.pull_request_id = pr.id
+                LEFT JOIN maintainers m
+                    ON m.username = a.reviewer_name
+                   AND m.domain = $2
                 WHERE a.pull_request_id = $1
                   AND a.commit_id = pr.tip_commit_id
                 ORDER BY a.created_at ASC
                 "#,
-                &[&pull_request_id],
+                &[&pull_request_id, &domain],
             )
             .await
             .map_err(|error| DbQueryError {
@@ -299,16 +344,34 @@ impl Ack {
         pull_request_id: DbPullRequestId,
         keep_keys: &HashSet<String>,
     ) -> Result<(), DbQueryError> {
-        // Find external ACKs that should be deleted
-        let existing_acks = Self::find_by_pull_request(tx, pull_request_id).await?;
+        let rows = tx
+            .inner
+            .query(
+                r#"
+                SELECT a.id, a.pull_request_id, a.commit_id, a.reviewer_name, a.message, a.status, a.created_at, a.updated_at
+                FROM acks a
+                JOIN pull_requests pr ON a.pull_request_id = pr.id
+                WHERE a.pull_request_id = $1
+                  AND a.commit_id = pr.tip_commit_id
+                ORDER BY a.created_at ASC
+                "#,
+                &[&pull_request_id],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "find_ack_by_pull_request",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(pull_request_id.bare_i32()),
+                clauses: vec![format!("pull_request_id = {pull_request_id}")],
+                error,
+            })?;
 
-        for ack in existing_acks {
+        for row in &rows {
+            let ack = Self::from_row_no_score(row);
             if ack.status == AckStatus::External {
                 let key = format!("{}:{}", ack.reviewer_name, ack.message);
                 if !keep_keys.contains(&key) {
-                    ack.id
-                        .delete(tx)
-                        .await?;
+                    ack.id.delete(tx).await?;
                 }
             }
         }
@@ -327,7 +390,11 @@ impl Ack {
         updates: &UpdateAck,
     ) -> Result<Self, DbQueryError> {
         let ret = match self.id.apply_update_no_log(tx, updates).await? {
-            Some(row) => Ok(Self::from_row(&row)),
+            Some(row) => {
+                let mut updated = Self::from_row_no_score(&row);
+                updated.reviewer_score = self.reviewer_score;
+                Ok(updated)
+            }
             None => Ok(self.clone()),
         };
         log_action(
