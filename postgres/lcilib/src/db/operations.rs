@@ -3,9 +3,9 @@
 use tokio_postgres::Error;
 
 use super::models::{
-    Ack, AllowedApprover, Commit, CommitType, DbAckId, DbCommitId, DbPrCommitId,
-    DbPullRequestId, DbRepositoryId, LogEntry, NewAck, NewAllowedApprover, NewCommit,
-    NewPullRequest, NewStack, PrCommit, PullRequest, Stack, UpdateCommit,
+    Ack, Commit, CommitType, DbAckId, DbCommitId, DbPrCommitId, DbPullRequestId, DbRepositoryId,
+    LogEntry, NewAck, NewCommit, NewPullRequest, NewStack, PrCommit, PullRequest, Stack,
+    UpdateCommit,
 };
 use super::util::{self, EntityType};
 use crate::db::{DbQueryError, Transaction};
@@ -824,112 +824,6 @@ impl Ack {
             .map_err(|e| OperationError::with_context(e, "find_by_id", "Ack", &format!("id: {}", id)))?;
 
         Ok(rows.first().map(Self::from_row))
-    }
-}
-
-/// `AllowedApprover` operations
-impl AllowedApprover {
-    /// Create a new allowed approver
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn create(
-        tx: &Transaction<'_>,
-        new_approver: NewAllowedApprover,
-    ) -> Result<Self, OperationError> {
-        let row = tx
-            .inner
-            .query_one(
-                r#"
-                INSERT INTO allowed_approvers (repository_id, approver_name)
-                VALUES ($1, $2)
-                RETURNING id, repository_id, approver_name, created_at
-                "#,
-                &[&new_approver.repository_id, &new_approver.approver_name],
-            )
-            .await
-            .map_err(|e| {
-                OperationError::with_context(
-                    e,
-                    "create",
-                    "AllowedApprover",
-                    &format!("approver_name: {}", new_approver.approver_name),
-                )
-            })?;
-
-        let approver = Self::from_row(&row);
-
-        util::log_action(
-            tx,
-            EntityType::System,
-            0,
-            "approver_added",
-            Some(&format!("Added approver: {}", approver.approver_name)),
-            None,
-        )
-        .await
-        .map_err(OperationError::LogQuery)?;
-
-        Ok(approver)
-    }
-
-    /// Find approvers for repository
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_by_repository(
-        tx: &Transaction<'_>,
-        repository_id: DbRepositoryId,
-    ) -> Result<Vec<Self>, OperationError> {
-        let rows = tx
-            .inner
-            .query(
-                "SELECT id, repository_id, approver_name, created_at FROM allowed_approvers WHERE repository_id = $1",
-                &[&repository_id],
-            )
-            .await
-            .map_err(|e| OperationError::with_context(e, "find_by_repository", "AllowedApprover", &format!("repository_id: {}", repository_id)))?;
-
-        Ok(rows.iter().map(Self::from_row).collect())
-    }
-
-    /// Check if user is allowed approver
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn is_allowed_approver(
-        tx: &Transaction<'_>,
-        repository_id: DbRepositoryId,
-        approver_name: &str,
-    ) -> Result<bool, OperationError> {
-        let row = tx
-            .inner
-            .query_one(
-                r#"
-                SELECT EXISTS (
-                    SELECT 1 FROM allowed_approvers
-                    WHERE repository_id = $1 AND approver_name = $2
-                )
-                "#,
-                &[&repository_id, &approver_name],
-            )
-            .await
-            .map_err(|e| {
-                OperationError::with_context(
-                    e,
-                    "is_allowed_approver",
-                    "AllowedApprover",
-                    &format!(
-                        "repository_id: {}, approver_name: {}",
-                        repository_id, approver_name
-                    ),
-                )
-            })?;
-
-        Ok(row.get::<_, bool>(0))
     }
 }
 

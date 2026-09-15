@@ -6,7 +6,7 @@ use tokio_postgres::Client;
 // WARNING: you must decode integers from Postgres as i32s. If you try to use u32, it will
 // fail (expecting an OID, will give an opaque "failed to decode" error).
 // See https://docs.rs/tokio-postgres/latest/tokio_postgres/types/trait.FromSql.html
-const EXPECTED_SCHEMA_VERSION: i32 = 1;
+const EXPECTED_SCHEMA_VERSION: i32 = 2;
 
 /// Ensure the database contains exactly the schema version this binary expects.
 pub(super) async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError> {
@@ -15,7 +15,6 @@ pub(super) async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError
         action: "create transaction",
     })?;
 
-    // Treat "the global metadata table exists" as indicating that the database has been initialized.
     let meta_exists = table_exists(&tx, "global")
         .await
         .map_err(|e| SchemaError::Db {
@@ -23,45 +22,66 @@ pub(super) async fn ensure_schema(client: &mut Client) -> Result<(), SchemaError
             action: "check for 'global' table",
         })?;
 
-    if meta_exists {
-        let row = tx
-            .query_opt("SELECT schema_version FROM global LIMIT 1", &[])
+    if !meta_exists {
+        // Fresh install: run v1 then v2 in one transaction.
+        tx.batch_execute(include_str!("../../sql/schema_v1.sql"))
             .await
             .map_err(|e| SchemaError::Db {
                 e,
-                action: "select schema_version from 'global' table",
+                action: "execute schema_v1.sql",
             })?;
-
-        let Some(row) = row else {
-            return Err(SchemaError::MissingOrInvalidMetaRow);
-        };
-
-        let version = row.get::<_, i32>(0);
-        if version != EXPECTED_SCHEMA_VERSION {
-            return Err(SchemaError::IncompatibleVersion {
-                found: version,
-                expected: EXPECTED_SCHEMA_VERSION,
-            });
-        }
-
+        tx.batch_execute(include_str!("../../sql/schema_v2.sql"))
+            .await
+            .map_err(|e| SchemaError::Db {
+                e,
+                action: "execute schema_v2.sql",
+            })?;
         tx.commit().await.map_err(|e| SchemaError::Db {
             e,
-            action: "commit transaction (select version)",
+            action: "commit transaction (fresh install)",
         })?;
         return Ok(());
     }
 
-    tx.batch_execute(include_str!("../../sql/schema_v1.sql"))
+    let row = tx
+        .query_opt("SELECT schema_version FROM global LIMIT 1", &[])
         .await
         .map_err(|e| SchemaError::Db {
             e,
-            action: "execute schema_v1.sql",
+            action: "select schema_version from 'global' table",
         })?;
-    tx.commit().await.map_err(|e| SchemaError::Db {
-        e,
-        action: "commit transaction (execute schema_v1.sql)",
-    })?;
-    Ok(())
+
+    let Some(row) = row else {
+        return Err(SchemaError::MissingOrInvalidMetaRow);
+    };
+
+    let version = row.get::<_, i32>(0);
+    match version {
+        2 => {
+            tx.commit().await.map_err(|e| SchemaError::Db {
+                e,
+                action: "commit transaction (select version)",
+            })?;
+            Ok(())
+        }
+        1 => {
+            tx.batch_execute(include_str!("../../sql/schema_v2.sql"))
+                .await
+                .map_err(|e| SchemaError::Db {
+                    e,
+                    action: "execute schema_v2.sql",
+                })?;
+            tx.commit().await.map_err(|e| SchemaError::Db {
+                e,
+                action: "commit transaction (migrate v1->v2)",
+            })?;
+            Ok(())
+        }
+        found => Err(SchemaError::IncompatibleVersion {
+            found,
+            expected: EXPECTED_SCHEMA_VERSION,
+        }),
+    }
 }
 
 #[derive(Debug)]

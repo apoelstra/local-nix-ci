@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod ack;
-mod allowed_approver;
 mod commit;
 pub mod log;
 mod log_entry;
+mod maintainer;
 mod pr_commit;
 mod pull_request;
 mod repository;
@@ -15,10 +15,10 @@ use postgres_types::{FromSql, ToSql};
 use std::fmt;
 
 pub use ack::{Ack, DbAckId, NewAck, UpdateAck};
-pub use allowed_approver::{AllowedApprover, DbAllowedApproverId, NewAllowedApprover};
 pub use commit::{CiStatus, Commit, CommitToTest, DbCommitId, NewCommit, UpdateCommit};
 pub use log::Log;
 pub use log_entry::{DbLogEntryId, LogEntry};
+pub use maintainer::{DbMaintainerId, Maintainer, NewMaintainer};
 pub use pr_commit::{DbPrCommitId, PrCommit};
 pub use pull_request::{DbPullRequestId, NewPullRequest, PrNumber, PullRequest, UpdatePullRequest};
 pub use repository::{DbRepositoryId, NewRepository, Repository, RepositoryError};
