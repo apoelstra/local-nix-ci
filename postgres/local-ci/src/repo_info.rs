@@ -172,7 +172,7 @@ async fn show_daemon_work(tx: &lcilib::Transaction<'_>) -> anyhow::Result<()> {
     let (high_priority_stacks, low_priority_stacks) = crate::daemon::find_stacks(tx)
         .await
         .context("finding stacks")?;
-    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(tx)
+    let prs_needing_testing = crate::daemon::prs_needing_testing(tx)
         .await
         .context("finding PRs needing testing")?;
 

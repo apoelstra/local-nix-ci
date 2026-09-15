@@ -3,10 +3,7 @@
 use anyhow::Context as _;
 use chrono::Utc;
 use lcilib::{
-    Db,
-    db::CiStatus,
-    db::models::{CommitToTest, DbRepositoryId, PullRequest, Repository, ReviewStatus, Stack},
-    jj::is_commit_gpg_signed,
+    Db, db::{CiStatus, models::{CommitToTest, DbRepositoryId, PullRequest, Repository, ReviewStatus, Stack}}, jj::is_commit_gpg_signed
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -66,6 +63,35 @@ pub async fn find_stacks(
     Ok((high_priority, low_priority))
 }
 
+pub async fn prs_needing_testing(
+    tx: &lcilib::Transaction<'_>,
+) -> Result<Vec<PullRequest>, anyhow::Error> {
+    // Lookup PRs "needing testing" (i.e. which have any untested approved commits).
+    let mut prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx)
+        .await
+        .context("finding approved PRs needing testing")?;
+    // Separately, lookup PRs that are unapproved and (in Rust) see if any have enough ACK weight
+    // that they should also be considered "needing testing".
+    let unreviewed_prs = PullRequest::find_unreviewed_with_pending_tests(tx)
+        .await
+        .context("finding unreviewed PRs with pending CI")?;
+    for pr in unreviewed_prs {
+        let repo = Repository::get_by_id(tx, pr.repository_id)
+            .await
+            .with_context(|| format!("getting repo for unreviewed PR {}", pr.pr_number))?;
+        let weight = pr
+            .get_ack_weight(tx, repo.repo_shell.upstream())
+            .await
+            .with_context(|| format!("getting ack weight for unreviewed PR {}", pr.pr_number))?;
+        println!("checking {} {} -- wght {}", repo.name, pr.pr_number, weight);
+        if weight >= 1.0 {
+            prs_needing_testing.push(pr);
+        }
+    }
+
+    Ok(prs_needing_testing)
+}
+
 /// Find the next commit that needs testing, following the priority rules
 ///
 /// # Errors
@@ -80,9 +106,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
         .context("finding standalone approved commits")?;
     let (high_priority_stacks, low_priority_stacks) =
         find_stacks(&tx).await.context("finding stacks")?;
-    let prs_needing_testing = PullRequest::find_needing_testing_prioritized(&tx)
-        .await
-        .context("finding PRs needing testing")?;
+    let prs_needing_testing = prs_needing_testing(&tx).await?;
 
     print_work_summary(
         &tx,
@@ -142,32 +166,6 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
             .get_next_untested_commit(&tx)
             .await
             .context("getting next untested commit from PR")?
-        {
-            tx.commit().await.context("committing transaction")?;
-            return Ok(Some(commit));
-        }
-    }
-
-    // 3b. Check unreviewed PRs with ack_weight >= 1.0
-    let unreviewed_prs = PullRequest::find_unreviewed_with_pending_tests(&tx)
-        .await
-        .context("finding unreviewed PRs with pending CI")?;
-
-    for pr in &unreviewed_prs {
-        let repo = Repository::get_by_id(&tx, pr.repository_id)
-            .await
-            .context("getting repo for unreviewed PR")?;
-        let weight = pr
-            .get_ack_weight(&tx, repo.repo_shell.upstream())
-            .await
-            .context("getting ack weight for unreviewed PR")?;
-        if weight < 1.0 {
-            continue;
-        }
-        if let Some(commit) = pr
-            .get_next_pending_ci_commit(&tx)
-            .await
-            .context("getting next pending CI commit for unreviewed PR")?
         {
             tx.commit().await.context("committing transaction")?;
             return Ok(Some(commit));

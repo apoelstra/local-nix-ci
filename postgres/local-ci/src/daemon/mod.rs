@@ -19,7 +19,7 @@ use lcilib::{git, jj};
 use std::time::Duration;
 use tokio::time;
 
-pub use self::ci_cycle::{find_stacks, print_work_summary};
+pub use self::ci_cycle::{find_stacks, print_work_summary, prs_needing_testing};
 
 pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     log::info(format_args!("Starting local-ci daemon..."));
