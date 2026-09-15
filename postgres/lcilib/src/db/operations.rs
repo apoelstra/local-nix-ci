@@ -3,7 +3,7 @@
 use tokio_postgres::Error;
 
 use super::models::{
-    Ack, Commit, CommitType, DbAckId, DbCommitId, DbPrCommitId, DbPullRequestId, DbRepositoryId,
+    Ack, Commit, CommitType, DbCommitId, DbPrCommitId, DbPullRequestId, DbRepositoryId,
     LogEntry, NewAck, NewCommit, NewPullRequest, NewStack, PrCommit, PullRequest, Stack,
     UpdateCommit,
 };
@@ -761,7 +761,10 @@ impl Stack {
 
 /// `Ack` operations
 impl Ack {
-    /// Create a new ACK
+    /// Create a new ACK.
+    ///
+    /// Sets the "reviewer score" to 0.0 since this method is intended to be used to insert
+    /// ACKs into the database, and individual ACKs don't have a score stored alongside them.
     ///
     /// # Errors
     ///
@@ -786,7 +789,7 @@ impl Ack {
             .await
             .map_err(|e| OperationError::with_context(e, "create", "Ack", &format!("reviewer: {}", new_ack.reviewer_name)))?;
 
-        let ack = Self::from_row(&row);
+        let ack = Self::from_row_no_score(&row);
 
         util::log_action(
             tx,
@@ -800,30 +803,6 @@ impl Ack {
         .map_err(OperationError::LogQuery)?;
 
         Ok(ack)
-    }
-
-    /// Find ACK by ID
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_by_id(
-        tx: &Transaction<'_>,
-        id: DbAckId,
-    ) -> Result<Option<Self>, OperationError> {
-        let rows = tx
-            .inner
-            .query(
-                r#"
-                SELECT id, pull_request_id, commit_id, reviewer_name, message, status, created_at, updated_at
-                FROM acks WHERE id = $1
-                "#,
-                &[&id],
-            )
-            .await
-            .map_err(|e| OperationError::with_context(e, "find_by_id", "Ack", &format!("id: {}", id)))?;
-
-        Ok(rows.first().map(Self::from_row))
     }
 }
 

@@ -208,7 +208,7 @@ impl DbAckId {
 }
 
 impl Ack {
-    pub(crate) fn from_row(row: &tokio_postgres::Row) -> Self {
+    fn from_row(row: &tokio_postgres::Row) -> Self {
         Self {
             id: row.get("id"),
             pull_request_id: row.get("pull_request_id"),
