@@ -163,13 +163,23 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     });
 
     for (pr, _all_approved, _neg_untested, _age) in &prioritized_prs {
-        if let Some(commit) = pr
-            .get_next_untested_commit(&tx)
+        for commit in pr.get_next_untested_commits(&tx)
             .await
-            .context("getting next untested commit from PR")?
+            .context("getting next untested commits from PR")?
         {
-            tx.commit().await.context("committing transaction")?;
-            return Ok(Some(commit));
+            // This is computed redundantly in `print_work_summary`, and we don't even need to
+            // compute it if commit.review_status is Approved ... in general we should refactor
+            // to be smarter about when we compute this value. Maybe it should be field of
+            // PullRequest even.
+            let repo = Repository::get_by_id(&tx, pr.repository_id).await?;
+            let ack_weight = pr
+                .get_ack_weight(&tx, repo.repo_shell.upstream())
+                .await
+                .with_context(|| format!("getting ack weight for unreviewed PR {}", pr.pr_number))?;
+            if ack_weight >= TEST_COMMITS_ACK_THRESHOLD || commit.review_status == ReviewStatus::Approved {
+                tx.commit().await.context("committing transaction")?;
+                return Ok(Some(commit));
+            }
         }
     }
 
@@ -237,6 +247,12 @@ pub async fn print_work_summary(
             .map(|a| format!("{} ({:.2})", a.reviewer_name, a.review_score))
             .collect::<Vec<_>>()
             .join(", ");
+        // This could be computed from `acks` above, as an optimization, but I'd prefer that we
+        // be consistent than fast. Can revisit this if it matters.
+        let ack_weight = pr
+            .get_ack_weight(tx, repo.repo_shell.upstream())
+            .await
+            .with_context(|| format!("getting ack weight for unreviewed PR {}", pr.pr_number))?;
 
         let counts = pr
             .id
@@ -248,8 +264,8 @@ pub async fn print_work_summary(
             // Scope needed so that 'preamble' won't live across any await points below, which
             // would cause borrowck errors. Just doing 'drop(preamble)' is not sufficient.
             let preamble = format_args!(
-                "{} PR {} {} commits left to test (PR {}) ({})",
-                repo.name, pr.pr_number, counts.untested, pr.review_status, approvers_list,
+                "{} PR {} {} commits approved but untested (PR {}) ({})",
+                repo.name, pr.pr_number, counts.untested, pr.review_status.with_color(), approvers_list,
             );
             if counts.unapproved > 0 {
                 log::info(format_args!("{} ({} unapproved)", preamble, counts.unapproved));
@@ -266,7 +282,7 @@ pub async fn print_work_summary(
             .context("getting commits needing testing for PR")?;
 
         for commit in commits_to_test {
-            if commit.review_status == ReviewStatus::Approved
+            if (ack_weight >= TEST_COMMITS_ACK_THRESHOLD || commit.review_status == ReviewStatus::Approved)
                 && commit.ci_status == CiStatus::Unstarted
                 && commit.should_run_ci
             {

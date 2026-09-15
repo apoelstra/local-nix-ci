@@ -561,15 +561,15 @@ impl PullRequest {
         Ok(weight)
     }
 
-    /// Get the next untested approved commit for this PR
+    /// Get untested commits for this PR.
     ///
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn get_next_untested_commit(
+    pub async fn get_next_untested_commits(
         &self,
         tx: &Transaction<'_>,
-    ) -> Result<Option<CommitToTest>, DbQueryError> {
+    ) -> Result<Vec<CommitToTest>, DbQueryError> {
         let rows = tx
             .inner
             .query(
@@ -586,11 +586,9 @@ impl PullRequest {
                 JOIN pull_requests pr ON pc.pull_request_id = pr.id
                 WHERE pc.pull_request_id = $1
                 AND pc.is_current = true
-                AND c.review_status = 'approved'
                 AND c.ci_status = 'unstarted'
                 AND c.should_run_ci = true
                 ORDER BY pc.sequence_order ASC
-                LIMIT 1
                 "#,
                 &[&self.id],
             )
@@ -605,34 +603,31 @@ impl PullRequest {
                 }
             })?;
 
-        let Some(row) = rows.first() else {
-            return Ok(None);
-        };
+        Ok(rows.into_iter().map(|row| {
+            let commit_type = row.get("commit_type");
+            let pr = Self {
+                id: row.get("pr_id"),
+                repository_id: row.get("pr_repository_id"),
+                pr_number: row.get("pr_number"),
+                title: row.get("title"),
+                body: row.get("body"),
+                author_login: row.get("author_login"),
+                target_branch: row.get("target_branch"),
+                tip_commit_id: row.get("tip_commit_id"),
+                merge_status: row.get("merge_status"),
+                review_status: row.get("pr_review_status"),
+                priority: row.get("priority"),
+                ok_to_merge: row.get("ok_to_merge"),
+                required_reviewers: row.get("required_reviewers"),
+                created_at: row.get("pr_created_at"),
+                updated_at: row.get("pr_updated_at"),
+                synced_at: row.get("pr_synced_at"),
+            };
 
-        let commit_type = row.get("commit_type");
-        let pr = Self {
-            id: row.get("pr_id"),
-            repository_id: row.get("pr_repository_id"),
-            pr_number: row.get("pr_number"),
-            title: row.get("title"),
-            body: row.get("body"),
-            author_login: row.get("author_login"),
-            target_branch: row.get("target_branch"),
-            tip_commit_id: row.get("tip_commit_id"),
-            merge_status: row.get("merge_status"),
-            review_status: row.get("pr_review_status"),
-            priority: row.get("priority"),
-            ok_to_merge: row.get("ok_to_merge"),
-            required_reviewers: row.get("required_reviewers"),
-            created_at: row.get("pr_created_at"),
-            updated_at: row.get("pr_updated_at"),
-            synced_at: row.get("pr_synced_at"),
-        };
-
-        let mut commit = CommitToTest::from_row(row);
-        commit.prs.push((pr, commit_type));
-
-        Ok(Some(commit))
+            let mut commit = CommitToTest::from_row(&row);
+            commit.prs.push((pr, commit_type));
+            commit
+        }).collect())
     }
 
     /// Get the next untested current non-merge commit for this PR, ignoring
