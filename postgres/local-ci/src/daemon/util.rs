@@ -81,36 +81,12 @@ async fn calculate_commit_priority(
     // Start with: 10 × PR priority
     let mut priority = 10.0 * f64::from(base_priority);
 
-    // Add user priority offset based on PR author
+    // Add user priority offset: a fixed offset keyed on the PR author,
+    // distinct from (and independent of) the ACK-counting logic below.
     let user_offset = UserPriorityOffset::get_offset_by_username(tx, &oldest_pr.author_login)
         .await
         .context("getting user priority offset")?;
     priority += f64::from(user_offset);
-
-    // Add: +1 for every ACK, but dock for my own ACKs
-    let total_ack_count = oldest_pr
-        .get_ack_count(tx)
-        .await
-        .context("getting ACK count")?;
-    let my_ack_count = oldest_pr
-        .get_my_ack_count(tx)
-        .await
-        .context("getting my ACK count")?;
-
-    let others_ack_count = total_ack_count - my_ack_count;
-    let is_my_pr = oldest_pr
-        .is_mine(tx)
-        .await
-        .context("checking if PR is mine")?;
-
-    // Full credit for others' ACKs
-    priority += others_ack_count as f64;
-
-    // Reduced credit for my own ACKs
-    if my_ack_count > 0 {
-        let my_ack_factor = if is_my_pr { 0.25 } else { 0.75 };
-        priority += (my_ack_count as f64) * my_ack_factor;
-    }
 
     // Add: +0.5 if GPG-signed already
     let repo = Repository::get_by_id(tx, commit.repository_id).await?;
@@ -125,6 +101,17 @@ async fn calculate_commit_priority(
             // Assume unsigned
         }
     }
+
+    // Add weighted ACK contribution. `get_ack_weight` sums maintainer review
+    // scores across pending/posted/external ACKs on the tip commit, and
+    // internally scales by 0.25 if the PR author is the configured user.
+    // Multiply by 3 so a strong reviewer weighting typically dominates
+    // everything except the operator-set user priority offset.
+    let ack_weight = oldest_pr
+        .get_ack_weight(tx, repo.repo_shell.upstream())
+        .await
+        .context("getting ACK weight")?;
+    priority += 3.0 * ack_weight;
 
     // Add: +0.1 per day based on creation time of its PR
     let age_days = (Utc::now() - oldest_pr.created_at).num_days();

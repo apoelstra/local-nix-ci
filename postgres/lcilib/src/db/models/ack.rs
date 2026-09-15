@@ -26,7 +26,7 @@ impl fmt::Display for DbAckId {
     }
 }
 
-fn domain_for_upstream(upstream: &Upstream) -> &'static str {
+pub(crate) fn domain_for_upstream(upstream: &Upstream) -> &'static str {
     match *upstream {
         Upstream::Github => "github.com",
         Upstream::Forgejo(_) => "git.rust-bitcoin.org",

@@ -7,6 +7,7 @@ use postgres_types::{FromSql, ToSql};
 
 use super::{CommitCounts, CommitToTest, DbCommitId, DbRepositoryId, MergeStatus, ReviewStatus};
 use crate::db::{DbQueryError, EntityType, Transaction, util::log_action};
+use crate::repo::Upstream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromSql, ToSql)]
 #[postgres(transparent)]
@@ -512,82 +513,52 @@ impl PullRequest {
         }
     }
 
-    /// Get the number of valid ACKs for this pull request
-    /// Only counts 'posted' and 'external' ACKs for the tip commit
+    /// Sum the maintainer review-score weights of ACKs on this PR's tip commit.
+    ///
+    /// Considers ACKs with status `pending`, `posted`, or `external`. Each ACK
+    /// contributes `maintainers.review_score` (matched by reviewer_name and the
+    /// domain derived from `upstream`), or 0.0 if the reviewer is not a listed
+    /// maintainer. If the PR author is the configured GitHub user, the total
+    /// weight is scaled by 0.25.
     ///
     /// # Errors
     ///
     /// Returns an error if the database operation fails.
-    pub async fn get_ack_count(&self, tx: &Transaction<'_>) -> Result<i64, DbQueryError> {
+    pub async fn get_ack_weight(
+        &self,
+        tx: &Transaction<'_>,
+        upstream: &Upstream,
+    ) -> Result<f64, DbQueryError> {
+        let domain = crate::db::models::ack::domain_for_upstream(upstream);
         let row = tx
             .inner
             .query_one(
                 r#"
-                SELECT COUNT(*)
-                FROM acks
-                WHERE pull_request_id = $1
-                AND commit_id = $2
-                AND status IN ('posted', 'external')
+                SELECT COALESCE(SUM(COALESCE(m.review_score, 0.0::real)), 0.0::real) AS weight
+                FROM acks a
+                LEFT JOIN maintainers m
+                    ON m.username = a.reviewer_name
+                   AND m.domain = $3
+                WHERE a.pull_request_id = $1
+                  AND a.commit_id = $2
+                  AND a.status IN ('pending', 'posted', 'external')
                 "#,
-                &[&self.id, &self.tip_commit_id],
+                &[&self.id, &self.tip_commit_id, &domain],
             )
             .await
             .map_err(|error| DbQueryError {
-                action: "get_ack_count",
+                action: "get_ack_weight",
                 entity_type: EntityType::PullRequest,
                 raw_id: Some(self.id.bare_i32()),
                 clauses: vec![],
                 error,
             })?;
 
-        Ok(row.get::<_, i64>(0))
-    }
-
-    /// Get the number of valid ACKs from the configured user for this pull request
-    /// Only counts 'posted' and 'external' ACKs for the tip commit from my username
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn get_my_ack_count(&self, tx: &Transaction<'_>) -> Result<i64, DbQueryError> {
-        let username = tx
-            .get_github_username()
-            .await
-            .map_err(|error| DbQueryError {
-                action: "query global username",
-                entity_type: EntityType::PullRequest,
-                raw_id: Some(self.id.bare_i32()),
-                clauses: vec![],
-                error,
-            })?;
-
-        let Some(username) = username else {
-            return Ok(0);
-        };
-
-        let row = tx
-            .inner
-            .query_one(
-                r#"
-                SELECT COUNT(*)
-                FROM acks
-                WHERE pull_request_id = $1
-                AND commit_id = $2
-                AND status IN ('posted', 'external')
-                AND reviewer_name = $3
-                "#,
-                &[&self.id, &self.tip_commit_id, &username],
-            )
-            .await
-            .map_err(|error| DbQueryError {
-                action: "get_my_ack_count",
-                entity_type: EntityType::PullRequest,
-                raw_id: Some(self.id.bare_i32()),
-                clauses: vec![],
-                error,
-            })?;
-
-        Ok(row.get::<_, i64>(0))
+        let mut weight = f64::from(row.get::<_, f32>("weight"));
+        if self.is_mine(tx).await? {
+            weight *= 0.25;
+        }
+        Ok(weight)
     }
 
     /// Get the next untested approved commit for this PR
