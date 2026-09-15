@@ -148,6 +148,32 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
         }
     }
 
+    // 3b. Check unreviewed PRs with ack_weight >= 1.0
+    let unreviewed_prs = PullRequest::find_unreviewed_with_pending_tests(&tx)
+        .await
+        .context("finding unreviewed PRs with pending CI")?;
+
+    for pr in &unreviewed_prs {
+        let repo = Repository::get_by_id(&tx, pr.repository_id)
+            .await
+            .context("getting repo for unreviewed PR")?;
+        let weight = pr
+            .get_ack_weight(&tx, repo.repo_shell.upstream())
+            .await
+            .context("getting ack weight for unreviewed PR")?;
+        if weight < 1.0 {
+            continue;
+        }
+        if let Some(commit) = pr
+            .get_next_pending_ci_commit(&tx)
+            .await
+            .context("getting next pending CI commit for unreviewed PR")?
+        {
+            tx.commit().await.context("committing transaction")?;
+            return Ok(Some(commit));
+        }
+    }
+
     // 4. Check low-priority stacks (negative priority or conflicting)
     for (_stack, commits) in &low_priority_stacks {
         for commit in commits {

@@ -283,6 +283,39 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
         }
     }
 
+    // Also process unreviewed PRs with ack_weight >= 2.0
+    let unreviewed_mergeable = db
+        .with_transaction(async |tx| {
+            use lcilib::db::models::RepositoryError;
+
+            let candidates = PullRequest::get_unreviewed_fully_ci_tested_prs(&tx)
+                .await
+                .map_err(RepositoryError::Query)?;
+            let mut result = Vec::new();
+            for pr in candidates {
+                let repo = Repository::get_by_id(&tx, pr.repository_id).await?;
+                let weight = pr
+                    .get_ack_weight(&tx, repo.repo_shell.upstream())
+                    .await
+                    .map_err(RepositoryError::Query)?;
+                if weight >= 2.0 {
+                    result.push(pr);
+                }
+            }
+            Ok::<_, RepositoryError>(result)
+        })
+        .await
+        .context("getting ack-weighted mergeable PRs")?;
+
+    for pr in unreviewed_mergeable {
+        if process_approved_pr(db, &pr)
+            .await
+            .with_context(|| format!("processing ack-weighted PR {}", pr.pr_number))?
+        {
+            work_done = true;
+        }
+    }
+
     // Step 3: Process existing stacks for rebasing and updates
     if process_existing_stacks(db)
         .await
@@ -605,12 +638,31 @@ pub async fn process_stack_updates(db: &mut Db, stack: Stack) -> anyhow::Result<
             stack_poisoned = true;
         }
 
-        if pr.review_status != ReviewStatus::Approved {
-            log::info(format_args!(
-                "{} PR {} no longer marked as approved; removing commit {} and rest of stack",
-                stack.id, pr.pr_number, commit.git_commit_id,
-            ));
-            stack_poisoned = true;
+        match pr.review_status {
+            ReviewStatus::Approved => {}
+            ReviewStatus::Rejected => {
+                log::info(format_args!(
+                    "{} PR {} marked rejected; removing commit {} and rest of stack",
+                    stack.id, pr.pr_number, commit.git_commit_id,
+                ));
+                stack_poisoned = true;
+            }
+            ReviewStatus::Unreviewed => {
+                // Unreviewed PRs are only allowed in stacks if ack weight >= 2.0.
+                let weight = db
+                    .with_transaction(async |tx| {
+                        pr.get_ack_weight(&tx, repo.repo_shell.upstream()).await
+                    })
+                    .await
+                    .with_context(|| format!("getting ack weight for PR {}", pr.pr_number))?;
+                if weight < 2.0 {
+                    log::info(format_args!(
+                        "{} PR {} unreviewed and ACK weight dropped to {:.2} (< 2.0); removing commit {} and rest of stack",
+                        stack.id, pr.pr_number, weight, commit.git_commit_id,
+                    ));
+                    stack_poisoned = true;
+                }
+            }
         }
 
         if commit.ci_status == CiStatus::Skipped {

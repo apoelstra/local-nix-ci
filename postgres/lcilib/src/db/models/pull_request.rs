@@ -635,6 +635,74 @@ impl PullRequest {
         Ok(Some(commit))
     }
 
+    /// Get the next untested current non-merge commit for this PR, ignoring
+    /// commit review status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_next_pending_ci_commit(
+        &self,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<CommitToTest>, DbQueryError> {
+        let rows = tx
+            .inner
+            .query(
+                r#"
+                SELECT c.id, c.repository_id, c.git_commit_id, c.jj_change_id, c.review_status,
+                       c.should_run_ci, c.ci_status, c.nix_derivation, c.review_text, c.created_at,
+                       pc.commit_type,
+                       pr.id as pr_id, pr.repository_id as pr_repository_id, pr.pr_number, pr.title, pr.body,
+                       pr.author_login, pr.target_branch, pr.tip_commit_id, pr.merge_status, pr.review_status as pr_review_status,
+                       pr.priority, pr.ok_to_merge, pr.required_reviewers, pr.created_at as pr_created_at,
+                       pr.updated_at as pr_updated_at, pr.synced_at as pr_synced_at
+                FROM commits c
+                JOIN pr_commits pc ON c.id = pc.commit_id
+                JOIN pull_requests pr ON pc.pull_request_id = pr.id
+                WHERE pc.pull_request_id = $1
+                AND pc.is_current = true
+                AND pc.commit_type != 'merge'
+                AND c.ci_status = 'unstarted'
+                AND c.should_run_ci = true
+                ORDER BY pc.sequence_order ASC
+                LIMIT 1
+                "#,
+                &[&self.id],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_next_pending_ci_commit",
+                entity_type: EntityType::PullRequest,
+                raw_id: Some(self.id.bare_i32()),
+                clauses: vec![],
+                error,
+            })?;
+
+        let Some(row) = rows.first() else { return Ok(None); };
+        let commit_type = row.get("commit_type");
+        let pr = Self {
+            id: row.get("pr_id"),
+            repository_id: row.get("pr_repository_id"),
+            pr_number: row.get("pr_number"),
+            title: row.get("title"),
+            body: row.get("body"),
+            author_login: row.get("author_login"),
+            target_branch: row.get("target_branch"),
+            tip_commit_id: row.get("tip_commit_id"),
+            merge_status: row.get("merge_status"),
+            review_status: row.get("pr_review_status"),
+            priority: row.get("priority"),
+            ok_to_merge: row.get("ok_to_merge"),
+            required_reviewers: row.get("required_reviewers"),
+            created_at: row.get("pr_created_at"),
+            updated_at: row.get("pr_updated_at"),
+            synced_at: row.get("pr_synced_at"),
+        };
+        let mut commit = CommitToTest::from_row(row);
+        commit.prs.push((pr, commit_type));
+        Ok(Some(commit))
+    }
+
     /// Find pull request by ID
     ///
     /// # Errors
@@ -709,6 +777,46 @@ impl PullRequest {
         Ok(rows.iter().map(Self::from_row).collect())
     }
 
+    /// Find all pending, unreviewed PRs that have at least one current non-merge
+    /// commit awaiting CI. Callers should further filter by ACK weight.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn find_unreviewed_with_pending_tests(
+        tx: &Transaction<'_>,
+    ) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx
+            .inner
+            .query(
+                r#"
+                SELECT DISTINCT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, pr.target_branch,
+                       pr.tip_commit_id, pr.merge_status, pr.review_status, pr.priority, pr.ok_to_merge,
+                       pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
+                FROM pull_requests pr
+                JOIN pr_commits pc ON pr.id = pc.pull_request_id AND pc.is_current = true
+                JOIN commits c ON pc.commit_id = c.id
+                WHERE pr.merge_status = 'pending'
+                AND pr.review_status = 'unreviewed'
+                AND pc.commit_type != 'merge'
+                AND c.ci_status = 'unstarted'
+                AND c.should_run_ci = true
+                ORDER BY pr.priority DESC, pr.created_at ASC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "find_unreviewed_with_pending_tests",
+                entity_type: EntityType::PullRequest,
+                raw_id: None,
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
     /// Gets a list of all PRs which are marked approved, have all commits approved,
     /// and all non-merge commits have passed CI.
     ///
@@ -743,6 +851,56 @@ impl PullRequest {
             ).await
             .map_err(|error| DbQueryError {
                 action: "get_fully_approved_prs",
+                entity_type: EntityType::PullRequest,
+                raw_id: None,
+                clauses: vec![],
+                error,
+            })?;
+
+        Ok(rows.iter().map(Self::from_row).collect())
+    }
+
+    /// Gets a list of pending unreviewed PRs whose current non-merge commits
+    /// have all completed CI (passed or skipped). Callers should filter by ACK
+    /// weight.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub async fn get_unreviewed_fully_ci_tested_prs(
+        tx: &Transaction<'_>,
+    ) -> Result<Vec<Self>, DbQueryError> {
+        let rows = tx
+            .inner
+            .query(
+                r#"
+                SELECT pr.id, pr.repository_id, pr.pr_number, pr.title, pr.body, pr.author_login, pr.target_branch,
+                       pr.tip_commit_id, pr.merge_status, pr.review_status, pr.priority, pr.ok_to_merge,
+                       pr.required_reviewers, pr.created_at, pr.updated_at, pr.synced_at
+                FROM pull_requests pr
+                WHERE pr.review_status = 'unreviewed'
+                AND pr.merge_status = 'pending'
+                AND EXISTS (
+                    SELECT 1 FROM pr_commits pc
+                    WHERE pc.pull_request_id = pr.id
+                    AND pc.is_current = true
+                    AND pc.commit_type != 'merge'
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM pr_commits pc
+                    JOIN commits c ON pc.commit_id = c.id
+                    WHERE pc.pull_request_id = pr.id
+                    AND pc.is_current = true
+                    AND pc.commit_type != 'merge'
+                    AND c.ci_status NOT IN ('passed', 'skipped')
+                )
+                ORDER BY pr.priority DESC, pr.created_at ASC
+                "#,
+                &[],
+            )
+            .await
+            .map_err(|error| DbQueryError {
+                action: "get_unreviewed_fully_ci_tested_prs",
                 entity_type: EntityType::PullRequest,
                 raw_id: None,
                 clauses: vec![],
