@@ -548,7 +548,7 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
         match choice {
             "1a" => {
                 if let Some(ack_message) = handle_ack_with_editor(&tip_commit, true, is_author)? {
-                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message, repo.repo_shell.upstream())
+                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message)
                         .await
                         .context("failed to create ACK")?;
 
@@ -567,7 +567,7 @@ pub async fn review(pr_number: PrNumber, db: &mut Db) -> anyhow::Result<()> {
             }
             "1b" => {
                 if let Some(ack_message) = handle_ack_with_editor(&tip_commit, false, is_author)? {
-                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message, repo.repo_shell.upstream())
+                    create_or_overwrite_ack(&tx, pr.id, tip_commit.id, &ack_message)
                         .await
                         .context("failed to create NACK")?;
 
@@ -934,7 +934,6 @@ async fn create_or_overwrite_ack(
     pull_request_id: DbPullRequestId,
     commit_id: DbCommitId,
     message: &str,
-    upstream: &Upstream,
 ) -> anyhow::Result<()> {
     let reviewer_name = tx
         .get_github_username()
@@ -942,19 +941,10 @@ async fn create_or_overwrite_ack(
         .context("getting GitHub username")?
         .ok_or_else(|| anyhow::Error::msg("Github username not set"))?;
 
-    // Delete any existing ACKs by this reviewer for this PR
-    let existing_acks = Ack::find_by_pull_request(tx, pull_request_id, upstream)
+    // Delete any existing ACKs by this reviewer for this PR (any commit).
+    Ack::delete_by_reviewer_and_pull_request(tx, pull_request_id, &reviewer_name)
         .await
-        .context("failed to find existing ACKs for PR")?;
-
-    for ack in existing_acks {
-        if ack.reviewer_name == reviewer_name {
-            ack.id
-                .delete(tx)
-                .await
-                .context("failed to delete existing ACK")?;
-        }
-    }
+        .context("failed to delete existing ACKs for reviewer")?;
 
     // Create the new ACK
     let new_ack = NewAck {

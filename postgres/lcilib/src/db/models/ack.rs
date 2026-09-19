@@ -379,6 +379,54 @@ impl Ack {
         Ok(())
     }
 
+    /// Deletes all ACKs by a given reviewer for a given pull request, regardless of commit.
+    ///
+    /// Emits a single aggregated log entry on the pull request if any rows were deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails (the delete or the log).
+    pub async fn delete_by_reviewer_and_pull_request(
+        tx: &Transaction<'_>,
+        pull_request_id: DbPullRequestId,
+        reviewer_name: &str,
+    ) -> Result<u64, DbQueryError> {
+        let query = "DELETE FROM acks WHERE pull_request_id = $1 AND reviewer_name = $2";
+        let params: &[&(dyn ToSql + Sync)] = &[&pull_request_id, &reviewer_name];
+
+        let rows_affected = tx
+            .inner
+            .execute(query, params)
+            .await
+            .map_err(|error| DbQueryError {
+                action: "delete_by_reviewer_and_pull_request",
+                entity_type: EntityType::Ack,
+                raw_id: Some(pull_request_id.bare_i32()),
+                clauses: vec![
+                    format!("pull_request_id = {pull_request_id}"),
+                    format!("reviewer_name = {reviewer_name}"),
+                ],
+                error,
+            })?;
+
+        if rows_affected > 0 {
+            log_action(
+                tx,
+                EntityType::PullRequest,
+                pull_request_id.bare_i32(),
+                "ack_superseded",
+                Some(&format!(
+                    "deleted {} prior ACK(s) by reviewer {}",
+                    rows_affected, reviewer_name,
+                )),
+                None,
+            )
+            .await?;
+        }
+
+        Ok(rows_affected)
+    }
+
     /// Updates an ack.
     ///
     /// # Errors
