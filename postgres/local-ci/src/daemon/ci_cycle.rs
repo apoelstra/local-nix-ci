@@ -243,8 +243,12 @@ pub async fn print_work_summary(
             .context("failed to find ACKs for PR")?;
         let approvers_list: String = acks
             .iter()
-            .filter(|a| a.status == AckStatus::Posted || a.status == AckStatus::External)
-            .map(|a| format!("{} ({:.2})", a.reviewer_name, a.review_score))
+            .filter(|a| a.status != AckStatus::Failed)
+            .map(|a| if a.status == AckStatus::Pending {
+                format!("{} [pending] ({:.2})", a.reviewer_name, a.review_score)
+            } else {
+                format!("{} ({:.2})", a.reviewer_name, a.review_score)
+            })
             .collect::<Vec<_>>()
             .join(", ");
         // This could be computed from `acks` above, as an optimization, but I'd prefer that we
