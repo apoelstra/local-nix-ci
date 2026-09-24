@@ -12,7 +12,8 @@ use crate::git::CommitId;
 use crate::{gh, repo, PrNumber};
 
 const USER_AGENT: &str = "curl/8.5.0";
-const LIST_PAGE_SIZE: usize = 50;
+// Empirically, Forgejo truncates responses when asked to yield 35 objects, but not with 30.
+const LIST_PAGE_SIZE: usize = 30;
 
 #[derive(Debug)]
 pub enum LoadError {
@@ -265,7 +266,7 @@ pub(crate) async fn list_updated_prs(
             project_name, LIST_PAGE_SIZE, page
         );
         let prs: Vec<PullRequest> = repo_data.api_get(&endpoint).await
-            .map_err(|e| Error::ApiPost(endpoint, e))?;
+            .map_err(|e| Error::ApiGet(endpoint, e))?;
         if prs.is_empty() {
             break;
         }
