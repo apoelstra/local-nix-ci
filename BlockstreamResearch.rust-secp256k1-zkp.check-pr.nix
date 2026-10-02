@@ -15,9 +15,20 @@ in import ./rust.check-pr.nix {
 
     extraTestPostRun = { isMainLockFile, workspace, rustc, secp256k1Src, ... }:
       pkgs.lib.optionalString (isMainLockFile && workspace == "secp256k1-zkp-sys" && utils.rustcIsNightly rustc) ''
+        # crate2nix will symlinkify files in the workspace so we need to un-symlink
+        # them in order for patchShebangs to work instead of silently failing.
+        cp -L vendor-libsecp.sh vendor-libsecp-1.sh
+        mv vendor-libsecp-1.sh vendor-libsecp.sh
+        cp -L Cargo.toml Cargo.toml1
+        mv Cargo.toml1 Cargo.toml
+        cp -Lr src src2
+        rm -r src
+        mv src2 src
+
         # Check whether C code is consistent with upstream
-        pushd secp256k1-zkp-sys
         patchShebangs ./vendor-libsecp.sh
+        sed -i "s#^SECP_SYS=.*#SECP_SYS=$PWD#" ./vendor-libsecp.sh
+        sed -i "s#set -e#set -ex#" ./vendor-libsecp.sh
         mkdir depend2/
         cp depend/*.patch depend/check_uint128_t.c depend2/
         #SECP_VENDOR_VERSION_CODE=0_10_0 \
@@ -28,8 +39,11 @@ in import ./rust.check-pr.nix {
             ./vendor-libsecp.sh -f  # use -f to avoid calling git in a non-git repo
 
         cp depend/secp256k1-HEAD-revision.txt depend2/
+        # These files are dropped by crate2nix I think
+        for onlyin2 in .gitignore autotools-aux CMakeLists.txt src/CMakeLists.txt examples/CMakeLists.txt; do
+            rm -r "depend2/secp256k1/$onlyin2" || true
+        done
         diff -r depend/ depend2
-        popd
       '';
   };
 }
