@@ -762,6 +762,7 @@ rec {
     , docTestCmd ? "cargo test --all-features --locked --doc"
     # We have some should_panic tests in rust-bitcoin that fail in release mode
     , releaseMode ? false
+    , extraTestPreRun ? ""
     , extraTestPostRun ? ""
     , extraTestPostRunTopLevel ? ""
     , ...
@@ -813,7 +814,7 @@ rec {
           #
           # Possible culprit: https://blog.rust-lang.org/2024/05/17/enabling-rust-lld-on-linux.html
           export LD_LIBRARY_PATH=${rustcLdLibraryPath}
-        '';
+        '' + extraTestPreRun;
         testPostRun = ''
             export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin:${pkgs.pkg-config}/bin
             export NIXES_GENERATED_DIR=${generatedCargoNix}/
