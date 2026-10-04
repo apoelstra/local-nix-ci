@@ -425,6 +425,7 @@ async fn find_cargo_lockfiles(
     let mut lockfiles: Vec<String> = stdout
         .lines()
         .filter(|line| line.starts_with("Cargo") && line.ends_with(".lock"))
+        .filter(|line| *line != "Cargo-creusot.lock")  // FIXME do something more general here
         .map(str::to_owned)
         .collect();
     let has_cargo_toml = stdout.lines().any(|line| line == "Cargo.toml");
