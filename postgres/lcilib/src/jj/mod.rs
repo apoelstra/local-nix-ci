@@ -186,7 +186,10 @@ pub async fn has_conflicts(shell: &RepoShell, change_id: &ChangeId) -> Result<bo
     Ok(!output.trim().is_empty())
 }
 
-/// Check for existing conflicted merges of the given parents
+/// Check for existing conflicted merges of the given parents.
+///
+/// Only merges whose number of parents exactly matches `parents.len()` are returned,
+/// so merges with additional parents beyond the given set are ignored.
 ///
 /// # Errors
 ///
@@ -200,18 +203,39 @@ async fn check_existing_conflicted_merges(
         "should not have a merge without parents"
     );
 
+    // Look for all commits which are children of the given parents.
     let revset = format!("({}+) & conflicts()", parents.join(")+ & ("));
-    let output = jj_log(shell, Some("change_id.short() ++ \"\\n\""), &revset).await?;
+    let template = "change_id.short() ++ \" \" ++ parents.len() ++ \"\\n\"";
+    let output = jj_log(shell, Some(template), &revset).await?;
     if (output.trim()).is_empty() {
         return Ok(Vec::new());
     }
 
+    // ...but there may be changes (e.g. the user's megamerges) which are children of the
+    // given parents but also children of other parents. These might be conflicted, but
+    // since local-ci didn't create them, we should ignore them.
+    let expected_parent_count = parents.len();
     let mut conflicted_changes = Vec::new();
     for line in output.lines() {
-        if let Ok(change_id) = line.trim().parse() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((change_id_str, parent_count_str)) = line.split_once(' ') else {
+            eprintln!("[warning] failed to parse jj log line {}", line);
+            continue;
+        };
+        let Ok(parent_count) = parent_count_str.parse::<usize>() else {
+            eprintln!("[warning] failed to parse parent count in {}", line);
+            continue;
+        };
+        if parent_count != expected_parent_count {
+            continue;
+        }
+        if let Ok(change_id) = change_id_str.parse() {
             conflicted_changes.push(change_id);
         } else {
-            eprintln!("[warning] failed to parse {} as change ID", line);
+            eprintln!("[warning] failed to parse {} as change ID", change_id_str);
         }
     }
 
