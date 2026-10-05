@@ -63,6 +63,9 @@ rec {
       hash = "sha256-WCbh/6WfQdbCPdRQK/WAMzR42s/HxE4eM1Cf/4mrafM=";
     };
     withGCC13Patches = false;
+  }).overrideAttrs (old: {
+    buildInputs = old.buildInputs ++ [ nixpkgs.sqlite.dev nixpkgs.sqlite ];
+    configureFlags = old.configureFlags ++ [ "--with-sqlite=yes" ];
   });
   # Similar, for rust-elements.
   elementsSrc021 = nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
