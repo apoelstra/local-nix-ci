@@ -17,8 +17,10 @@ let
         cp -r --no-preserve=mode,ownership ${commit.src}/. $out/
         chmod -R u+w $out
         if [ -f $out/bitcoind-tests/tests/spend_utxo.rs ]; then
+          mkdir -p $out/bitcoind-tests/examples
+          cp -r $out/examples/. $out/bitcoind-tests/examples/
           substituteInPlace $out/bitcoind-tests/tests/spend_utxo.rs \
-            --replace-quiet '../examples/' '${commit.src}/examples/'
+            --replace-quiet '../examples/' 'examples/'
         fi
       '';
     }
@@ -28,7 +30,6 @@ import ./rust.check-pr.nix {
   inherit pkgs;
   fullMatrixOverride = {
       runDocs = false; # not working with slang right now
-      runClippy = false; # 2024-12-10 https://github.com/BlockstreamResearch/simfony/pull/102
   };
   fullMatrixOverrideWithPrev = prev: {
     src = map srcWithExamples prev.src;
