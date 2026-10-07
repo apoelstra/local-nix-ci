@@ -49,13 +49,23 @@ impl Stacks {
     }
 
     /// The high priority stack list.
-    pub fn high_priority(&self) -> &[(Stack, Vec<CommitToTest>)] {
-        &self.high_priority
+    pub fn high_priority(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
+        self.high_priority.iter()
     }
 
     /// The low priority stack list.
-    pub fn low_priority(&self) -> &[(Stack, Vec<CommitToTest>)] {
-        &self.low_priority
+    pub fn low_priority(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
+        self.low_priority.iter()
+    }
+
+    /// Whether the "high priority" stack list is empty.
+    pub fn low_priority_is_empty(&self) -> bool {
+        self.high_priority.is_empty()
+    }
+
+    /// Whether the "high priority" stack list is empty.
+    pub fn high_priority_is_empty(&self) -> bool {
+        self.high_priority.is_empty()
     }
 
     /// Whether both stack lists are empty.

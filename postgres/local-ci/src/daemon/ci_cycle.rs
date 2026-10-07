@@ -254,7 +254,7 @@ pub async fn print_work_summary(
     }
 
     // Print high-priority stack summary
-    if !stacks.high_priority().is_empty() {
+    if !stacks.high_priority_is_empty() {
         log::info("");
         log::info("=== High Priority Stacks ===");
     }
@@ -288,7 +288,7 @@ pub async fn print_work_summary(
     }
 
     // Print low-priority stack summary if any
-    if !stacks.low_priority().is_empty() {
+    if !stacks.low_priority_is_empty() {
         log::info("");
         log::info("=== Low Priority Stacks ===");
     }
