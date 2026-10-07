@@ -305,7 +305,7 @@ pub async fn print_work_summary(
             .get_associated_prs(tx)
             .await
             .context("getting associated PRs for stack")?;
-        let pr_numbers: Vec<String> = prs.iter().map(|pr| format!("#{}", pr.pr_number)).collect();
+        let pr_numbers: Vec<String> = prs.iter().map(|pr| format!("{}", pr.pr_number)).collect();
 
         let (_total, untested) = stack
             .get_commit_counts(tx)
@@ -461,7 +461,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
             commit
                 .prs
                 .iter()
-                .map(|(pr, ty)| format!("#{} ({})", pr.pr_number, ty))
+                .map(|(pr, ty)| format!("{} ({})", pr.pr_number, ty))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
