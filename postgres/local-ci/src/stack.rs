@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
-use lcilib::db::models::Repository;
 use lcilib::{Db, jj};
 use std::collections::HashSet;
 use xshell::cmd;
@@ -24,7 +23,6 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
     // This dumb "let mut <var>; loop {}; use <var>" construction would be better written
     // by just recursing in the `if did_something` block below, but we can't recurse in an
     // async function so instead we just loop.
-    let mut repo;
     let mut tip_commit_id;
     let mut all_signed;
     let id = stack_id.to_db_stack_id();
@@ -38,24 +36,10 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
             .context("updating stack state against the database and local repo")?;
 
         // The update might've deleted the stack, so we have to re-fetch it.
-        let Some((stack, commits)) = stacks.all().next() else {
+        let Some((_, commits, repo)) = stacks.all().next() else {
             println!("Stack was deleted. Doing nothing.");
             return Ok(());
         };
-
-        let tx = db
-            .transaction()
-            .await
-            .context("failed to start database transaction")?;
-        repo = Repository::find_by_id(&tx, stack.repository_id)
-            .await
-            .context("finding repository for stack")?
-            .expect("repo referenced by database should exist");
-
-        // Commit the transaction since we're done with it. Shouldn't possibly fail since
-        // we only used it for SELECT queries, but if it does, better to fail here before
-        // we do anything heavy.
-        tx.commit().await.context("committing read-only tx")?;
 
         tip_commit_id = commits.last().map(|commit| &commit.git_commit_id);
         all_signed = true;
@@ -102,7 +86,7 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
     }
 
     // The update might've deleted the stack, so we have to re-fetch it.
-    let Some((stack, commits)) = stacks.all().next() else {
+    let Some((stack, commits, repo)) = stacks.all().next() else {
         println!("Stack was deleted. Doing nothing.");
         return Ok(());
     };
@@ -150,11 +134,6 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
 
     // After refreshing the PRs, it may be that we can delete or otherwise reduce the stack,
     // since some PRs have been merged.
-    let id = stack_id.to_db_stack_id();
-    let mut stacks = db
-        .with_transaction(async move |tx| Stacks::single(tx, id).await)
-        .await
-        .context("finding stack")?;
     stacks.process(db)
         .await
         .context("updating stack state against the database and local repo")?;

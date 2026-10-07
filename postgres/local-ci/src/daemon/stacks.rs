@@ -29,6 +29,10 @@ pub enum Error {
         e: util::PriorityError,
         id: DbStackId,
     },
+    GetRepository {
+        e: RepositoryError,
+        id: DbRepositoryId,
+    },
 }
 
 impl fmt::Display for Error {
@@ -44,6 +48,9 @@ impl fmt::Display for Error {
             Self::Priority { id, .. } => {
                 write!(f, "calculating priority for stack with database ID {id}")
             },
+            Self::GetRepository { id, .. } => {
+                write!(f, "getting repository from database with ID {id}")
+            },
         }
     }
 }
@@ -55,12 +62,13 @@ impl std::error::Error for Error {
             Self::GetCommits { ref e, .. } => Some(e),
             Self::GetSingleStack { ref e, .. } => Some(e),
             Self::Priority { ref e, .. } => Some(e),
+            Self::GetRepository { ref e, .. } => Some(e),
         }
     }
 }
 
 pub struct Stacks {
-    inner: Vec<(Stack, Vec<CommitToTest>)>,
+    inner: Vec<(Stack, Vec<CommitToTest>, Repository)>,
     high_priority: Vec<usize>,
     low_priority: Vec<usize>,
 }
@@ -82,13 +90,15 @@ impl Stacks {
             let priority = util::calculate_stack_priority(&commits, tx)
                 .await
                 .map_err(|e| Error::Priority { e, id: stack.id })?;
-
+            let repo = Repository::get_by_id(&tx, stack.repository_id)
+                .await
+                .map_err(|e| Error::GetRepository { e, id: stack.repository_id })?;
             branch_map
                 .entry((stack.repository_id, stack.target_branch.clone()))
                 .or_default()
                 .push((priority, inner.len()));
 
-            inner.push((stack, commits));
+            inner.push((stack, commits, repo));
         }
 
         let mut high_priority = vec![];
@@ -117,27 +127,30 @@ impl Stacks {
         let commits = stack.id.get_commits(tx.borrow())
             .await
             .map_err(|e| Error::GetCommits { e, id: stack.id })?;
+        let repo = Repository::get_by_id(tx.borrow(), stack.repository_id)
+            .await
+            .map_err(|e| Error::GetRepository { e, id: stack.repository_id })?;
 
         Ok(Self {
-            inner: vec![(stack, commits)],
+            inner: vec![(stack, commits, repo)],
             high_priority: vec![0],
             low_priority: vec![],
         })
     }
 
     /// Iterator over all the stacks.
-    pub fn all(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
+    pub fn all(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>, Repository)> {
         self.inner.iter()
     }
 
     /// Iterator over high-priority stacks.
-    pub fn high_priority(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
-        self.high_priority.iter().map(|idx| &self.inner[*idx])
+    pub fn high_priority(&self) -> impl Iterator<Item = (&Stack, &[CommitToTest])> {
+        self.high_priority.iter().map(|idx| (&self.inner[*idx].0, self.inner[*idx].1.as_slice()))
     }
 
     /// Iterator over low-priority stacks.
-    pub fn low_priority(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
-        self.low_priority.iter().map(|idx| &self.inner[*idx])
+    pub fn low_priority(&self) -> impl Iterator<Item = (&Stack, &[CommitToTest])> {
+        self.low_priority.iter().map(|idx| (&self.inner[*idx].0, self.inner[*idx].1.as_slice()))
     }
 
     /// Whether the "high priority" stack list is empty.
@@ -164,15 +177,15 @@ impl Stacks {
 
         // This loop is equivalent to Vec::retain except uglier and less efficient. We need
         // to do it because retain cannot use async methods in its closure.
-        for (stack, commits) in mem::take(&mut self.inner) {
+        for (stack, commits, repo) in mem::take(&mut self.inner) {
             let stack_id = stack.id; // stack is moved into process_single_stack
-            match process_single_stack(db, stack, commits).await {
-                Ok(ProcessAction::Retain(stack, commits)) => {
-                    self.inner.push((stack, commits));
+            match process_single_stack(db, stack, commits, repo).await {
+                Ok(ProcessAction::Retain(stack, commits, repo)) => {
+                    self.inner.push((stack, commits, repo));
                     work_done = true;
                 }
-                Ok(ProcessAction::RetainUnchanged(stack, commits)) => {
-                    self.inner.push((stack, commits));
+                Ok(ProcessAction::RetainUnchanged(stack, commits, repo)) => {
+                    self.inner.push((stack, commits, repo));
                 }
                 Ok(ProcessAction::Deleted) => {
                     work_done = true;
@@ -200,10 +213,6 @@ pub enum ProcessError {
     TxCreate(lcilib::tokio_postgres::Error),
     TxCommit(lcilib::tokio_postgres::Error),
     DeleteStack(DbQueryError),
-    GetRepository {
-        e: RepositoryError,
-        id: DbRepositoryId,
-    },
     GitListParents {
         e: git::Error,
         commit_id: git::CommitId,
@@ -250,9 +259,6 @@ impl fmt::Display for ProcessError {
             Self::TxCreate(_) => f.write_str("starting database transaction"),
             Self::TxCommit(_) => f.write_str("committing database transaction"),
             Self::DeleteStack(_) => f.write_str("deleting stack from database"),
-            Self::GetRepository { id, .. } => {
-                write!(f, "getting repository from database with ID {id}")
-            },
             Self::GitListParents { ref commit_id, .. } => {
                 write!(f, "querying git for parents of {commit_id}")
             },
@@ -290,7 +296,6 @@ impl std::error::Error for ProcessError {
             Self::TxCreate(ref e) => Some(e),
             Self::TxCommit(ref e) => Some(e),
             Self::DeleteStack(ref e) => Some(e),
-            Self::GetRepository { ref e, .. } => Some(e),
             Self::GitListParents { ref e, .. } => Some(e),
             Self::GitResolveMergeRef { ref e, .. } => Some(e),
             Self::CheckGpgSigned { ref e, .. } => Some(e),
@@ -305,8 +310,8 @@ impl std::error::Error for ProcessError {
 }
 
 enum ProcessAction {
-    Retain(Stack, Vec<CommitToTest>),
-    RetainUnchanged(Stack, Vec<CommitToTest>),
+    Retain(Stack, Vec<CommitToTest>, Repository),
+    RetainUnchanged(Stack, Vec<CommitToTest>, Repository),
     Deleted,
 }
 
@@ -314,6 +319,7 @@ async fn process_single_stack(
     db: &mut Db,
     stack: Stack,
     stack_commits: Vec<CommitToTest>,
+    repo: Repository,
 ) -> Result<ProcessAction, ProcessError> {
     let tx = db.transaction().await.map_err(ProcessError::TxCreate)?;
 
@@ -325,9 +331,6 @@ async fn process_single_stack(
     };
 
     // 2. Delete stack if its target branch doesn't match its parent.
-    let repo = Repository::get_by_id(&tx, stack.repository_id)
-        .await
-        .map_err(|e| ProcessError::GetRepository { e, id: stack.repository_id })?;
     let parents = git::list_parents(&repo.repo_shell, &first_commit.git_commit_id)
         .await
         .map_err(|e| ProcessError::GitListParents { e, commit_id: first_commit.git_commit_id.clone() })?;
@@ -522,9 +525,9 @@ async fn process_single_stack(
         stack.delete(&tx).await.map_err(ProcessError::DeleteStack)?;
         ProcessAction::Deleted
     } else if work_done {
-        ProcessAction::Retain(stack, new_stack_commits)
+        ProcessAction::Retain(stack, new_stack_commits, repo)
     } else {
-        ProcessAction::RetainUnchanged(stack, new_stack_commits)
+        ProcessAction::RetainUnchanged(stack, new_stack_commits, repo)
     };
 
     tx.commit().await.map_err(ProcessError::TxCommit)?;
