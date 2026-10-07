@@ -382,8 +382,8 @@ async fn process_single_stack(
         let pr = commit.id.get_pull_request(&tx)
             .await
             .map_err(|e| ProcessError::GetPr { e, commit_id: commit.git_commit_id.clone() })?;
-        // Update description (dummy implementation for now)
-        let description = git::compute_merge_description(&tx, &pr, &commit)
+        // Update description
+        let description = git::compute_merge_description(&tx, &pr, commit.git_commit_id.clone())
             .await
             .map_err(|e| ProcessError::ComputeMergeDescription {
                 e,

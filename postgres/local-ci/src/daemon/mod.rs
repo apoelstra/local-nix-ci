@@ -278,7 +278,7 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
         .context("getting approved PRs from database")?;
 
     for pr in approved_prs {
-        if process_approved_pr(db, &pr)
+        if process_approved_pr(db, &stacks, &pr)
             .await
             .with_context(|| format!("processing approved PR {}", pr.pr_number))?
         {
@@ -311,7 +311,7 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
         .context("getting ack-weighted mergeable PRs")?;
 
     for pr in unreviewed_mergeable {
-        if process_approved_pr(db, &pr)
+        if process_approved_pr(db, &stacks, &pr)
             .await
             .with_context(|| format!("processing ack-weighted PR {}", pr.pr_number))?
         {
@@ -319,35 +319,20 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
         }
     }
 
-    // Step 3: Process existing stacks for rebasing and updates
-    let mut stacks = db.with_transaction(Stacks::find_all)
-        .await
-        .context("getting stacks from the database")?;
-    if stacks.process(db)
-        .await
-        .context("processing existing stacks (pass two)")?
-    {
-        work_done = true;
-    }
-
     Ok(work_done)
 }
 
-async fn process_approved_pr(db: &mut Db, pr: &PullRequest) -> anyhow::Result<bool> {
+async fn process_approved_pr(db: &mut Db, stacks: &Stacks, pr: &PullRequest) -> anyhow::Result<bool> {
     let tx = db.transaction().await.context("starting PR transaction")?;
     let repo = Repository::get_by_id(&tx, pr.repository_id).await?;
 
     // Step 1: Get all stacks for this repo/target, sorted by priority
-    let all_stacks = Stack::get_all_for_target_branch(&tx, pr.repository_id, &pr.target_branch)
-        .await
-        .context("failed to find stacks")?;
-    let mut annotated_stacks = Vec::with_capacity(all_stacks.len());
-    for stack in all_stacks {
-        let commits = stack
-            .id
-            .get_commits(&tx)
-            .await
-            .with_context(|| format!("failed to get commits for stack {}", stack.id))?;
+    let mut annotated_stacks = vec![];
+    for (stack, commits, _) in stacks.all() {
+        if stack.repository_id != pr.repository_id || stack.target_branch != pr.target_branch {
+            continue;
+        }
+
         let priority = util::calculate_stack_priority(&commits, &tx)
             .await
             .context("calculating stack priority")?;
@@ -408,8 +393,6 @@ async fn try_extend_stack(
     };
 
     // Create merge commit: merge PR tip into stack tip.
-    // TODO should compute the real merge description rather than using "<placeholder>". This
-    //  is okay for now since the db maintenance loop will get it..
     match jj::create_merge_commit(
         &repo.repo_shell,
         tip_commit.git_commit_id.as_str(),
@@ -424,6 +407,17 @@ async fn try_extend_stack(
                 jj::get_current_git_commit_for_change_id(&repo.repo_shell, &jj_change_id)
                     .await
                     .context("getting git commit ID for stack merge")?;
+
+            // Update description
+            let description = git::compute_merge_description(&tx, &pr, git_commit_id.clone())
+                .await
+                .with_context(|| format!("computing merge description for {}", git_commit_id))?;
+            if let Err(e) =
+                jj::update_commit_description(&repo.repo_shell, &jj_change_id, &description)
+                    .await
+            {
+                log::warn(&e, format_args!("Failed to update description for {}", jj_change_id));
+            }
 
             // Create commit record for the new merge
             let new_commit = NewCommit {

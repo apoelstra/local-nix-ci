@@ -2,7 +2,7 @@
 
 use crate::db::{
     DbQueryError, Transaction,
-    models::{CommitToTest, DbCommitId, PullRequest, Repository},
+    models::{DbCommitId, PullRequest, Repository},
 };
 use crate::git::CommitId;
 
@@ -112,7 +112,7 @@ pub fn extract_ack_from_text<B: core::hash::BuildHasher>(
 pub async fn compute_merge_description(
     tx: &Transaction<'_>,
     pr: &PullRequest,
-    merge_commit: &CommitToTest,
+    merge_commit: CommitId,
 ) -> Result<String, MergeDescriptionError> {
     // Get repository information
     let repository = Repository::get_by_id(tx, pr.repository_id)
@@ -194,8 +194,7 @@ pub async fn compute_merge_description(
     }
 
     // Add tree SHA512
-    let git_commit_id = merge_commit.git_commit_id.clone();
-    let tree_hash = tokio::task::spawn_blocking(move || tree_sha512sum(&sh, &git_commit_id))
+    let tree_hash = tokio::task::spawn_blocking(move || tree_sha512sum(&sh, &merge_commit))
         .await
         .expect("no panics in tree_sha512")?;
 
