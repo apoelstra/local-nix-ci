@@ -125,6 +125,11 @@ impl Stacks {
         })
     }
 
+    /// Iterator over all the stacks.
+    pub fn all(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
+        self.inner.iter()
+    }
+
     /// Iterator over high-priority stacks.
     pub fn high_priority(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
         self.high_priority.iter().map(|idx| &self.inner[*idx])

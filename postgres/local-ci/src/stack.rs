@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Context as _;
-use lcilib::db::models::{Repository, Stack};
+use lcilib::db::models::Repository;
 use lcilib::{Db, jj};
 use std::collections::HashSet;
 use xshell::cmd;
@@ -24,35 +24,33 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
     // This dumb "let mut <var>; loop {}; use <var>" construction would be better written
     // by just recursing in the `if did_something` block below, but we can't recurse in an
     // async function so instead we just loop.
-    let mut stack;
     let mut repo;
-    let mut commits;
     let mut tip_commit_id;
     let mut all_signed;
+    let id = stack_id.to_db_stack_id();
+    let mut stacks = db
+        .with_transaction(async move |tx| Stacks::single(tx, id).await)
+        .await
+        .context("finding stack")?;
     loop {
-        let id = stack_id.to_db_stack_id();
-        let mut stacks = db
-            .with_transaction(async move |tx| Stacks::single(tx, id).await)
-            .await
-            .context("finding stack")?;
         stacks.process(db)
             .await
             .context("updating stack state against the database and local repo")?;
 
         // The update might've deleted the stack, so we have to re-fetch it.
+        let Some((stack, commits)) = stacks.all().next() else {
+            println!("Stack was deleted. Doing nothing.");
+            return Ok(());
+        };
+
         let tx = db
             .transaction()
             .await
             .context("failed to start database transaction")?;
-        stack = Stack::find_by_id(&tx, id).await.context("finding stack")?;
         repo = Repository::find_by_id(&tx, stack.repository_id)
             .await
             .context("finding repository for stack")?
             .expect("repo referenced by database should exist");
-        commits = id
-            .get_commits(&tx)
-            .await
-            .context("getting commits in stack")?;
 
         // Commit the transaction since we're done with it. Shouldn't possibly fail since
         // we only used it for SELECT queries, but if it does, better to fail here before
@@ -62,7 +60,7 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
         tip_commit_id = commits.last().map(|commit| &commit.git_commit_id);
         all_signed = true;
         let mut did_something = false;
-        for commit in &commits {
+        for commit in commits {
             if !jj::is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id)
                 .await
                 .context("quering gpg-signed status of commit")?
@@ -103,6 +101,12 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
         }
     }
 
+    // The update might've deleted the stack, so we have to re-fetch it.
+    let Some((stack, commits)) = stacks.all().next() else {
+        println!("Stack was deleted. Doing nothing.");
+        return Ok(());
+    };
+
     if let (Some(tip_commit_id), true) = (tip_commit_id, all_signed)
         && crate::ask_yes_no(format_args!(
             "All {} commits in stack {stack_id} (repo {}, target branch {}) are signed.\n\
@@ -122,8 +126,8 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
             .await??;
 
         // After `git push`ing, Github needs a moment to update the pull requests.
-        println!("Sleeping 5 seconds before refreshing pull requests.");
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        println!("Sleeping 3 seconds before refreshing pull requests.");
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }
 
     let mut to_refresh = HashSet::new();
