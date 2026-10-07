@@ -42,24 +42,12 @@ pub async fn find_stacks(
     let mut low_priority = vec![];
 
     for mut stacks in branch_map.into_values() {
-        // priority order
+        // priority order, so pop() takes the highest-priority stack
         stacks.sort_by(|a, b| a.0.total_cmp(&b.0));
-        // pop() takes the highest one
-        if let Some(stack) = stacks.pop() {
-            // We check the untested count right before pushing -- this means that
-            // the high-priority stack might be empty, if we're done testing all the
-            // high priority commits. Then we'll move on to PR commits.
-            let (_, untested) = stack.1.get_commit_counts(tx).await?;
-            if untested > 0 {
-                high_priority.push((stack.1, stack.2));
-            }
+        if let Some((_, s, c)) = stacks.pop() {
+            high_priority.push((s, c));
         }
-        for stack in stacks {
-            let (_, untested) = stack.1.get_commit_counts(tx).await?;
-            if untested > 0 {
-                low_priority.push((stack.1, stack.2));
-            }
-        }
+        low_priority.extend(stacks.into_iter().map(|(_, s, c)| (s, c)));
     }
 
     Ok((high_priority, low_priority))
