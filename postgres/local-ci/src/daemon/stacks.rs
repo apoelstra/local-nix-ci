@@ -1,12 +1,48 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::Context as _;
-
+use core::fmt;
 use std::collections::HashMap;
 
-use lcilib::db::models::{DbRepositoryId,Stack, CommitToTest};
+use lcilib::db::{DbQueryError, models::{CommitToTest, DbRepositoryId, DbStackId, Stack}};
 
 use super::util;
+
+#[derive(Debug)]
+pub enum Error {
+    GetStacks(DbQueryError),
+    GetCommits {
+        e: DbQueryError,
+        id: DbStackId,
+    },
+    Priority {
+        e: util::PriorityError,
+        id: DbStackId,
+    },
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::GetStacks(_) => f.write_str("getting stacks from database"),
+            Self::GetCommits { id, .. } => {
+                write!(f, "getting commits from database for stack with ID {id}")
+            },
+            Self::Priority { id, .. } => {
+                write!(f, "calculating priority for stack with database ID {id}")
+            },
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::GetStacks(ref e) => Some(e),
+            Self::GetCommits { ref e, .. } => Some(e),
+            Self::Priority { ref e, .. } => Some(e),
+        }
+    }
+}
 
 pub struct Stacks {
     inner: Vec<(Stack, Vec<CommitToTest>)>,
@@ -18,16 +54,18 @@ impl Stacks {
     /// Returns all the high-priority and low-priority stacks across all repos.
     pub async fn find_all(
         tx: &lcilib::Transaction<'_>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, Error> {
         let mut inner = vec![];
         // Find all stacks grouped by DB and branch
         let mut branch_map =
             HashMap::<(DbRepositoryId, String), Vec<(f64, usize)>>::new();
-        for stack in Stack::get_all(tx).await? {
-            let commits = stack.id.get_commits(tx).await?;
+        for stack in Stack::get_all(tx).await.map_err(Error::GetStacks)? {
+            let commits = stack.id.get_commits(tx)
+                .await
+                .map_err(|e| Error::GetCommits { e, id: stack.id })?;
             let priority = util::calculate_stack_priority(&commits, tx)
                 .await
-                .context("calculating stack priority")?;
+                .map_err(|e| Error::Priority { e, id: stack.id })?;
 
             branch_map
                 .entry((stack.repository_id, stack.target_branch.clone()))
