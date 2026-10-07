@@ -1,8 +1,65 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::Context as _;
-use lcilib::db::models::{CiStatus, CommitToTest, Repository};
+use core::fmt;
+
+use lcilib::PrNumber;
+use lcilib::db::DbQueryError;
+use lcilib::db::models::{CiStatus, CommitToTest, DbCommitId, DbPullRequestId, DbRepositoryId, Repository, RepositoryError};
 use lcilib::jj::is_commit_gpg_signed;
+
+#[derive(Debug)]
+pub enum PriorityError {
+    FindingPrCommits {
+        e: DbQueryError,
+        id: DbCommitId,
+    },
+    FindingPrs {
+        e: DbQueryError,
+        id: DbPullRequestId,
+    },
+    GetUserOffset {
+        e: DbQueryError,
+        username: String,
+    },
+    GetRepo {
+        e: RepositoryError,
+        id: DbRepositoryId,
+    },
+    GetAckWeight {
+        e: DbQueryError,
+        pr_number: PrNumber,
+    },
+}
+
+impl fmt::Display for PriorityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::FindingPrCommits { id, .. } => {
+                write!(f, "finding pr_commits in database for commit with ID {id}")
+            },
+            Self::FindingPrs { id, .. } => write!(f, "finding PR in database with ID {id}"),
+            Self::GetUserOffset { ref username, .. } => {
+                write!(f, "finding priority offset in database for reviewer {username}")
+            },
+            Self::GetRepo { id, .. } => write!(f, "finding repo in database with ID {id}"),
+            Self::GetAckWeight { pr_number, .. } => {
+                write!(f, "computing ACK weight in database for PR {pr_number}")
+            },
+        }
+    }
+}
+
+impl std::error::Error for PriorityError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::FindingPrCommits { ref e, .. } => Some(e),
+            Self::FindingPrs { ref e, .. } => Some(e),
+            Self::GetUserOffset { ref e, .. } => Some(e),
+            Self::GetRepo { ref e, .. } => Some(e),
+            Self::GetAckWeight { ref e, .. } => Some(e),
+        }
+    }
+}
 
 /// Calculate the priority of a stack using the formula from the documentation
 ///
@@ -12,14 +69,12 @@ use lcilib::jj::is_commit_gpg_signed;
 pub async fn calculate_stack_priority(
     commits: &[CommitToTest],
     tx: &lcilib::Transaction<'_>,
-) -> anyhow::Result<f64> {
+) -> Result<f64, PriorityError> {
     let mut total_priority = 0.0;
 
     let mut position = 0;
     for commit in commits {
-        let commit_priority = calculate_commit_priority(commit, tx)
-            .await
-            .context("calculating commit priority")?;
+        let commit_priority = calculate_commit_priority(commit, tx).await?;
 
         // Apply position weighting: (1/2)^position
         let weight = 0.5_f64.powi(position);
@@ -45,14 +100,14 @@ pub async fn calculate_stack_priority(
 async fn calculate_commit_priority(
     commit: &CommitToTest,
     tx: &lcilib::Transaction<'_>,
-) -> anyhow::Result<f64> {
+) -> Result<f64, PriorityError> {
     use chrono::Utc;
     use lcilib::db::models::{PrCommit, PullRequest, UserPriorityOffset};
 
     // Find the PR(s) this commit belongs to
     let pr_commits = PrCommit::find_by_commit(tx, commit.id)
         .await
-        .context("finding PR commits for commit")?;
+        .map_err(|e| PriorityError::FindingPrCommits { id: commit.id, e })?;
 
     if pr_commits.is_empty() {
         // Commit not in any PR, use default priority
@@ -66,7 +121,7 @@ async fn calculate_commit_priority(
     for pr_commit in &pr_commits {
         if let Some(pr) = PullRequest::find_by_id(tx, pr_commit.pull_request_id)
             .await
-            .context("finding pull request")?
+            .map_err(|e| PriorityError::FindingPrs { id: pr_commit.pull_request_id, e })?
             && (oldest_pr.is_none() || pr.created_at < oldest_pr.as_ref().unwrap().created_at)
         {
             oldest_pr = Some(pr.clone());
@@ -85,11 +140,13 @@ async fn calculate_commit_priority(
     // distinct from (and independent of) the ACK-counting logic below.
     let user_offset = UserPriorityOffset::get_offset_by_username(tx, &oldest_pr.author_login)
         .await
-        .context("getting user priority offset")?;
+        .map_err(|e| PriorityError::GetUserOffset { username: oldest_pr.author_login.clone(), e })?;
     priority += f64::from(user_offset);
 
     // Add: +0.5 if GPG-signed already
-    let repo = Repository::get_by_id(tx, commit.repository_id).await?;
+    let repo = Repository::get_by_id(tx, commit.repository_id)
+        .await
+        .map_err(|e| PriorityError::GetRepo { id: commit.repository_id, e })?;
     match is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await {
         Ok(true) => priority += 0.5,
         Ok(false) => {} // No bonus
@@ -110,7 +167,7 @@ async fn calculate_commit_priority(
     let ack_weight = oldest_pr
         .get_ack_weight(tx, repo.repo_shell.upstream())
         .await
-        .context("getting ACK weight")?;
+        .map_err(|e| PriorityError::GetAckWeight { pr_number: oldest_pr.pr_number, e })?;
     priority += 3.0 * ack_weight;
 
     // Add: +0.1 per day based on creation time of its PR
