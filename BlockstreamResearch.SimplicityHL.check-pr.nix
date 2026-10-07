@@ -38,7 +38,20 @@ import ./rust.check-pr.nix {
       if daemon != null
       then ''
         export ELEMENTSD_EXE="${daemon}/bin/elementsd"
+        # The bitcoind crate backing the elementsd harness creates its datadir under
+        # TEMPDIR_ROOT, which defaults to /build on the (slow) build partition. Its
+        # jsonrpc client has a hard-coded 15s RPC timeout; under parallel-build load
+        # wallet creation can exceed it, after which the crate misreads the timeout as
+        # "wallet already exists" and the fallback loadwallet fails with "Data is not
+        # in recognized format" / "already loaded". Point the datadir at the sandbox's
+        # tmpfs so wallet creation cannot be disk-starved.
+        # tempfile uses create_dir, not create_dir_all: the root must pre-exist.
+        # Concurrent matrix builds may share the root (PID namespaces); the crate
+        # creates randomly-named datadirs inside it, so sharing is harmless.
+        export TEMPDIR_ROOT="/dev/shm/local-ci-elementsd-$$"
+        mkdir -p "$TEMPDIR_ROOT"
         echo "Elementsd exe (simplicity): $ELEMENTSD_EXE"
+        echo "TEMPDIR_ROOT: $TEMPDIR_ROOT"
       ''
       else "";
   };
