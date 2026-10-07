@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+pub extern crate tokio_postgres;
+
 pub mod db;
 pub mod fj;
 pub mod gh;

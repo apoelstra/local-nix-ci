@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::Context as _;
-
 use core::borrow::Borrow;
 use core::{fmt, mem};
 use std::collections::HashMap;
 
-use lcilib::Db;
+use lcilib::{Db, PrNumber};
 use lcilib::db::{DbQueryError, MergeStatus};
 use lcilib::db::models::{
-    CiStatus, CommitToTest, DbRepositoryId, DbStackId, Repository, ReviewStatus, Stack
+    CiStatus, CommitToTest, DbRepositoryId, DbStackId, Repository, RepositoryError, ReviewStatus, Stack
 };
 use lcilib::{git, jj};
 use lcilib::jj::is_commit_gpg_signed;
@@ -155,47 +153,183 @@ impl Stacks {
     /// For all stacks, check the current repository state and update them if they've changed.
     ///
     /// Returns a boolean indicating whether any change happened.
-    pub async fn process(&mut self, db: &mut Db) -> anyhow::Result<bool> {
+    pub async fn process(&mut self, db: &mut Db) -> Result<bool, ProcessError> {
         let mut work_done = false;
+        let mut last_error = None;
 
+        // This loop is equivalent to Vec::retain except uglier and less efficient. We need
+        // to do it because retain cannot use async methods in its closure.
         for (stack, commits) in mem::take(&mut self.inner) {
-            let id = stack.id;
-            if process_stack_updates(db, stack, commits)
-                .await
-                .with_context(|| format!("processing updates for stack {}", id))?
-            {
-                work_done = true;
-            }
+            let stack_id = stack.id; // stack is moved into process_single_stack
+            match process_single_stack(db, stack, commits).await {
+                Ok(ProcessAction::Retain(stack, commits)) => {
+                    self.inner.push((stack, commits));
+                    work_done = true;
+                }
+                Ok(ProcessAction::RetainUnchanged(stack, commits)) => {
+                    self.inner.push((stack, commits));
+                }
+                Ok(ProcessAction::Deleted) => {
+                    work_done = true;
+                    // no further action
+                }
+                Err(e) => {
+                    log::warn(&e, format_args!(
+                        "failed to process stack with db ID {}; ignoring stack for this cycle",
+                        stack_id
+                    ));
+                    last_error = Some(e);
+                }
+            };
         }
 
-        Ok(work_done)
+        match last_error {
+            Some(e) => Err(e),
+            None => Ok(work_done),
+        }
     }
 }
 
-async fn process_stack_updates(
+#[derive(Debug)]
+pub enum ProcessError {
+    TxCreate(lcilib::tokio_postgres::Error),
+    TxCommit(lcilib::tokio_postgres::Error),
+    DeleteStack(DbQueryError),
+    GetRepository {
+        e: RepositoryError,
+        id: DbRepositoryId,
+    },
+    GitListParents {
+        e: git::Error,
+        commit_id: git::CommitId,
+    },
+    GitResolveMergeRef {
+        e: git::Error,
+        branch: String,
+    },
+    CheckGpgSigned {
+        e: jj::Error,
+        change_id: jj::ChangeId,
+    },
+    MarkNonCurrent {
+        e: DbQueryError,
+        commit_id: git::CommitId,
+    },
+    GetPr {
+        e: DbQueryError,
+        commit_id: git::CommitId,
+    },
+    ComputeMergeDescription {
+        e: git::MergeDescriptionError,
+        commit_id: git::CommitId,
+        pr_number: PrNumber,
+    },
+    GetAckWeight {
+        e: DbQueryError,
+        pr_number: PrNumber,
+    },
+    GitResolveTreeRef {
+        e: git::Error,
+        commit_id: git::CommitId,
+    },
+    ReplaceCommitId {
+        e: DbQueryError,
+        old_commit_id: git::CommitId,
+        new_commit_id: git::CommitId,
+    },
+}
+
+impl fmt::Display for ProcessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::TxCreate(_) => f.write_str("starting database transaction"),
+            Self::TxCommit(_) => f.write_str("committing database transaction"),
+            Self::DeleteStack(_) => f.write_str("deleting stack from database"),
+            Self::GetRepository { id, .. } => {
+                write!(f, "getting repository from database with ID {id}")
+            },
+            Self::GitListParents { ref commit_id, .. } => {
+                write!(f, "querying git for parents of {commit_id}")
+            },
+            Self::GitResolveMergeRef { ref branch, .. } => {
+                write!(f, "querying git for parents of {branch}")
+            },
+            Self::CheckGpgSigned { ref change_id, .. } => {
+                write!(f, "checking whether change {change_id} is signed")
+            },
+            Self::MarkNonCurrent { ref commit_id, .. } => {
+                write!(f, "marking commit {commit_id} as non-current for all PRs and stacks")
+            },
+            Self::GetPr { ref commit_id, .. } => {
+                write!(f, "getting PR from database for merge commit {commit_id}")
+            },
+            Self::ComputeMergeDescription { ref commit_id, ref pr_number, .. } => {
+                write!(f, "computing merge description for commit {commit_id} (PR {pr_number})")
+            },
+            Self::GetAckWeight { ref pr_number, .. } => {
+                write!(f, "getting ACK weight from database for PR {pr_number}")
+            },
+            Self::GitResolveTreeRef { ref commit_id, .. } => {
+                write!(f, "querying git for ref {commit_id}^{{tree}}")
+            },
+            Self::ReplaceCommitId { ref old_commit_id, ref new_commit_id, .. } => {
+                write!(f, "replacing commit ID {old_commit_id} with {new_commit_id} (same tree) in database")
+            },
+        }
+    }
+}
+
+impl std::error::Error for ProcessError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Self::TxCreate(ref e) => Some(e),
+            Self::TxCommit(ref e) => Some(e),
+            Self::DeleteStack(ref e) => Some(e),
+            Self::GetRepository { ref e, .. } => Some(e),
+            Self::GitListParents { ref e, .. } => Some(e),
+            Self::GitResolveMergeRef { ref e, .. } => Some(e),
+            Self::CheckGpgSigned { ref e, .. } => Some(e),
+            Self::MarkNonCurrent { ref e, .. } => Some(e),
+            Self::GetPr { ref e, .. } => Some(e),
+            Self::ComputeMergeDescription { ref e, .. } => Some(e),
+            Self::GetAckWeight { ref e, .. } => Some(e),
+            Self::GitResolveTreeRef { ref e, .. } => Some(e),
+            Self::ReplaceCommitId { ref e, .. } => Some(e),
+        }
+    }
+}
+
+enum ProcessAction {
+    Retain(Stack, Vec<CommitToTest>),
+    RetainUnchanged(Stack, Vec<CommitToTest>),
+    Deleted,
+}
+
+async fn process_single_stack(
     db: &mut Db,
     stack: Stack,
-    mut stack_commits: Vec<CommitToTest>,
-) -> anyhow::Result<bool> {
+    stack_commits: Vec<CommitToTest>,
+) -> Result<ProcessAction, ProcessError> {
+    let tx = db.transaction().await.map_err(ProcessError::TxCreate)?;
+
+    // 1. Delete any already-empty stacks.
     let Some(first_commit) = stack_commits.first() else {
-        db.with_transaction(async |tx| stack.delete(&tx).await)
-            .await
-            .context("deleting empty stack from database")?;
-        return Ok(false);
+        stack.delete(&tx).await.map_err(ProcessError::DeleteStack)?;
+        tx.commit().await.map_err(ProcessError::TxCommit)?;
+        return Ok(ProcessAction::Deleted);
     };
 
-    // Check if first commit's first parent matches target
-    let repo = db
-        .with_transaction(async |tx| Repository::get_by_id(&tx, stack.repository_id).await)
+    // 2. Delete stack if its target branch doesn't match its parent.
+    let repo = Repository::get_by_id(&tx, stack.repository_id)
         .await
-        .with_context(|| format!("repository {} for {}", stack.repository_id, stack.id))?;
+        .map_err(|e| ProcessError::GetRepository { e, id: stack.repository_id })?;
     let parents = git::list_parents(&repo.repo_shell, &first_commit.git_commit_id)
         .await
-        .context("getting commit parents")?;
+        .map_err(|e| ProcessError::GitListParents { e, commit_id: first_commit.git_commit_id.clone() })?;
 
     let target_commit = git::resolve_ref(&repo.repo_shell, &stack.target_branch)
         .await
-        .context("resolving target branch")?;
+        .map_err(|e| ProcessError::GitResolveMergeRef { e, branch: stack.target_branch.clone() })?;
 
     let needs_rebase = parents.is_empty() || parents[0].to_string() != target_commit.to_string();
 
@@ -207,7 +341,10 @@ async fn process_stack_updates(
 
         // Check for GPG signatures before rebasing
         for commit in &stack_commits {
-            if is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await? {
+            if is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id)
+                .await
+                .map_err(|e| ProcessError::CheckGpgSigned { e, change_id: commit.jj_change_id.clone() })?
+            {
                 log::info(format_args!(
                     "Throwing away GPG signature for commit {} due to rebase",
                     commit.jj_change_id
@@ -216,39 +353,34 @@ async fn process_stack_updates(
         }
 
         // Mark all commits as not current and delete stack
-        db.with_transaction(async |tx| {
-            for commit in &stack_commits {
-                commit
-                    .id
-                    .mark_non_current_for_all_prs_and_stacks(&tx)
-                    .await?;
-            }
-            stack.delete(&tx).await
-        })
-        .await
-        .context("deleting stack")?;
-
+        for commit in &stack_commits {
+            commit
+                .id
+                .mark_non_current_for_all_prs_and_stacks(&tx)
+                .await
+                .map_err(|e| ProcessError::MarkNonCurrent { e, commit_id: commit.git_commit_id.clone() })?
+        }
+        stack.delete(&tx).await.map_err(ProcessError::DeleteStack)?;
+        tx.commit().await.map_err(ProcessError::TxCommit)?;
         // The stack will be recreated naturally by the usual approved-PR logic.
-        return Ok(true);
+        return Ok(ProcessAction::Deleted);
     }
 
-    // Update descriptions and check for commit changes
+    // 3. We are going to retain the stack. Update descriptions and check for commit changes
     let mut work_done = false;
     let mut stack_poisoned = false;
-    for (next_idx, commit) in (1..).zip(stack_commits.iter_mut()) {
-        let pr = db
-            .with_transaction(async |tx| commit.id.get_pull_request(&tx).await)
+    let mut new_stack_commits = vec![];
+    for (next_idx, mut commit) in (1..).zip(stack_commits.into_iter()) {
+        let pr = commit.id.get_pull_request(&tx)
             .await
-            .with_context(|| format!("getting PR for merge commit {}", commit.git_commit_id))?;
+            .map_err(|e| ProcessError::GetPr { e, commit_id: commit.git_commit_id.clone() })?;
         // Update description (dummy implementation for now)
-        let description = db
-            .with_transaction(async |tx| git::compute_merge_description(&tx, &pr, commit).await)
+        let description = git::compute_merge_description(&tx, &pr, &commit)
             .await
-            .with_context(|| {
-                format!(
-                    "computing merge description for merge of PR {} (commit {})",
-                    pr.pr_number, commit.git_commit_id
-                )
+            .map_err(|e| ProcessError::ComputeMergeDescription {
+                e,
+                commit_id: commit.git_commit_id.clone(),
+                pr_number: pr.pr_number,
             })?;
         if let Err(e) =
             jj::update_commit_description(&repo.repo_shell, &commit.jj_change_id, &description)
@@ -289,12 +421,9 @@ async fn process_stack_updates(
             }
             ReviewStatus::Unreviewed => {
                 // Unreviewed PRs are only allowed in stacks if ack weight >= 2.0.
-                let weight = db
-                    .with_transaction(async |tx| {
-                        pr.get_ack_weight(&tx, repo.repo_shell.upstream()).await
-                    })
+                let weight = pr.get_ack_weight(&tx, repo.repo_shell.upstream())
                     .await
-                    .with_context(|| format!("getting ack weight for PR {}", pr.pr_number))?;
+                    .map_err(|e| ProcessError::GetAckWeight { e, pr_number: pr.pr_number })?;
                 if weight < 2.0 {
                     log::info(format_args!(
                         "{} PR {} unreviewed and ACK weight dropped to {:.2} (< 2.0); removing commit {} and rest of stack",
@@ -307,7 +436,7 @@ async fn process_stack_updates(
 
         if commit.ci_status == CiStatus::Skipped {
             log::info(format_args!(
-                "{} commit {} has been marked 'skipped' (due update to PR {}); removing rest of stack",
+                "{} commit {} has been marked 'skipped' (due to update to PR {}); removing rest of stack",
                 stack.id, commit.git_commit_id, pr.pr_number,
             ));
             stack_poisoned = true;
@@ -331,45 +460,31 @@ async fn process_stack_updates(
                             format!("{}^{{tree}}", current_git_id),
                         )
                         .await
-                        .context("getting current tree hash")?;
+                        .map_err(|e| ProcessError::GitResolveTreeRef { e, commit_id: current_git_id.clone() })?;
                         let original_tree = git::resolve_ref(
                             &repo.repo_shell,
                             format!("{}^{{tree}}", commit.git_commit_id),
                         )
                         .await
-                        .context("getting original tree hash")?;
+                        .map_err(|e| ProcessError::GitResolveTreeRef { e, commit_id: commit.git_commit_id.clone() })?;
 
                         if current_tree == original_tree {
                             // Tree unchanged -- just update the commit ID in place (lol)
-                            db.with_transaction(async |tx| {
-                                commit.replace_commit_id(&tx, current_git_id).await
-                            })
-                            .await
-                            .context("updating git commit ID")?;
-
-                            // Check for lost GPG signature
-                            let was_signed =
-                                is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id)
-                                    .await?;
-                            if was_signed {
-                                let is_signed = jj::is_commit_gpg_signed(
-                                    &repo.repo_shell,
-                                    &commit.jj_change_id,
-                                )
-                                .await?;
-                                if !is_signed {
-                                    log::info(format_args!(
-                                        "Throwing away GPG signature on change {} due to commit ID change",
-                                        commit.jj_change_id
-                                    ));
-                                }
-                            }
+                            commit.replace_commit_id(&tx, current_git_id.clone())
+                                .await
+                                .map_err(|e| ProcessError::ReplaceCommitId { e, new_commit_id: current_git_id, old_commit_id: commit.git_commit_id.clone() })?;
+                            // Typically this occurs because the user signed the commit (or
+                            // un-signed it). It can also happen if the commit description changes,
+                            // which can happen if the set of ACKs changes. Possibly we want to log
+                            // a warning or something here if this causes a signature to be thrown
+                            // away, but it's a bit of a PITA to check this and also unlikely the
+                            // user will see it in the scrollback.
                         } else {
                             // Tree changed - kill the rest of the stack
                             // FIXME this should be a warning and somehow have a std::Error associated to it (by refactoring functions probably)
                             log::info(format_args!(
                                 "Change {} tree changed (commit {} to {}), marking as not current removing remainder of stack.",
-                                commit.jj_change_id, commit.git_commit_id, current_git_id,
+                                commit.jj_change_id, commit.git_commit_id.clone(), current_git_id.clone(),
                             ));
                             stack_poisoned = true;
                         }
@@ -389,17 +504,24 @@ async fn process_stack_updates(
         }
 
         if stack_poisoned {
-            // FIXME: because we are using a separate transaction for each commit we're deleting,
-            // in theory some could succeed but later ones fail, leaving the stack in a bad state
-            // where middle commits are missing in the database (though ofc not in the git tree).
-            // We should loop through and do a single transaction here.
-            db.with_transaction(async |tx| {
-                commit.id.mark_non_current_for_all_prs_and_stacks(&tx).await
-            })
-            .await
-            .context("marking commit as not current for poisoned stack")?;
+            commit.id.mark_non_current_for_all_prs_and_stacks(&tx)
+                .await
+                .map_err(|e| ProcessError::MarkNonCurrent { e, commit_id: commit.git_commit_id })?
+        } else {
+            new_stack_commits.push(commit);
         }
     }
 
-    Ok(work_done)
+    // 4. Do another "is the stack empty" check.
+    let ret = if new_stack_commits.is_empty() {
+        stack.delete(&tx).await.map_err(ProcessError::DeleteStack)?;
+        ProcessAction::Deleted
+    } else if work_done {
+        ProcessAction::Retain(stack, new_stack_commits)
+    } else {
+        ProcessAction::RetainUnchanged(stack, new_stack_commits)
+    };
+
+    tx.commit().await.map_err(ProcessError::TxCommit)?;
+    Ok(ret)
 }
