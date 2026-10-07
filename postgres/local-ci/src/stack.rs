@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use xshell::cmd;
 
 use crate::args::StackId;
+use crate::daemon::Stacks;
 use crate::terminal::ColorFormat;
 
 /// Refreshes all the commits in a stack, first offering to push them if they're all signed.
@@ -30,11 +31,11 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
     let mut all_signed;
     loop {
         let id = stack_id.to_db_stack_id();
-        stack = db
-            .with_transaction(async move |tx| Stack::find_by_id(&tx, id).await)
+        let mut stacks = db
+            .with_transaction(async move |tx| Stacks::single(tx, id).await)
             .await
             .context("finding stack")?;
-        crate::daemon::process_stack_updates(db, stack)
+        stacks.process(db)
             .await
             .context("updating stack state against the database and local repo")?;
 
@@ -90,7 +91,7 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
         }
 
         if did_something {
-            crate::daemon::process_stack_updates(db, stack)
+            stacks.process(db)
                 .await
                 .context("updating stack state against the database and local repo")?;
             println!();
@@ -145,7 +146,12 @@ pub async fn refresh(stack_id: StackId, db: &mut Db) -> anyhow::Result<()> {
 
     // After refreshing the PRs, it may be that we can delete or otherwise reduce the stack,
     // since some PRs have been merged.
-    crate::daemon::process_stack_updates(db, stack)
+    let id = stack_id.to_db_stack_id();
+    let mut stacks = db
+        .with_transaction(async move |tx| Stacks::single(tx, id).await)
+        .await
+        .context("finding stack")?;
+    stacks.process(db)
         .await
         .context("updating stack state against the database and local repo")?;
 

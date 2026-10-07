@@ -10,12 +10,10 @@ use crate::terminal::ColorFormat;
 
 use anyhow::Context as _;
 use lcilib::Db;
-use lcilib::db::MergeStatus;
 use lcilib::db::models::{
     Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack,
     PullRequest, Repository, ReviewStatus, Stack, UpdateAck, UpdateCommit,
 };
-use lcilib::jj::is_commit_gpg_signed;
 use lcilib::{git, jj};
 use std::time::Duration;
 use tokio::time;
@@ -263,7 +261,10 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
 
     // Step 0: Process existing stacks in case the user has messed with them
     //  since the last call.
-    if process_existing_stacks(db)
+    let mut stacks = db.with_transaction(Stacks::find_all)
+        .await
+        .context("getting stacks from the database")?;
+    if stacks.process(db)
         .await
         .context("processing existing stacks (pass one)")?
     {
@@ -319,7 +320,10 @@ async fn check_approved_prs(db: &mut Db) -> anyhow::Result<bool> {
     }
 
     // Step 3: Process existing stacks for rebasing and updates
-    if process_existing_stacks(db)
+    let mut stacks = db.with_transaction(Stacks::find_all)
+        .await
+        .context("getting stacks from the database")?;
+    if stacks.process(db)
         .await
         .context("processing existing stacks (pass two)")?
     {
@@ -509,261 +513,6 @@ async fn try_extend_stack(
             Ok(false)
         }
     }
-}
-
-async fn process_existing_stacks(db: &mut Db) -> anyhow::Result<bool> {
-    let mut work_done = false;
-
-    // Get all stacks grouped by repo/target
-    let all_stacks = db
-        .with_transaction(Stack::get_all)
-        .await
-        .context("getting list of all stacks from database")?;
-
-    for stack in all_stacks {
-        let id = stack.id;
-        if process_stack_updates(db, stack)
-            .await
-            .with_context(|| format!("processing updates for stack {}", id))?
-        {
-            work_done = true;
-        }
-    }
-
-    Ok(work_done)
-}
-
-pub async fn process_stack_updates(db: &mut Db, stack: Stack) -> anyhow::Result<bool> {
-    let mut stack_commits = db
-        .with_transaction(async |tx| stack.id.get_commits(&tx).await)
-        .await
-        .with_context(|| format!("getting list of commits for {}", stack.id))?;
-
-    let Some(first_commit) = stack_commits.first() else {
-        db.with_transaction(async |tx| stack.delete(&tx).await)
-            .await
-            .context("deleting empty stack from database")?;
-        return Ok(false);
-    };
-
-    // Check if first commit's first parent matches target
-    let repo = db
-        .with_transaction(async |tx| Repository::get_by_id(&tx, stack.repository_id).await)
-        .await
-        .with_context(|| format!("repository {} for {}", stack.repository_id, stack.id))?;
-    let parents = git::list_parents(&repo.repo_shell, &first_commit.git_commit_id)
-        .await
-        .context("getting commit parents")?;
-
-    let target_commit = git::resolve_ref(&repo.repo_shell, &stack.target_branch)
-        .await
-        .context("resolving target branch")?;
-
-    let needs_rebase = parents.is_empty() || parents[0].to_string() != target_commit.to_string();
-
-    if needs_rebase {
-        log::info(format_args!(
-            "Stack {} needs rebase due to target branch change",
-            stack.id
-        ));
-
-        // Check for GPG signatures before rebasing
-        for commit in &stack_commits {
-            if is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await? {
-                log::info(format_args!(
-                    "Throwing away GPG signature for commit {} due to rebase",
-                    commit.jj_change_id
-                ));
-            }
-        }
-
-        // Mark all commits as not current and delete stack
-        db.with_transaction(async |tx| {
-            for commit in &stack_commits {
-                commit
-                    .id
-                    .mark_non_current_for_all_prs_and_stacks(&tx)
-                    .await?;
-            }
-            stack.delete(&tx).await
-        })
-        .await
-        .context("deleting stack")?;
-
-        // The stack will be recreated naturally by the usual approved-PR logic.
-        return Ok(true);
-    }
-
-    // Update descriptions and check for commit changes
-    let mut work_done = false;
-    let mut stack_poisoned = false;
-    for (next_idx, commit) in (1..).zip(stack_commits.iter_mut()) {
-        let pr = db
-            .with_transaction(async |tx| commit.id.get_pull_request(&tx).await)
-            .await
-            .with_context(|| format!("getting PR for merge commit {}", commit.git_commit_id))?;
-        // Update description (dummy implementation for now)
-        let description = db
-            .with_transaction(async |tx| git::compute_merge_description(&tx, &pr, commit).await)
-            .await
-            .with_context(|| {
-                format!(
-                    "computing merge description for merge of PR {} (commit {})",
-                    pr.pr_number, commit.git_commit_id
-                )
-            })?;
-        if let Err(e) =
-            jj::update_commit_description(&repo.repo_shell, &commit.jj_change_id, &description)
-                .await
-        {
-            log::warn(
-                &e,
-                format_args!(
-                    "Failed to update description for commit {}",
-                    commit.jj_change_id
-                ),
-            );
-        }
-
-        if commit.stack_sequence_order != Some(next_idx) {
-            // A commit was deleted from the stack (perhaps by the
-            // user calling 'pr reset', or by an earlier attempted
-            // removal that went bad).
-            stack_poisoned = true;
-        }
-
-        if pr.merge_status != MergeStatus::Pending {
-            log::info(format_args!(
-                "{} PR {} no longer 'pending'; now {}; removing commit {} and rest of stack",
-                stack.id, pr.pr_number, pr.merge_status, commit.git_commit_id,
-            ));
-            stack_poisoned = true;
-        }
-
-        match pr.review_status {
-            ReviewStatus::Approved => {}
-            ReviewStatus::Rejected => {
-                log::info(format_args!(
-                    "{} PR {} marked rejected; removing commit {} and rest of stack",
-                    stack.id, pr.pr_number, commit.git_commit_id,
-                ));
-                stack_poisoned = true;
-            }
-            ReviewStatus::Unreviewed => {
-                // Unreviewed PRs are only allowed in stacks if ack weight >= 2.0.
-                let weight = db
-                    .with_transaction(async |tx| {
-                        pr.get_ack_weight(&tx, repo.repo_shell.upstream()).await
-                    })
-                    .await
-                    .with_context(|| format!("getting ack weight for PR {}", pr.pr_number))?;
-                if weight < 2.0 {
-                    log::info(format_args!(
-                        "{} PR {} unreviewed and ACK weight dropped to {:.2} (< 2.0); removing commit {} and rest of stack",
-                        stack.id, pr.pr_number, weight, commit.git_commit_id,
-                    ));
-                    stack_poisoned = true;
-                }
-            }
-        }
-
-        if commit.ci_status == CiStatus::Skipped {
-            log::info(format_args!(
-                "{} commit {} has been marked 'skipped' (due update to PR {}); removing rest of stack",
-                stack.id, commit.git_commit_id, pr.pr_number,
-            ));
-            stack_poisoned = true;
-        }
-        // FIXME what to do about ci_status Failed -- we actually want to mark the whole PR as 'needs change'
-        //  I guess to prevent the commit from being recreated? Or maybe it depends on the particular stack?
-        //  For now just ignore it.
-
-        // Check if git commit ID has changed, and if so, if this was a "real" change (tree changed,
-        // which should never happen, but okay, let's check) or just an accounting change (update
-        // description or sign, which may happen externally).
-        if !stack_poisoned {
-            match jj::get_current_git_commit_for_change_id(&repo.repo_shell, &commit.jj_change_id)
-                .await
-            {
-                Ok(current_git_id) => {
-                    if current_git_id != commit.git_commit_id {
-                        // Get tree hash and parents to check what changed
-                        let current_tree = git::resolve_ref(
-                            &repo.repo_shell,
-                            format!("{}^{{tree}}", current_git_id),
-                        )
-                        .await
-                        .context("getting current tree hash")?;
-                        let original_tree = git::resolve_ref(
-                            &repo.repo_shell,
-                            format!("{}^{{tree}}", commit.git_commit_id),
-                        )
-                        .await
-                        .context("getting original tree hash")?;
-
-                        if current_tree == original_tree {
-                            // Tree unchanged -- just update the commit ID in place (lol)
-                            db.with_transaction(async |tx| {
-                                commit.replace_commit_id(&tx, current_git_id).await
-                            })
-                            .await
-                            .context("updating git commit ID")?;
-
-                            // Check for lost GPG signature
-                            let was_signed =
-                                is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id)
-                                    .await?;
-                            if was_signed {
-                                let is_signed = jj::is_commit_gpg_signed(
-                                    &repo.repo_shell,
-                                    &commit.jj_change_id,
-                                )
-                                .await?;
-                                if !is_signed {
-                                    log::info(format_args!(
-                                        "Throwing away GPG signature on change {} due to commit ID change",
-                                        commit.jj_change_id
-                                    ));
-                                }
-                            }
-                        } else {
-                            // Tree changed - kill the rest of the stack
-                            // FIXME this should be a warning and somehow have a std::Error associated to it (by refactoring functions probably)
-                            log::info(format_args!(
-                                "Change {} tree changed (commit {} to {}), marking as not current removing remainder of stack.",
-                                commit.jj_change_id, commit.git_commit_id, current_git_id,
-                            ));
-                            stack_poisoned = true;
-                        }
-                        work_done = true;
-                    }
-                }
-                Err(e) => {
-                    log::warn(
-                        &e,
-                        format_args!(
-                            "Failed to get current git commit for {}",
-                            commit.jj_change_id
-                        ),
-                    );
-                }
-            }
-        }
-
-        if stack_poisoned {
-            // FIXME: because we are using a separate transaction for each commit we're deleting,
-            // in theory some could succeed but later ones fail, leaving the stack in a bad state
-            // where middle commits are missing in the database (though ofc not in the git tree).
-            // We should loop through and do a single transaction here.
-            db.with_transaction(async |tx| {
-                commit.id.mark_non_current_for_all_prs_and_stacks(&tx).await
-            })
-            .await
-            .context("marking commit as not current for poisoned stack")?;
-        }
-    }
-
-    Ok(work_done)
 }
 
 async fn check_signed_merges(
