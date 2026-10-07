@@ -9,8 +9,9 @@ use lcilib::db::models::{DbRepositoryId,Stack, CommitToTest};
 use super::util;
 
 pub struct Stacks {
-    high_priority: Vec<(Stack, Vec<CommitToTest>)>,
-    low_priority: Vec<(Stack, Vec<CommitToTest>)>,
+    inner: Vec<(Stack, Vec<CommitToTest>)>,
+    high_priority: Vec<usize>,
+    low_priority: Vec<usize>,
 }
 
 impl Stacks {
@@ -18,9 +19,10 @@ impl Stacks {
     pub async fn find_all(
         tx: &lcilib::Transaction<'_>,
     ) -> anyhow::Result<Self> {
+        let mut inner = vec![];
         // Find all stacks grouped by DB and branch
         let mut branch_map =
-            HashMap::<(DbRepositoryId, String), Vec<(f64, Stack, Vec<CommitToTest>)>>::new();
+            HashMap::<(DbRepositoryId, String), Vec<(f64, usize)>>::new();
         for stack in Stack::get_all(tx).await? {
             let commits = stack.id.get_commits(tx).await?;
             let priority = util::calculate_stack_priority(&commits, tx)
@@ -30,7 +32,9 @@ impl Stacks {
             branch_map
                 .entry((stack.repository_id, stack.target_branch.clone()))
                 .or_default()
-                .push((priority, stack, commits));
+                .push((priority, inner.len()));
+
+            inner.push((stack, commits));
         }
 
         let mut high_priority = vec![];
@@ -39,23 +43,23 @@ impl Stacks {
         for mut stacks in branch_map.into_values() {
             // priority order, so pop() takes the highest-priority stack
             stacks.sort_by(|a, b| a.0.total_cmp(&b.0));
-            if let Some((_, s, c)) = stacks.pop() {
-                high_priority.push((s, c));
+            if let Some((_, idx)) = stacks.pop() {
+                high_priority.push(idx);
             }
-            low_priority.extend(stacks.into_iter().map(|(_, s, c)| (s, c)));
+            low_priority.extend(stacks.into_iter().map(|(_, idx)| idx));
         }
 
-        Ok(Self { high_priority, low_priority })
+        Ok(Self { inner, high_priority, low_priority })
     }
 
     /// The high priority stack list.
     pub fn high_priority(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
-        self.high_priority.iter()
+        self.high_priority.iter().map(|idx| &self.inner[*idx])
     }
 
     /// The low priority stack list.
     pub fn low_priority(&self) -> impl Iterator<Item = &(Stack, Vec<CommitToTest>)> {
-        self.low_priority.iter()
+        self.low_priority.iter().map(|idx| &self.inner[*idx])
     }
 
     /// Whether the "high priority" stack list is empty.
