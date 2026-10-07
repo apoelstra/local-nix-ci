@@ -980,32 +980,6 @@ impl PrCommit {
         Ok(rows.iter().map(Self::from_row).collect())
     }
 
-    /// Find all PR-commit relationships for a specific commit
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database operation fails.
-    pub async fn find_by_commit(
-        tx: &Transaction<'_>,
-        commit_id: DbCommitId,
-    ) -> Result<Vec<Self>, OperationError> {
-        let rows = tx
-            .inner
-            .query(
-                r#"
-                SELECT id, pull_request_id, commit_id, sequence_order, commit_type, is_current, created_at, updated_at
-                FROM pr_commits
-                WHERE commit_id = $1
-                ORDER BY updated_at DESC
-                "#,
-                &[&commit_id],
-            )
-            .await
-            .map_err(|e| OperationError::with_context(e, "find_by_commit", "PrCommit", &format!("commit_id: {}", commit_id)))?;
-
-        Ok(rows.iter().map(Self::from_row).collect())
-    }
-
     /// Update PR-commit relationship status
     ///
     /// # Errors
