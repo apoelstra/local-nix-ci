@@ -3,6 +3,7 @@
 mod build_derivation;
 mod ci_cycle;
 mod log;
+mod stacks;
 pub mod util;
 
 use crate::terminal::ColorFormat;
@@ -19,7 +20,8 @@ use lcilib::{git, jj};
 use std::time::Duration;
 use tokio::time;
 
-pub use self::ci_cycle::{find_stacks, print_work_summary, prs_needing_testing};
+pub use self::ci_cycle::{print_work_summary, prs_needing_testing};
+pub use self::stacks::Stacks;
 
 pub async fn run(_db: &mut Db) -> anyhow::Result<()> {
     log::info(format_args!("Starting local-ci daemon..."));

@@ -3,55 +3,18 @@
 use anyhow::Context as _;
 use chrono::Utc;
 use lcilib::{
-    Db, db::{CiStatus, models::{Ack, AckStatus, CommitToTest, DbRepositoryId, PullRequest, Repository, ReviewStatus, Stack}}, jj::is_commit_gpg_signed
+    Db, db::{CiStatus, models::{Ack, AckStatus, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}}, jj::is_commit_gpg_signed
 };
-use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
 
 use crate::terminal::{ColorFormat, Colorable as _};
 
 use super::mark_commit_status;
-use super::{build_derivation, log, util};
+use super::{build_derivation, log};
+use super::Stacks;
 
 const TEST_COMMITS_ACK_THRESHOLD: f64 = 1.0;
-
-/// Returns all the high-priority and low-priority stacks across all repos.
-pub async fn find_stacks(
-    tx: &lcilib::Transaction<'_>,
-) -> anyhow::Result<(
-    Vec<(Stack, Vec<CommitToTest>)>,
-    Vec<(Stack, Vec<CommitToTest>)>,
-)> {
-    // Find all stacks grouped by DB and branch
-    let mut branch_map =
-        HashMap::<(DbRepositoryId, String), Vec<(f64, Stack, Vec<CommitToTest>)>>::new();
-    for stack in Stack::get_all(tx).await? {
-        let commits = stack.id.get_commits(tx).await?;
-        let priority = util::calculate_stack_priority(&commits, tx)
-            .await
-            .context("calculating stack priority")?;
-
-        branch_map
-            .entry((stack.repository_id, stack.target_branch.clone()))
-            .or_default()
-            .push((priority, stack, commits));
-    }
-
-    let mut high_priority = vec![];
-    let mut low_priority = vec![];
-
-    for mut stacks in branch_map.into_values() {
-        // priority order, so pop() takes the highest-priority stack
-        stacks.sort_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((_, s, c)) = stacks.pop() {
-            high_priority.push((s, c));
-        }
-        low_priority.extend(stacks.into_iter().map(|(_, s, c)| (s, c)));
-    }
-
-    Ok((high_priority, low_priority))
-}
 
 pub async fn prs_needing_testing(
     tx: &lcilib::Transaction<'_>,
@@ -93,16 +56,14 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     let standalone_commits = CommitToTest::get_standalone_approved_commits(&tx)
         .await
         .context("finding standalone approved commits")?;
-    let (high_priority_stacks, low_priority_stacks) =
-        find_stacks(&tx).await.context("finding stacks")?;
+    let stacks = Stacks::find_all(&tx).await.context("finding stacks")?;
     let prs_needing_testing = prs_needing_testing(&tx).await?;
 
     print_work_summary(
         &tx,
         &standalone_commits,
-        &high_priority_stacks,
+        &stacks,
         &prs_needing_testing,
-        &low_priority_stacks,
     )
     .await
     .context("printing work summary")?;
@@ -116,7 +77,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     }
 
     // 2. Check high-priority stacks (with positive priority)
-    for (_stack, commits) in &high_priority_stacks {
+    for (_stack, commits) in stacks.high_priority() {
         for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
                 tx.commit().await.context("committing transaction")?;
@@ -172,7 +133,7 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
     }
 
     // 4. Check low-priority stacks (negative priority or conflicting)
-    for (_stack, commits) in &low_priority_stacks {
+    for (_stack, commits) in stacks.low_priority() {
         for commit in commits {
             if commit.should_run_ci && commit.ci_status == CiStatus::Unstarted {
                 tx.commit().await.context("committing transaction")?;
@@ -189,14 +150,12 @@ async fn find_next_commit_to_test(db: &mut Db) -> anyhow::Result<Option<CommitTo
 pub async fn print_work_summary(
     tx: &lcilib::Transaction<'_>,
     standalone_commits: &[CommitToTest],
-    high_priority_stacks: &[(Stack, Vec<CommitToTest>)],
+    stacks: &Stacks,
     prs_needing_testing: &[PullRequest],
-    low_priority_stacks: &[(Stack, Vec<CommitToTest>)],
 ) -> anyhow::Result<()> {
     if standalone_commits.is_empty()
         && prs_needing_testing.is_empty()
-        && high_priority_stacks.is_empty()
-        && low_priority_stacks.is_empty()
+        && stacks.is_empty()
     {
         // If there is nothing to do, print no summary. We will use backoff logic
         // to print "nothing to do" messages without spamming the user at a higher
@@ -295,11 +254,11 @@ pub async fn print_work_summary(
     }
 
     // Print high-priority stack summary
-    if !high_priority_stacks.is_empty() {
+    if !stacks.high_priority().is_empty() {
         log::info("");
         log::info("=== High Priority Stacks ===");
     }
-    for (stack, _commits) in high_priority_stacks {
+    for (stack, _commits) in stacks.high_priority() {
         let repo = Repository::get_by_id(tx, stack.repository_id).await?;
         let prs = stack
             .get_associated_prs(tx)
@@ -329,11 +288,11 @@ pub async fn print_work_summary(
     }
 
     // Print low-priority stack summary if any
-    if !low_priority_stacks.is_empty() {
+    if !stacks.low_priority().is_empty() {
         log::info("");
         log::info("=== Low Priority Stacks ===");
     }
-    for (stack, _commits) in low_priority_stacks {
+    for (stack, _commits) in stacks.low_priority() {
         let repo = Repository::get_by_id(tx, stack.repository_id).await?;
 
         let prs = stack

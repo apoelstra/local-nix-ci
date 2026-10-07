@@ -169,7 +169,7 @@ async fn show_daemon_work(tx: &lcilib::Transaction<'_>) -> anyhow::Result<()> {
     let standalone_commits = CommitToTest::get_standalone_approved_commits(tx)
         .await
         .context("finding standalone approved commits")?;
-    let (high_priority_stacks, low_priority_stacks) = crate::daemon::find_stacks(tx)
+    let stacks = crate::daemon::Stacks::find_all(tx)
         .await
         .context("finding stacks")?;
     let prs_needing_testing = crate::daemon::prs_needing_testing(tx)
@@ -179,9 +179,8 @@ async fn show_daemon_work(tx: &lcilib::Transaction<'_>) -> anyhow::Result<()> {
     crate::daemon::print_work_summary(
         tx,
         &standalone_commits,
-        &high_priority_stacks,
+        &stacks,
         &prs_needing_testing,
-        &low_priority_stacks,
     )
     .await
     .context("printing work summary")?;
