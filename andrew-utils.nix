@@ -146,11 +146,20 @@ rec {
   # Given a list of features
   featuresForSrc = { include ? [], exclude ? [] }: { src, rustc, needsNoStd, cargoToml, ... }:
     let
+      # A uniformly random bit (keyed by commitId and the argument).
       randBit = name:
         let
           seed = builtins.hashString "sha256" (src.commitId + name);
           seed0 = builtins.substring 0 1 seed;
           bit = builtins.elem seed0 [ "0" "1" "2" "3" "4" "5" "6" "7" ];
+        in bit;
+
+      # A random bit (keyed by commitId and the argument) with probability 1/16 to be true
+      randBit16 = name:
+        let
+          seed = builtins.hashString "sha256" (src.commitId + name);
+          seed0 = builtins.substring 0 1 seed;
+          bit = seed0 == "0";
         in bit;
 
       lib = nixpkgs.lib;
@@ -167,19 +176,24 @@ rec {
       allFeatureNames = builtins.attrNames allFeatures;
 
       result =
-      # With the nightly compiler we're basically testing the compiler rather than
-      # testing our own code (the stable compiler is for our code). So we don't need
-      # to redo the whole matrix. Sufficient to do just a couple easy cases and the
-      # explicitly-included cases.
-      if rustcIsNightly rustc
+      # The nightly compiler is likely to be the fastest, and it's quite unlikely
+      # for bad feature combinations to be passed by nightly but not stable. (These
+      # could appear, I suppose, if tests with complicated feature gates were to
+      # use features that exceeded our MSRV, but we've never seen this happen and
+      # it wouldn't matter to users.)
+      #
+      # So do the full test matrix there and do only all/nothing for the other
+      # compilers. In a world with more compute power we'd do the full matrix with
+      # the MSRV compiler, which is the most likely to find bugs, but the MSRV is
+      # usually the slowest.
+      #
+      # For other complier
+      if (randBit16 rustc.version) || rustcIsNightly rustc
       then [
-          []
-          allFeatureNames
-      ] ++ include
-      else [
           # Randoms
           (builtins.filter (name: randBit name) allFeatureNames)
           (builtins.filter (name: randBit ("0" + name)) allFeatureNames)
+          (builtins.filter (name: randBit ("1" + name)) allFeatureNames)
           # Nothing and everything
           []
           allFeatureNames
@@ -187,7 +201,11 @@ rec {
         # Each individual feature in isolation.
         ++ (map (feat: [ feat ]) allFeatureNames)
         # Explicitly included things.
-        ++ include;
+        ++ include
+      else [
+          []
+          allFeatureNames
+      ];
     in
       # This function is supposed to make a list of lists, and because this
       # is hard to keep track of with all the maps and stuff flying around,
