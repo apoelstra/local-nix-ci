@@ -770,11 +770,12 @@ rec {
     generatedCargoNix:
     calledCargoNix:
     let
-      pkgs = import <nixpkgs> {
-        overlays = [ (self: super: { inherit rustc;
-          buildPackages = super.buildPackages // { inherit rustc; };
-}) ];
-      };
+      # Note that we do *not* overlay nixpkgs here. This function is the "inner loop" of the
+      # whole derivation matrix and we want to be cheap, and we don't ever use pkgs.rustc
+      # (we get `rustc` from a passed-in variable and our use of `pkgs` is from a bunch of
+      # small libraries that have nothing to do with Rust and certainly don't need to be
+      # built with our toolchain).
+      pkgs = nixpkgs;
       lib = pkgs.lib;
       boolString = b: if b then "true" else "false";
 
