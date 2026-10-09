@@ -597,15 +597,13 @@ rec {
     , msrv
     , src
     , patches ? []
-    , workspace
-    , features
-    , cargoToml
     , releaseMode ? false
     , ...
     }:
     generatedCargoNix:
     let
       cargoNixPath = "${generatedCargoNix}";
+      releaseModeName = if releaseMode then "release" else "debug";
       blurb = ''
         echo 'Cargo.nix: ${cargoNixPath}'
         echo 'Project name: ${projectName}'
@@ -614,12 +612,11 @@ rec {
         echo 'lockFile: ${lockFile}'
         echo 'Source commit: ${builtins.toString src.commitId}'
         echo 'Source: ${builtins.toString src.src}'
-        echo 'Workspace: ${if isNull workspace then "[no workspaces]" else workspace}'
-        echo 'Features: ${builtins.toJSON features}'
+        echo 'MSRV: ${msrv}'
+        echo 'Release mode: ${releaseModeName}'
         echo 'Patches: ${builtins.toJSON patches}'
       '';
       blurbHash = builtins.hashString "sha256" blurb;
-      releaseModeName = if releaseMode then "release" else "debug";
       memoName = builtins.unsafeDiscardStringContext
         "${projectName}-called-cargo-nix-${builtins.toString prNum}-${src.shortId}-${blurbHash}";
       # We are given the IFD for the crate in question as `generatedCargoNix`. But to get
