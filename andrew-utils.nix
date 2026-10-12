@@ -1,24 +1,5 @@
-# Note: From time to time nixpkgs will break things. In order to bisect the
-# most straightforward way is to pull out the `nix-instantiate` command from
-# test.sh (or modify test.sh itself) to set
-#
-#     NIX_PATH=nixpkgs=$HOME/code/NixOS/nixpkgs/master/
-#
-# Then, in that directory, bisect by fetching `origin` then running
-#
-#     git reset --hard origin/master~N
-#
-# Where N starts from 65536 or whatever and you bisect from there. I would NOT
-# try to bisect by overriding the `nixpkgs` input here because it isn't
-# consistently propagated even within this file, and even if I fixed that it
-# would not be propagated into crate2nix (I suspect) or into crate2nix's generated
-# IFD nixfiles (I'm pretty sure).
-
-# Works with nixpkgs 4f3a074422623781034daf8b1a966ee556587539 and crate2nix cf034861fdc4e091fc7c5f01d6c022dc46686cf1
-# The next nixpkgs commit is affected by https://github.com/NixOS/nixpkgs/issues/317323 and does not work for me.
-
-# 4f3a074422623781034daf8b1a966ee556587539 48871 good
-# e594a0fc14f457b554dce4c7bf8a8174f495a389 48870 bad  (and suspicious!)
+# Note: to avoid breakage due to nixpkgs you almost certainly need to pin NIX_PATH.
+# Confirmed working with nixpkgs 20075955deac2583bb12f07151c2df830ef346b4
 { nixpkgs ? import <nixpkgs> { }
 , stdenv ? nixpkgs.stdenv
 }:
@@ -560,7 +541,9 @@ rec {
       toFarm = map (x: x.link) memoAndLinks;
     in if forceSequential
       # sequentialLinkFarm assumes the form of toFarm is { value = X, name = Y } rather
-      # than { path = X, name = Y } as the normal linkFarm does. See next comment for why.
+      # than { path = X, name = Y } as the normal linkFarm does. We do this so that when
+      # calling the real linkFarm in the 'else' clause, we can first run things through
+      # builtins.listToAttrs. (See next comment for why.)
       then sequentialLinkFarm sequentialWidth name toFarm
       # With the real linkFarm, providing an attrset is dramatically faster since it
       # disables goofy "in case of duplicate names make sure the last item takes priority"
@@ -875,10 +858,6 @@ rec {
           inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
         };
       in
-        # If test derivations seem to be very slow to instantiate, uncomment
-        # the following line and run test.sh piped through `ts -s` to get a
-        # picture of how long each instantiation takes.
-        # builtins.trace "Evaluating test derivation"
         drv.overrideDerivation (drv: {
           allowSubstitutes = false;
           # Add a bunch of stuff just to make the derivation easier to grok
