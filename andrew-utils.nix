@@ -194,7 +194,9 @@ rec {
       assert builtins.all builtins.isList include;
       assert builtins.isList exclude;
       assert builtins.all builtins.isList result;
-      if needsNoStd
+      if result == [ [] [ "default" ] ]
+      then [ [] ]
+      else if needsNoStd
       then map (fs: if builtins.elem "std" fs || builtins.elem "default" fs then fs else fs ++ ["no-std"]) result
       else result;
 
