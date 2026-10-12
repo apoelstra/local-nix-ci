@@ -755,36 +755,43 @@ rec {
 
   # A value of singleCheckDrv useful for Rust projects. Should be used with
   # `crate2nixSingleCheckMemo`.
+  #
+  # This derivation runs ONLY the unit tests of the workspace under test,
+  # against the prebuilt binaries produced by crate2nix. It deliberately
+  # references no whole-repo data (no full source tree, no crate2nix IFD
+  # output). This way if a commit leaves a workspace's tree unchanged, its
+  # test derivations will get reused from some previous run.
+  #
+  # Everything interpolated into testPreRun/testPostRun below must therefore
+  # be either a genuine test input or commit-independent. In particular do
+  # NOT echo commit ids, PR numbers, tip status or lockfile store paths here:
+  # they would make the derivation hash commit-specific again.
   crate2nixSingleCheckDrv =
     { projectName
-    , prNum
     , isMainLockFile
     , isMainWorkspace
     , workspace ? null
-    , mainCargoToml
     , cargoToml
     , features
     , rustc
     , lockFile
     , src
-    , srcName
-    , mtxName
-    , clippyExtraArgs ? null
-    , runClippy ? true
-    , runDocs ? true
-    , runFmt ? false
-    , runFuzz ? true
-    , docTestCmd ? "cargo test --all-features --locked --doc"
     # We have some should_panic tests in rust-bitcoin that fail in release mode
     , releaseMode ? false
     , extraTestPreRun ? ""
     , extraTestPostRun ? ""
-    , extraTestPostRunTopLevel ? ""
     , ...
     }:
     generatedCargoNix:
     calledCargoNix:
     let
+      lockfileName =
+        # Discard context: lockFile is a store path under the commit source,
+        # and letting its context into this derivation would re-introduce a
+        # whole-repo dependency. The name is informational only (to the extent
+        # its content would affect the derivation this was done by crate2nix
+        # long before we got to this point).
+        builtins.unsafeDiscardStringContext (builtins.toString lockFile);
       # Note that we do *not* overlay nixpkgs here. This function is the "inner loop" of the
       # whole derivation matrix and we want to be cheap, and we don't ever use pkgs.rustc
       # (we get `rustc` from a passed-in variable and our use of `pkgs` is from a bunch of
@@ -804,16 +811,11 @@ rec {
         testPreRun = ''
           ${rustc}/bin/rustc -V
           ${rustc}/bin/cargo -V
-          echo "PR: ${projectName} #${prNum}"
-          echo "Commit: ${src.commitId}"
-          echo "Tip: ${boolString src.isTip}"
           echo "Workspace: ${if isNull workspace then "[no workspaces]" else workspace} (main: ${boolString isMainWorkspace})"
           echo "Features: ${builtins.toJSON features}"
-          echo "Lockfile: ${lockFile} (main: ${boolString isMainLockFile})"
+          echo "Lockfile: ${lockfileName} (main: ${boolString isMainLockFile})"
           echo
           echo "Nightly: ${boolString (rustcIsNightly rustc)}"
-          echo "Run clippy: ${boolString runClippy}"
-          echo "Run docs: ${boolString runDocs}"
           echo "Release mode: ${boolString releaseMode}"
 
           # Always pull these in; though it is usually not needed.
@@ -833,62 +835,196 @@ rec {
         '' + extraTestPreRun;
         testPostRun = ''
             export PATH=$PATH:${pkgs.gcc}/bin:${rustc}/bin:${pkgs.pkg-config}/bin
-            export NIXES_GENERATED_DIR=${generatedCargoNix}/
             # FIXME these two lines properly belong to icboc -- should add some config
             # field for this stuff. (Needed for `cargo test` to run with a hidapi depenedncy)
             export PKG_CONFIG_PATH=${pkgs.udev.dev}/lib/pkgconfig
             export CFLAGS="$NIX_CFLAGS_COMPILE -isystem ${pkgs.udev.dev}/include"
-
-            export CARGO_TARGET_DIR=$PWD/target
-            pushd ${generatedCargoNix}/crate
-            export CARGO_HOME=../cargo
-
-            # We need to manually run cargo test because the runTests run will not.
-            # See https://github.com/nix-community/crate2nix/issues/194
-            ${docTestCmd}
-          '' + lib.optionalString runClippy ''
-            # Nightly clippy
-            cargo clippy --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
-            cargo clippy --all-features --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
-          '' + lib.optionalString runDocs ''
-            # Do nightly "broken links" check
-            export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
-            cargo doc -j1 --all-features --no-deps
-            # Do non-docsrs check
-            export RUSTDOCFLAGS="-D warnings"
-            cargo doc -j1 --all-features --no-deps
-          '' + lib.optionalString runFmt ''
-            cargo fmt --all -- --check
-          '' + lib.optionalString (runFuzz && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
-            echo "Ran fuzztests (cargo-fuzz): ${fuzzLibfuzzerDrv}"
-          '' + extraTestPostRunTopLevel + ''
-            popd
           '' + extraTestPostRun;
         };
-        fuzzTargets = map
-          (bin: bin.name)
-          (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
-        fuzzLibfuzzerDrv = cargoFuzzLibfuzzerDrv {
-          inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
-        };
-      in
-        drv.overrideDerivation (drv: {
-          allowSubstitutes = false;
-          # Add a bunch of stuff just to make the derivation easier to grok
-          checkPrProjectName = projectName;
-          checkPrPrNum = prNum;
-          checkPrRustc = rustc;
-          checkPrLockFile = lockFile;
-          checkPrFeatures = builtins.toJSON features;
-          checkPrWorkspace = workspace;
-          checkPrSrc = builtins.toString src.commitId;
-          checkPrIsMainLockFile = boolString isMainLockFile;
-          checkPrRustcIsNightly = boolString (rustcIsNightly rustc);
-          checkPrRunFmt = boolString runFmt;
-          checkPrRunClippy = boolString runClippy;
-          checkPrRunDocs = boolString runDocs;
-          checkPrIsTip = boolString src.isTip;
-        });
+    in
+      drv.overrideDerivation (drv: {
+        allowSubstitutes = false;
+        # Add a bunch of stuff just to make the derivation easier to grok.
+        checkPrProjectName = projectName;
+        checkPrRustc = rustc;
+        checkPrLockFile = lockfileName;
+        checkPrFeatures = builtins.toJSON features;
+        checkPrWorkspace = workspace;
+        checkPrIsMainLockFile = boolString isMainLockFile;
+        checkPrRustcIsNightly = boolString (rustcIsNightly rustc);
+      });
+
+  # Derivation which runs the "top-level" checks -- doc-tests, clippy, docs,
+  # fmt, fuzz-manifest checks -- on a WRITABLE COPY OF THE WHOLE REPOSITORY.
+  #
+  # These checks need the whole-repo source rather than the source of the
+  # workspace under test: clippy and cargo doc run from the workspace root,
+  # and cargo test --doc resolves path dependencies across the entire repo.
+  #
+  # This derivation is deliberately SEPARATE from the unit-test derivation
+  # (crate2nixSingleCheckDrv). The unit tests run prebuilt test binaries whose
+  # inputs are content-keyed only by the crate/workspace's source tree and
+  # dependency, so identical crate trees reuse them across commits (even if
+  # the overall source tree changed, because other workspaces or CI stuff or
+  # whatever was changed).
+  #
+  # Top-level checks are run on every single commit so try to make sure they
+  # are cheap.
+  crate2nixTopLevelCheckDrv =
+    { projectName
+    , prNum
+    , isMainLockFile
+    , isMainWorkspace
+    , workspace ? null
+    , cargoToml
+    , features
+    , rustc
+    , lockFile
+    , src
+    , clippyExtraArgs ? null
+    , runClippy ? true
+    , runDocs ? true
+    , runFmt ? false
+    , runFuzz ? true
+    , docTestCmd ? "cargo test --all-features --locked --doc"
+    , extraTestPostRunTopLevel ? ""
+    , ...
+    }:
+    generatedCargoNix:
+    let
+      lib = nixpkgs.lib;
+      boolString = b: if b then "true" else "false";
+      fuzzTargets = map
+        (bin: bin.name)
+        (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
+      fuzzLibfuzzerDrv = cargoFuzzLibfuzzerDrv {
+        inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
+      };
+    in
+      stdenv.mkDerivation {
+        name = "${projectName}-top-level-checks-${if isNull workspace then "root" else workspace}";
+
+        phases = [ "buildPhase" ];
+        buildPhase = ''
+          set -e
+          export RUST_BACKTRACE=1
+
+          # Writable copy of the entire repository at this commit.
+          mkdir repo
+          cp -r --no-preserve=mode,ownership ${src.src}/. repo/
+          chmod -R u+w repo
+          pushd repo
+
+          ${rustc}/bin/rustc -V
+          ${rustc}/bin/cargo -V
+          echo "PR: ${projectName} #${prNum}"
+          echo "Commit: ${src.commitId}"
+          echo "Tip: ${boolString src.isTip}"
+          echo "Workspace: ${if isNull workspace then "[root]" else workspace} (main: ${boolString isMainWorkspace})"
+          echo "Features: ${builtins.toJSON features}"
+          echo "Lockfile: ${lockFile} (main: ${boolString isMainLockFile})"
+          echo
+          echo "Nightly: ${boolString (rustcIsNightly rustc)}"
+          echo "Run clippy: ${boolString runClippy}"
+          echo "Run docs: ${boolString runDocs}"
+          echo "Run fmt: ${boolString runFmt}"
+
+          cp ${lockFile} ./Cargo.lock
+          chmod +w ./Cargo.lock
+          sed -i 's/version = 4/version = 3/' ./Cargo.lock
+
+          # Vendored dependency config (and vendored sources) produced by the
+          # crate2nix IFD; without it cargo would try to fetch crates.io.
+          export CARGO_HOME=${generatedCargoNix}/cargo
+
+          export PATH=$PATH:${nixpkgs.gcc}/bin:${rustc}/bin:${nixpkgs.pkg-config}/bin
+          # FIXME these two lines properly belong to icboc -- should add some config
+          # field for this stuff. (Needed for `cargo test` to run with a hidapi depenedncy)
+          export PKG_CONFIG_PATH=${nixpkgs.udev.dev}/lib/pkgconfig
+          export CFLAGS="$NIX_CFLAGS_COMPILE -isystem ${nixpkgs.udev.dev}/include"
+
+          echo
+          export BITCOIND_EXE="${bitcoinSrc}/bin/bitcoind"
+          export ELEMENTSD_EXE="${elementsSrc}/bin/elementsd"
+
+          # We have "cannot find libstdc++" issues when compiling
+          # rust-bitcoin with bitcoinconsensus on and rustc nightly
+          # from 2024-05-22 onward (did not occur on 2024-05-04;
+          # intermediate versions not tested due to rustc #124800).
+          #
+          # Possible culprit: https://blog.rust-lang.org/2024/05/17/enabling-rust-lld-on-linux.html
+          export LD_LIBRARY_PATH=${rustcLdLibraryPath}
+
+          export CARGO_TARGET_DIR=$PWD/target
+
+          # We need to manually run cargo test because the runTests run will not.
+          # See https://github.com/nix-community/crate2nix/issues/194
+          ${docTestCmd}
+          '' + lib.optionalString runClippy ''
+          # Nightly clippy
+          cargo clippy --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
+          cargo clippy --all-features --all-targets --locked -- -D warnings ${if isNull clippyExtraArgs then "" else clippyExtraArgs}
+          '' + lib.optionalString runDocs ''
+          # Do nightly "broken links" check
+          export RUSTDOCFLAGS="--cfg docsrs -D warnings -D rustdoc::broken-intra-doc-links"
+          cargo doc -j1 --all-features --no-deps
+          # Do non-docsrs check
+          export RUSTDOCFLAGS="-D warnings"
+          cargo doc -j1 --all-features --no-deps
+          '' + lib.optionalString runFmt ''
+          cargo fmt --all -- --check
+          '' + lib.optionalString (runFuzz && cargoToml ? dependencies && cargoToml.dependencies ? "libfuzzer-sys") ''
+          echo "Ran fuzztests (cargo-fuzz): ${fuzzLibfuzzerDrv}"
+          '' + extraTestPostRunTopLevel + ''
+
+          touch "$out"
+          popd
+        '';
+
+        # Add a bunch of stuff just to make the derivation easier to grok
+        checkPrProjectName = projectName;
+        checkPrPrNum = prNum;
+        checkPrRustc = rustc;
+        checkPrLockFile = lockFile;
+        checkPrFeatures = builtins.toJSON features;
+        checkPrWorkspace = workspace;
+        checkPrSrc = builtins.toString src.commitId;
+        checkPrIsMainLockFile = boolString isMainLockFile;
+        checkPrRustcIsNightly = boolString (rustcIsNightly rustc);
+        checkPrRunFmt = boolString runFmt;
+        checkPrRunClippy = boolString runClippy;
+        checkPrRunDocs = boolString runDocs;
+        checkPrIsTip = boolString src.isTip;
+      };
+
+  # A value of checkPr's extraLinksFn parameter for Rust projects: adds one
+  # top-level-check derivation (crate2nixTopLevelCheckDrv) per matrix cell,
+  # linked into the commit's directory alongside its test derivation.
+  #
+  # Cells with every top-level check disabled (no doc tests, no clippy, no
+  # docs, no fmt, no fuzz) skip the link entirely rather than paying for a
+  # whole-repo copy that does nothing.
+  crate2nixTopLevelLinksFn = utilsArg: single: generatedCargoNix:
+    let
+      lib = nixpkgs.lib;
+      docTestsEnabled = if utilsArg ? docTestCmd
+        then utilsArg.docTestCmd != ""
+        else true;
+      fuzzApplies = utilsArg ? cargoToml
+        && utilsArg.cargoToml ? dependencies
+        && utilsArg.cargoToml.dependencies ? "libfuzzer-sys";
+      anyCheckEnabled =
+        docTestsEnabled
+        || utilsArg.runClippy or false
+        || utilsArg.runDocs or false
+        || utilsArg.runFmt or false
+        || (fuzzApplies && utilsArg.runFuzz or true)
+        || (utilsArg ? extraTestPostRunTopLevel && utilsArg.extraTestPostRunTopLevel != "");
+    in
+      lib.optional anyCheckEnabled {
+        name = "top-level-checks";
+        value = crate2nixTopLevelCheckDrv utilsArg generatedCargoNix;
+      };
 
   # Derivation that runs cargo-fuzz on a series of targets found in fuzz/Cargo.toml.
   cargoFuzzLibfuzzerDrv = {

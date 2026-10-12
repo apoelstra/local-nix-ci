@@ -85,6 +85,7 @@ let
     singleCheckDrv = utils.crate2nixSingleCheckDrv;
     memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
     memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
+    extraLinksFn = utils.crate2nixTopLevelLinksFn;
   };
 in
 {
