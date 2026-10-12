@@ -505,12 +505,25 @@ rec {
   # This has the same complexity as "lookup the value if it exists, otherwise do
   # an expensive computation and cache it", though the actual mechanics are quite
   # different.
+  #
+  # extraLinksFn, if provided, takes:
+  #  1. A matrix entry
+  #  2. The single check derivation for that entry
+  #  3. The generated Cargo.nix value (memoGeneratedCargoNix) for that entry
+  # and returns a list of extra { name, value } links to add to the linkfarm
+  # alongside the single check derivation. See crate2nixTopLevelLinksFn for
+  # the canonical use.
+  #
+  # Note that while `linkFarm` takes a list of { name, path } attrsets, we use 'value' instead of
+  # 'path'! This is because we sometimes pass the list to `builtins.listToAttrs`. See comments
+  # near the bottom of this function for more details.
   checkPr =
     { name
     , argsMatrix
     , singleCheckDrv
     , memoGeneratedCargoNix ? x: { name = ""; value = null; }
     , memoCalledCargoNix ? x: { name = ""; value = null; }
+    , extraLinksFn ? null
     , forceSequential ? false
     , sequentialWidth ? 1
     }:
@@ -528,17 +541,18 @@ rec {
           let
             generatedMemo = memoGeneratedCargoNix mtx;
             calledMemo = memoCalledCargoNix mtx generatedMemoTable.${generatedMemo.name};
+            generated = generatedMemoTable.${generatedMemo.name};
+            single = singleCheckDrv mtx generated calledMemoTable.${calledMemo.name};
+            extras = if extraLinksFn == null then [] else extraLinksFn mtx single generated;
             mtxHash = builtins.hashString "sha256" (builtins.toJSON mtx);
           in {
             inherit generatedMemo calledMemo;
-            link = rec {
-              value = singleCheckDrv mtx generatedMemoTable.${generatedMemo.name} calledMemoTable.${calledMemo.name};
-              name = "${mtx.srcName}/${mtx.mtxName}--${mtxHash}";
-            };
+            link = [ { name = "${mtx.srcName}/${mtx.mtxName}--${mtxHash}"; value = single; } ]
+              ++ map (extra: extra // { name = "${mtx.srcName}/${mtx.mtxName}--${mtxHash}-${extra.name}"; }) extras;
           }
         )
         mtxs;
-      toFarm = map (x: x.link) memoAndLinks;
+      toFarm = builtins.concatLists (map (x: x.link) memoAndLinks);
     in if forceSequential
       # sequentialLinkFarm assumes the form of toFarm is { value = X, name = Y } rather
       # than { path = X, name = Y } as the normal linkFarm does. We do this so that when
