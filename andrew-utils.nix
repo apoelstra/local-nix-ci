@@ -874,8 +874,6 @@ rec {
     { projectName
     , prNum
     , isMainLockFile
-    , isMainWorkspace
-    , workspace ? null
     , cargoToml
     , features
     , rustc
@@ -902,7 +900,7 @@ rec {
       };
     in
       stdenv.mkDerivation {
-        name = "${projectName}-top-level-checks-${if isNull workspace then "root" else workspace}";
+        name = "${projectName}-top-level-checks";
 
         phases = [ "buildPhase" ];
         buildPhase = ''
@@ -920,7 +918,6 @@ rec {
           echo "PR: ${projectName} #${prNum}"
           echo "Commit: ${src.commitId}"
           echo "Tip: ${boolString src.isTip}"
-          echo "Workspace: ${if isNull workspace then "[root]" else workspace} (main: ${boolString isMainWorkspace})"
           echo "Features: ${builtins.toJSON features}"
           echo "Lockfile: ${lockFile} (main: ${boolString isMainLockFile})"
           echo
@@ -987,7 +984,6 @@ rec {
         checkPrRustc = rustc;
         checkPrLockFile = lockFile;
         checkPrFeatures = builtins.toJSON features;
-        checkPrWorkspace = workspace;
         checkPrSrc = builtins.toString src.commitId;
         checkPrIsMainLockFile = boolString isMainLockFile;
         checkPrRustcIsNightly = boolString (rustcIsNightly rustc);
