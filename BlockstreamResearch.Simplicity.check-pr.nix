@@ -1,4 +1,7 @@
-{ pkgs ? import <nixpkgs> { }
+# uv is marked broken = stdenv.buildPlatform.is32bit in recent nixpkgs, which is set to 'true' in
+# some chain of deps (nox, from gcovr's check inputs, or something). Just downgrade this to a
+# warning, which the nixpkg error suggests.
+{ pkgs ? import <nixpkgs> { config.problems.handlers = { uv.broken = "warn"; }; }
 , lib ? pkgs.lib
 , stdenv ? pkgs.stdenv
 , jsonConfigFile ? null
@@ -13,10 +16,9 @@ let
     else inlineJsonConfig // {
         gitCommits = map utils.srcFromCommit inlineCommitList;
     };
-  benchmarkSrc = builtins.fetchurl {
-    url = "https://gist.githubusercontent.com/sanket1729/0bf92ab9b2d17895d4afdfe3a85bdf70/raw/a0c8cf0f08e07945d8fcc04640bf567a9ba9f368/jet_benches.json";
-    sha256 = "1f2gdgvr5lfj3anzrs13hhcvdyfcz6dy2vy5p136hn5z3kzidnhk";
-  };
+  # Jet benchmark reference values, fetched from
+  # https://gist.githubusercontent.com/sanket1729/0bf92ab9b2d17895d4afdfe3a85bdf70
+  benchmarkSrc = ./jet_benches.json;
   checkData = rec {
     name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
 
