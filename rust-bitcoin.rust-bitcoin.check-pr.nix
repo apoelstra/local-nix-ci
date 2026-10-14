@@ -4,11 +4,6 @@ let
 in import ./rust.check-pr.nix {
   inherit utils;
   fullMatrixOverrideWithPrev = prev: {
-    # Use MSRV as a proxy for "this is an old broken version"
-#    runClippy = { src, features, rustc, isMainWorkspace, isMainLockFile, msrv, ... } @ args: (prev.runClippy args) && msrv >= "1.63.0";
-
-    msrv = "1.74.0"; # Just hardcode MSRV for now
-
     rustc = { src, msrv, isMainLockFile, ... } @ args:
       if isMainLockFile
       then prev.rustc args
