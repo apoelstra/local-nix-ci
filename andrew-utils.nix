@@ -886,6 +886,9 @@ rec {
     , runDocs ? true
     , runFmt ? false
     , runFuzz ? true
+    # Optional fetchGit'd seed-corpus repo (e.g. rust-bitcoin/qa-assets);
+    # non-null wires it into cargoFuzzLibfuzzerDrv, see the comment there.
+    , fuzzCorpora ? null
     , docTestCmd ? "cargo test --all-features --locked --doc"
     , extraTestPostRunTopLevel ? ""
     , ...
@@ -899,6 +902,7 @@ rec {
         (lib.trivial.importTOML "${src.src}/fuzz/Cargo.toml").bin;
       fuzzLibfuzzerDrv = cargoFuzzLibfuzzerDrv {
         inherit cargoToml projectName src lockFile generatedCargoNix fuzzTargets;
+        inherit fuzzCorpora;
       };
     in
       stdenv.mkDerivation {
@@ -1025,6 +1029,13 @@ rec {
       };
 
   # Derivation that runs cargo-fuzz on a series of targets found in fuzz/Cargo.toml.
+  #
+  # fuzzCorpora, if non-null, must be a fetchGit'd seed-corpus repo (e.g.
+  # rust-bitcoin/qa-assets) laid out the way upstream CI expects, with
+  # per-target input files under fuzz_corpora/<target>/. Each target's
+  # stored corpus is copied to fuzz/corpus/<target>/ before fuzzing --
+  # the same thing upstream's .github/workflows/corpus-fuzzing.yml does
+  # via "fuzz/corpora.sh seed". Repos that don't set it fuzz from scratch.
   cargoFuzzLibfuzzerDrv = {
     projectName
   , src
@@ -1032,6 +1043,7 @@ rec {
   , lockFile
   , generatedCargoNix
   , fuzzTargets
+  , fuzzCorpora ? null
   }: let
     singleFuzzLibfuzzerDrv = fuzzTarget: stdenv.mkDerivation {
       allowSubstitutes = false;
@@ -1067,6 +1079,18 @@ rec {
         cp -r ${generatedCargoNix}/crate "$out"
         pushd "$out/crate/fuzz"
         chmod -R +w .
+
+        # Seed the corpus for this target from the qa-assets repo, if one is
+        # wired in. Mirrors upstream "fuzz/corpora.sh seed": copy the files of
+        # the stored corpus fuzz_corpora/<target>/ into fuzz/corpus/<target>/,
+        # where cargo-fuzz picks it up. Missing corpora (new targets) seed
+        # nothing and fuzz from scratch, same as upstream.
+        ${nixpkgs.lib.optionalString (fuzzCorpora != null) ''
+        if [ -d "${fuzzCorpora}/fuzz_corpora/${fuzzTarget}" ]; then
+          mkdir -p ./corpus/${fuzzTarget}
+          find "${fuzzCorpora}/fuzz_corpora/${fuzzTarget}" -maxdepth 1 -type f -exec cp -t ./corpus/${fuzzTarget}/ {} +
+        fi
+        ''}
 
         cargo -V
         cargo fuzz -V
