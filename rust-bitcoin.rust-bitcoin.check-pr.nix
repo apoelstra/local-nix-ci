@@ -17,6 +17,15 @@ in import ./rust.check-pr.nix {
     runFmt = false;
     releaseMode = false; # ungodly slow
 
+    # Fuzz seeds from 2026-10-14. Should update this fairly frequently. Maybe needs a cronjob
+    # or something. For now just hardcode it and try to remember. Even an outdated version is
+    # way better than nothing.
+    fuzzCorpora = builtins.fetchGit {
+      url = "https://github.com/rust-bitcoin/qa-assets";
+      rev = "0a34b1abfdf1b58db1ce7d9e61a49b08909dfd0a";
+      allRefs = true;
+    };
+
     features = { src, cargoToml, workspace, needsNoStd, rustc, ... } @ args:
       if workspace == "bitcoin"
       then utils.featuresForSrc { exclude = [ "actual-serde" ]; } { inherit src cargoToml needsNoStd rustc; }
