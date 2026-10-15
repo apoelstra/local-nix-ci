@@ -35,7 +35,7 @@ rec {
   };
   # Used by bitcoind-tests in miniscript and corerpc; rather than
   # detecting whether this is needed, we just always pull it in.
-  bitcoinSrc = (nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
+  bitcoinSrc = gcc16Compat ((nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
     miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
     doFunctionalTests = false; # intermittent failures on 32-core machine
     withSource = nixpkgs.fetchgit {
@@ -47,7 +47,7 @@ rec {
   }).overrideAttrs (old: {
     buildInputs = old.buildInputs ++ [ nixpkgs.sqlite.dev nixpkgs.sqlite ];
     configureFlags = old.configureFlags ++ [ "--with-sqlite=yes" ];
-  });
+  }));
   # Similar, for rust-elements.
   elementsSrc021 = nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
     # Can probably increase gcc past 13; haven't tried. But heads up that we are on borrowed
@@ -84,7 +84,7 @@ rec {
       hash = "sha256-bkqDuJeDq2QwzTUP0KT6IB5wpC7LIPpLIbeO4fwkUYA=";
     };
   };
-  elementsSrc = nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
+  elementsSrc = gcc16Compat (nixpkgs.callPackage "${elementsDotNix}/elements.nix" {
     #sanitizers = [ "address" ]; # cool idea but causes 60s+ timeouts in tests
     doFunctionalTests = false; # four tests are failing
     miniupnpc = nixpkgs.callPackage "${elementsDotNix}/miniupnpc-2.2.7.nix" {};
@@ -93,9 +93,20 @@ rec {
       rev = "elements-23.2.4";
       hash = "sha256-OTX6we88fALSz0COKqjWV62pm8qro29eHl9qdiUxNdI=";
     };
-  };
+  });
   # See comment near usage for what this is for.
   rustcLdLibraryPath = "${stdenv.cc.cc.lib}/lib/";
+
+  # The bitcoin v24.2 / elements 0.21/22/23.2.4 sources built here predate
+  # GCC-16's libstdc++, which stopped leaking <cstdint> from other standard
+  # headers; their .h files fail with "'uint16_t' does not name a type".
+  # Force-include <cstdint> in every C++ TU. Harmless for TUs that already
+  # include it; drop this once these sources are bumped.
+  gcc16Compat = drv: drv.overrideAttrs (_: {
+    # CXXFLAGS (not NIX_CXX_COMPILE) so it lands in the project's own
+    # CXXFLAGS alongside its flags.
+    CXXFLAGS = "-include cstdint";
+  });
 
   # Takes a `src` object (as returned from `srcFromCommit`) and determines
   # the set of rustcs to test it with.
