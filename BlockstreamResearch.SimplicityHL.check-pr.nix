@@ -2,11 +2,23 @@ let
   pkgs = import <nixpkgs> { };
   # Elements daemon with Simplicity support, as needed by the daemon integration tests
   # (spend_utxo) added in SimplicityHL PR #415. Conveniently that PR gives us a nixfile
-  # to get such an elementsd.
+  # to get such an elementsd. Less conveniently, it doesn't work with latest nixpkgs
+  # and needs a bit of CXXFLAG hackery. (See andrew-utils.nix for similar stuff with
+  # stock bitcoind/elementsd).
   simplicityElementsd = src:
-    if builtins.pathExists "${src}/bitcoind-tests/elementsd-simplicity.nix"
-    then pkgs.callPackage "${src}/bitcoind-tests/elementsd-simplicity.nix" { }
-    else null;
+    let
+      # Same 2.2.7 pin that andrew-utils' elements builds use
+      miniupnpc227 = pkgs.callPackage ./miniupnpc-2.2.7.nix { };
+      daemon = if builtins.pathExists "${src}/bitcoind-tests/elementsd-simplicity.nix"
+        then (pkgs.extend (_: prev: {
+          elementsd = prev.elementsd.override { miniupnpc = miniupnpc227; };
+        })).callPackage "${src}/bitcoind-tests/elementsd-simplicity.nix" { }
+        else null;
+    in if daemon != null
+      then daemon.overrideAttrs (_: {
+        CXXFLAGS = "-include cstdint";
+      })
+      else null;
   # The spend_utxo test reads its .simf programs via CARGO_MANIFEST_DIR/../examples/,
   # which requires some path hacking for crate2nix.
   srcWithExamples = commit:
