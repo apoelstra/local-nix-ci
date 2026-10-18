@@ -4,6 +4,7 @@ mod args;
 mod commit;
 mod daemon;
 mod pr;
+mod prompt;
 mod repo_info;
 mod stack;
 mod terminal;
@@ -13,23 +14,8 @@ use args::{Action, Target};
 use lcilib::Db;
 
 fn ask_yes_no(query: impl core::fmt::Display) -> bool {
-    use std::io::{self, Write as _};
-
-    loop {
-        print!("{query} (y/n) ");
-        io::stdout().flush().expect("failed to flush stdout");
-
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("failed to read user input");
-        let choice = input.trim().to_ascii_lowercase();
-        match choice.as_str() {
-            "y" | "yes" => return true,
-            "n" | "no" => return false,
-            _ => {}
-        }
-    }
+    // EOF aborts rather than looping forever (e.g. `local-ci ... </dev/null`).
+    prompt::ask_yes_no(query).unwrap_or(false)
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]

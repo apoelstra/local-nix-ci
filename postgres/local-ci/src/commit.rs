@@ -241,8 +241,14 @@ pub async fn real_review(
         print!("Choice (1a-4): ");
         io::stdout().flush()?;
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        let input = match crate::prompt::read_line() {
+            crate::prompt::ReadOutcome::Line(line) => line,
+            crate::prompt::ReadOutcome::Eof => {
+                // stdin closed (e.g. </dev/null): stop rather than spin.
+                println!("\nInput closed; cancelling.");
+                break;
+            }
+        };
         let choice = input.trim();
 
         match choice {
