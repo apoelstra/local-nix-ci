@@ -354,13 +354,19 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
         .await
         .context("connecting to database for CI cycle")?;
 
+    let mut idle_scans = 0u32;
     let mut no_work_count = 0u32;
     let mut last_no_work_log = std::time::Instant::now();
     let mut error_limit = log::BackoffSleepToken::new();
 
     loop {
         let commit = match find_next_commit_to_test(&mut db).await {
-            Ok(Some(commit)) => commit,
+            Ok(Some(commit)) => {
+                idle_scans = 0;
+                no_work_count = 0;
+                last_no_work_log = std::time::Instant::now();
+                commit
+            }
             Ok(None) => {
                 // Nothing to do -- just sleep for a second and maybe post a 'nothing to do' message so the
                 // user knows we're still alive.
@@ -371,6 +377,10 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                     n => (300 * (1u64 << (n - 2).min(30))).min(18000), // Cap at 5 hours
                 };
 
+                // A full scan hits the database hard (per-stack and per-commit
+                // queries, plus `jj`/`git` subprocesses for GPG checks), so
+                // polling at a fixed one second while idle burns a core and
+                // hammers postgres indefinitely.
                 let now = std::time::Instant::now();
                 if now.duration_since(last_no_work_log).as_secs() >= delay_secs {
                     log::info(format_args!("Nothing to do."));
@@ -378,7 +388,8 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                     last_no_work_log = now;
                 }
 
-                time::sleep(Duration::from_secs(1)).await;
+                time::sleep(no_work_scan_delay(idle_scans)).await;
+                idle_scans = idle_scans.saturating_add(1);
                 continue;
             }
             Err(e) => {
@@ -493,5 +504,62 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                 }
             }
         }
+    }
+}
+ 
+/// Longest interval between idle work scans
+pub const NO_WORK_SCAN_DELAY_CAP_SECS: u64 = 60;
+
+/// How long to wait before the next work scan after `count` consecutive
+/// scans that found no work.
+///
+/// Exponential from one second up to a 30-second cap: an idle daemon runs a
+/// full scan (dozens of queries plus `jj`/`git` subprocesses) at most once
+/// per 30 seconds instead of once per second. New work is therefore picked
+/// up within half a minute at worst, while the idle cost drops ~30x.
+pub fn no_work_scan_delay(count: u32) -> Duration {
+    let secs = if count >= 11 {
+        NO_WORK_SCAN_DELAY_CAP_SECS
+    } else {
+        3 << (count / 2)
+    };
+    Duration::from_secs(secs.min(NO_WORK_SCAN_DELAY_CAP_SECS))
+}
+
+#[cfg(test)]
+mod no_work_scan_delay_tests {
+    use super::*;
+
+    /// The idle scan interval ramps up from the old fixed 1s to the 30s cap.
+    #[test]
+    fn scan_delay_ramps_exponentially_to_cap() {
+        assert_eq!(no_work_scan_delay(0), Duration::from_secs(3));
+        assert_eq!(no_work_scan_delay(1), Duration::from_secs(3));
+        assert_eq!(no_work_scan_delay(2), Duration::from_secs(6));
+        assert_eq!(no_work_scan_delay(3), Duration::from_secs(6));
+        assert_eq!(no_work_scan_delay(4), Duration::from_secs(12));
+        assert_eq!(no_work_scan_delay(5), Duration::from_secs(12));
+        assert_eq!(no_work_scan_delay(6), Duration::from_secs(24));
+        assert_eq!(no_work_scan_delay(7), Duration::from_secs(24));
+        assert_eq!(no_work_scan_delay(8), Duration::from_secs(48));
+        assert_eq!(no_work_scan_delay(9), Duration::from_secs(48));
+        assert_eq!(no_work_scan_delay(10), Duration::from_secs(60));
+        assert_eq!(no_work_scan_delay(11), Duration::from_secs(60));
+        assert_eq!(no_work_scan_delay(1000), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn scan_delay_never_exceeds_cap() {
+        for count in 0..=u32::from(u16::MAX) {
+            assert!(
+                no_work_scan_delay(count) <= Duration::from_secs(NO_WORK_SCAN_DELAY_CAP_SECS),
+                "count {count} exceeds the cap"
+            );
+        }
+        // Huge counts must not panic on shift overflow either.
+        assert_eq!(
+            no_work_scan_delay(u32::MAX),
+            Duration::from_secs(NO_WORK_SCAN_DELAY_CAP_SECS)
+        );
     }
 }
