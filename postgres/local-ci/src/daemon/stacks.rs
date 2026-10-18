@@ -155,7 +155,7 @@ impl Stacks {
 
     /// Whether the "high priority" stack list is empty.
     pub fn low_priority_is_empty(&self) -> bool {
-        self.high_priority.is_empty()
+        self.low_priority.is_empty()
     }
 
     /// Whether the "high priority" stack list is empty.
