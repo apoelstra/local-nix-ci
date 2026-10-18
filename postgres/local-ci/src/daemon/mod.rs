@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod build_derivation;
+#[cfg(test)]
+mod build_derivation_tests;
 mod ci_cycle;
 mod log;
 mod stacks;

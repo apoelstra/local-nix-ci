@@ -488,7 +488,7 @@ async fn should_cancel_ci(db: &mut Db, commit: &CommitToTest) -> anyhow::Result<
     Ok(should_cancel)
 }
 
-async fn save_error_to_file(
+pub(super) async fn save_error_to_file(
     repo_path: &str,
     commit_id: &CommitId,
     operation: &str,
