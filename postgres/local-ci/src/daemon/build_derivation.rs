@@ -504,34 +504,17 @@ async fn save_error_to_file(
     );
     let error_path = error_dir.join(filename);
 
-    fs::write(
-        &error_path,
-        format!("nix-build failed for commit {}\n\nSTDOUT:\n", commit_id),
-    )
-    .await
-    .with_context(|| {
+    // Build the entire log in memory and call `fs::write`. FIXME we should open a file and
+    // write incrementally to avoid allocating a ton of memory here.
+    let mut contents = Vec::with_capacity(stdout.len() + stderr.len() + 64);
+    contents.extend_from_slice(format!("nix-build failed for commit {commit_id}\n\nSTDOUT:\n").as_bytes());
+    contents.extend_from_slice(stdout);
+    contents.extend_from_slice(b"\nSTDERR:\n");
+    contents.extend_from_slice(stderr);
+
+    fs::write(&error_path, contents).await.with_context(|| {
         format!(
-            "Failed to write error file (preamble): {}",
-            error_path.display()
-        )
-    })?;
-    fs::write(&error_path, stdout).await.with_context(|| {
-        format!(
-            "Failed to write error file (stdout): {}",
-            error_path.display()
-        )
-    })?;
-    fs::write(&error_path, "\nSTDERR:\n")
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to write error file (stderr preamble): {}",
-                error_path.display()
-            )
-        })?;
-    fs::write(&error_path, stderr).await.with_context(|| {
-        format!(
-            "Failed to write error file (stderr): {}",
+            "Failed to write error file: {}",
             error_path.display()
         )
     })?;
