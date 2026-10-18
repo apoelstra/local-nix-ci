@@ -11,6 +11,7 @@ pub mod util;
 use crate::terminal::ColorFormat;
 
 use anyhow::Context as _;
+use lcilib::db::DbTransactionError;
 use lcilib::Db;
 use lcilib::db::models::{
     Ack, AckStatus, CiStatus, Commit, CommitToTest, DbCommitId, DbStackId, NewCommit, NewStack,
@@ -522,20 +523,51 @@ async fn check_signed_merges(
     Ok(false)
 }
 
+/// Applies a CI-result status to the commit.
+///
+/// Simply logs and no-ops if the database shows that (`skipped`, or `should_run_ci = false`),
+/// which presumably is a user override which happened during the test run.
 async fn mark_commit_status(
     db: &mut Db,
     commit: DbCommitId,
     new_status: CiStatus,
 ) -> anyhow::Result<()> {
     db.with_transaction(async |tx| {
+        // Re-read the commit inside the write transaction in case the user externally marked
+        // the commit as 'skipped'.
+        let current = Commit::find_by_id(&tx, commit)
+            .await
+            .map_err(|e| anyhow::anyhow!("reloading commit for status update: {e}"))?
+            .ok_or_else(|| anyhow::anyhow!("commit {commit} not found for status update"))?;
+
+        if current.ci_status == CiStatus::Skipped || !current.should_run_ci {
+            log::info(format_args!(
+                "Not updating CI status of commit {commit} to {new_status}: user-requested state \
+                 (skipped or should_run_ci=false) takes precedence"
+            ));
+            return Ok(());
+        }
+
+        if current.ci_status == new_status {
+            return Ok(());
+        }
+
         let updates = UpdateCommit {
             ci_status: Some(new_status),
             ..Default::default()
         };
-        commit.apply_update(&tx, &updates).await.map(|_| ())
+        commit
+            .apply_update(&tx, &updates)
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("updating commit CI status: {e}"))
     })
     .await
-    .context("running update query")
+    .map_err(|e| match e {
+        DbTransactionError::Query(e) => e,
+        DbTransactionError::Construct(e) => anyhow::anyhow!("failed to open transaction: {e}"),
+        DbTransactionError::Commit(e) => anyhow::anyhow!("failed to commit transaction: {e}"),
+    })
 }
 
 async fn sync_all_repositories(db: &mut Db) -> anyhow::Result<()> {
