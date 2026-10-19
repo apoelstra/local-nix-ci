@@ -346,6 +346,7 @@ async fn process_approved_pr(db: &mut Db, stacks: &Stacks, pr: &PullRequest) -> 
     let annotated_stacks = annotated_stacks; // remove mut
 
     // Step 2: Go through all stacks, checking whether this PR is present and/or first.
+    let mut work_done = false;
     let mut added_to_stack = false;
     let mut pr_is_first_in_some_stack = false;
     for (_, stack, commits) in &annotated_stacks {
@@ -361,17 +362,20 @@ async fn process_approved_pr(db: &mut Db, stacks: &Stacks, pr: &PullRequest) -> 
             // Otherwise, try to add it.
             if try_extend_stack(&tx, Some(stack.id), &pr.target_branch, commits, pr, &repo).await? {
                 added_to_stack = true;
+                work_done = true;
             }
         }
     }
 
     // Step 4: If not first in any stack, create direct merge and new stack
     if !pr_is_first_in_some_stack {
-        try_extend_stack(&tx, None, &pr.target_branch, &[], pr, &repo).await?;
+        if try_extend_stack(&tx, None, &pr.target_branch, &[], pr, &repo).await? {
+            work_done = true;
+        }
     }
 
     tx.commit().await.context("committing PR transaction")?;
-    Ok(true)
+    Ok(work_done)
 }
 
 async fn try_extend_stack(
@@ -405,22 +409,32 @@ async fn try_extend_stack(
     .await
     {
         Ok(jj_change_id) => {
-            // Get the git commit ID for the new merge
-            let git_commit_id =
+            // Get the git commit ID for the new merge. (This is the pre-`describe` ID and will
+            // be changed by `jj::update_commit_description below.)
+            let pre_describe_git_commit_id =
                 jj::get_current_git_commit_for_change_id(&repo.repo_shell, &jj_change_id)
                     .await
                     .context("getting git commit ID for stack merge")?;
 
             // Update description
-            let description = git::compute_merge_description(&tx, &pr, git_commit_id.clone())
-                .await
-                .with_context(|| format!("computing merge description for {}", git_commit_id))?;
+            let description =
+                git::compute_merge_description(&tx, &pr, pre_describe_git_commit_id.clone())
+                    .await
+                    .with_context(|| {
+                        format!("computing merge description for {pre_describe_git_commit_id}")
+                    })?;
             if let Err(e) =
                 jj::update_commit_description(&repo.repo_shell, &jj_change_id, &description)
                     .await
             {
                 log::warn(&e, format_args!("Failed to update description for {}", jj_change_id));
             }
+
+            // Get new commit ID for database.
+            let git_commit_id =
+                jj::get_current_git_commit_for_change_id(&repo.repo_shell, &jj_change_id)
+                    .await
+                    .context("getting git commit ID for stack merge after description update")?;
 
             // Create commit record for the new merge
             let new_commit = NewCommit {
