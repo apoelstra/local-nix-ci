@@ -259,8 +259,7 @@ mod tests {
     use super::*;
 
     fn dummy_id() -> DbCommitId {
-        // SAFETY: whatever
-        unsafe { core::mem::zeroed() }
+        DbCommitId::from_i32(0)
     }
 
     #[test]

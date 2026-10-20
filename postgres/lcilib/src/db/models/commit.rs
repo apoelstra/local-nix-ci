@@ -18,6 +18,15 @@ impl DbCommitId {
     pub fn bare_i32(self) -> i32 {
         self.0
     }
+
+    /// Interprets an arbitrary i32 as a commit ID.
+    ///
+    /// Mirrors [`crate::db::models::DbRepositoryId::from_i32`] and
+    /// [`crate::db::models::DbStackId::from_i32`]; mainly useful in tests
+    /// where we need some `DbCommitId` to use as a placeholder.
+    pub fn from_i32(n: i32) -> Self {
+        Self(n)
+    }
 }
 
 impl fmt::Display for DbCommitId {
