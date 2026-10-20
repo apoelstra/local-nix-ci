@@ -19,6 +19,7 @@ pub enum MergeDescriptionError {
     ListTreeContents(CommitId, xshell::Error),
     ReadBlob(String, xshell::Error),
     DatabaseQuery(&'static str, DbQueryError),
+    CreateShell(xshell::Error),
 }
 
 impl fmt::Display for MergeDescriptionError {
@@ -31,6 +32,7 @@ impl fmt::Display for MergeDescriptionError {
             }
             Self::ReadBlob(ref blob_id, _) => write!(f, "failed to read blob {blob_id}"),
             Self::DatabaseQuery(action, _) => write!(f, "database query failed: {}", action),
+            Self::CreateShell(_) => write!(f, "failed to create shell"),
         }
     }
 }
@@ -43,6 +45,7 @@ impl std::error::Error for MergeDescriptionError {
             Self::ListTreeContents(_, ref e) => Some(e),
             Self::ReadBlob(_, ref e) => Some(e),
             Self::DatabaseQuery(_, ref e) => Some(e),
+            Self::CreateShell(ref e) => Some(e),
         }
     }
 }
@@ -105,10 +108,7 @@ pub fn extract_ack_from_text<B: core::hash::BuildHasher>(
 /// - Database queries for commits or ACKs fail
 /// - JJ operations to get commit information fail
 /// - Git operations to calculate the tree hash fail
-///
-/// # Panics
-///
-/// Panics if `std::current_env` returns an error.
+/// - The temporary shell used for `git ls-tree` cannot be created
 pub async fn compute_merge_description(
     tx: &Transaction<'_>,
     pr: &PullRequest,
@@ -120,7 +120,7 @@ pub async fn compute_merge_description(
         .map_err(MergeDescriptionError::GetRepository)?;
 
     // Create shell and set working directory to repository path
-    let sh = Shell::new().unwrap();
+    let sh = Shell::new().map_err(MergeDescriptionError::CreateShell)?;
     sh.change_dir(&repository.path);
 
     // Derive project name from repository name
