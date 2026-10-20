@@ -3,7 +3,7 @@
 use anyhow::Context as _;
 use chrono::Utc;
 use lcilib::{
-    Db, db::{CiStatus, models::{Ack, AckStatus, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}}, jj::is_commit_gpg_signed
+    Db, db::{CiStatus, models::{Ack, AckStatus, CommitToTest, PullRequest, Repository, ReviewStatus, Stack}}
 };
 use std::time::Duration;
 use tokio::time;
@@ -339,14 +339,10 @@ async fn count_signed_commits_in_stack(
 
     let repo = Repository::get_by_id(tx, stack.repository_id).await?;
 
-    let mut signed_count = 0;
-    for commit in &commits {
-        if is_commit_gpg_signed(&repo.repo_shell, &commit.jj_change_id).await? {
-            signed_count += 1;
-        }
-    }
-
-    Ok(signed_count)
+    let change_ids: Vec<_> = commits.iter().map(|c| c.jj_change_id.clone()).collect();
+    lcilib::jj::count_gpg_signed_commits(&repo.repo_shell, &change_ids)
+        .await
+        .context("batch-checking commit signatures")
 }
 
 pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {

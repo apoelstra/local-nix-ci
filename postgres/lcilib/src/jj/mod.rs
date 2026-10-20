@@ -176,6 +176,43 @@ pub async fn is_commit_gpg_signed(shell: &RepoShell, change_id: &ChangeId) -> Re
     Ok(output.trim() == "true")
 }
 
+/// Batch-check whether each of the given change IDs is GPG signed.
+///
+/// # Returns
+///
+/// Returns a hashset of all the change IDs that -were- signed, of the ones
+/// passed in.
+///
+/// # Errors
+///
+/// Returns an error if the jj command fails or if jj's output cannot be
+/// parsed as change IDs.
+pub async fn count_gpg_signed_commits(
+    shell: &RepoShell,
+    change_ids: &[ChangeId],
+) -> Result<usize, Error> {
+    if change_ids.is_empty() {
+        return Ok(0)
+    }
+    // Build a revset "c1|c2|..." selecting exactly our change IDs. Rust makes us construct
+    // a Vec to use join <.<.
+    let cid_strs = change_ids.iter().map(ChangeId::to_string).collect::<Vec<_>>();
+    let revset = format!("({}) & signed()", cid_strs.join("|"));
+    let output = jj_log(shell, Some("change_id"), &revset).await?;
+
+    let mut count = 0;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // parse as a sanity check that we're not getting garbage from jj
+        line.parse::<ChangeId>().map_err(Error::ChangeId)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 /// Check if a commit has conflicts using jj
 ///
 /// # Errors
