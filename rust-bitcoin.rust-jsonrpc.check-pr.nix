@@ -1,20 +1,8 @@
-{ pkgs ? import <nixpkgs> { }
-, jsonConfigFile
-, prNum
-}:
 let
-  utils = import ./andrew-utils.nix { };
-  jsonConfig = utils.parseRustConfig { inherit jsonConfigFile prNum; };
-  fullMatrix = {
-    inherit prNum;
-    inherit (utils.standardRustMatrixFns jsonConfig)
-      projectName src rustc msrv lockFile srcName mtxName
-      isMainLockFile isMainWorkspace mainCargoToml workspace cargoToml
-      features # Must be overridden if there are any exceptional feature combinations
-      runClippy
-      runFmt
-      runDocs;
-
+  pkgs = import <nixpkgs> { };
+in import ./rust.check-pr.nix {
+  inherit pkgs;
+  fullMatrixOverride = {
     extraTestPostRun = { workspace, ... }: if workspace == "integration_test"
       then ''
         set -x
@@ -26,17 +14,4 @@ let
       ''
       else "";
   };
-
-  checkData = rec {
-    name = "${jsonConfig.projectName}-pr-${builtins.toString prNum}";
-    argsMatrix = fullMatrix;
-    singleCheckDrv = utils.crate2nixSingleCheckDrv;
-    memoGeneratedCargoNix = utils.crate2nixMemoGeneratedCargoNix;
-    memoCalledCargoNix = utils.crate2nixMemoCalledCargoNix;
-    extraLinksFn = utils.crate2nixTopLevelLinksFn;
-  };
-in
-{
-  checkPr = utils.checkPr checkData;
-  checkHead = utils.checkPr checkData;
 }
