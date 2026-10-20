@@ -410,8 +410,11 @@ fn parse_args() -> Result<CliArguments, ParseError> {
         },
         (Some("commit"), Some(s)) => Target::Commit(s),
         (Some("stack"), Some(s)) => {
-            // s is already in the form s000123 (with no '-' or '+'); parse the numeric part.
-            match s[1..].parse::<i32>() {
+            let digits = match s.strip_prefix('s') {
+                Some(d) if !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()) => d,
+                _ => return Err(ParseError::InvalidStackId(s)),
+            };
+            match digits.parse::<i32>() {
                 Ok(num) => Target::Stack(StackId(num)),
                 Err(_) => return Err(ParseError::InvalidStackId(s)),
             }

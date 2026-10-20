@@ -64,8 +64,9 @@ fn parse_as_pr_number(s: &str) -> Option<usize> {
 
 /// Returns true if the string is a valid stack ID (s followed by at least 1 digit).
 fn parse_as_stack_id(s: &str) -> Option<u32> {
-    if s.len() > 2 && s.as_bytes()[0] == b's' && s.as_bytes()[1..].iter().all(u8::is_ascii_digit) {
-        s[1..].parse().ok()
+    let digits = s.strip_prefix('s')?;
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        digits.parse().ok()
     } else {
         None
     }
