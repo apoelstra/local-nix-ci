@@ -140,3 +140,53 @@ pub fn lexed_args() -> impl Iterator<Item = ArgToken> {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // docstring: "The string `s` followed by at least 1 numeric digit (e.g. `s123` or
+    // `s000123`) will be lexed as a stack ID."
+    //
+    // Regression: the implementation requires len > 2 (s + >=2 digits), so `s1`
+    // and other single-digit IDs silently fall through to `MaybeRef` and are
+    // then treated as git refs, producing a confusing "commit not found" error.
+    #[test]
+    fn stack_id_accepts_single_digit_per_docstring() {
+        assert_eq!(parse_as_stack_id("s1"), Some(1));
+        assert_eq!(parse_as_stack_id("s9"), Some(9));
+    }
+
+    #[test]
+    fn stack_id_accepts_various_lengths() {
+        // Examples from docstrings.
+        assert_eq!(parse_as_stack_id("s123"), Some(123));
+        assert_eq!(parse_as_stack_id("s000123"), Some(123));
+        // Not a stack ID: no digits.
+        assert_eq!(parse_as_stack_id("s"), None);
+        assert_eq!(parse_as_stack_id("se"), None);
+        // Not a stack ID: leading char not 's'.
+        assert_eq!(parse_as_stack_id("x123"), None);
+    }
+
+    #[test]
+    fn pr_number_accepts_one_to_six_digits() {
+        assert_eq!(parse_as_pr_number("1"), Some(1));
+        assert_eq!(parse_as_pr_number("123456"), Some(123456));
+        assert_eq!(parse_as_pr_number(""), None);
+        assert_eq!(parse_as_pr_number("1234567"), None);
+        assert_eq!(parse_as_pr_number("12a"), None);
+    }
+
+    // Regression: `local-ci info stack <garbage>` used to panic in
+    // args::mod because the stack-ID branch sliced `s[1..]` without
+    // checking char boundaries. This test just exercises parse_as_stack_id
+    // on multi-byte input to document that it does not panic; the
+    // corresponding fix lives in mod.rs.
+    #[test]
+    fn stack_id_rejects_non_ascii_without_panicking() {
+        assert_eq!(parse_as_stack_id("sé1"), None);
+        assert_eq!(parse_as_stack_id("é123"), None);
+        assert_eq!(parse_as_stack_id("\u{1f980}"), None);
+    }
+}
