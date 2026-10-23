@@ -17,6 +17,10 @@ in import ./rust.check-pr.nix {
     runFmt = false;
     releaseMode = false; # ungodly slow
 
+    cargoNix = { src, ... }: lib.filter (cn: cn.name != "Cargo-creusot.lock")
+      (lib.mapAttrsToList (name: _: { inherit name; }) src.cargoNixes);
+    isMainLockFile = { cargoNix, ... }: cargoNix.name == "Cargo-minimal.lock";
+
     # Fuzz seeds from 2026-10-14. Should update this fairly frequently. Maybe needs a cronjob
     # or something. For now just hardcode it and try to remember. Even an outdated version is
     # way better than nothing.
