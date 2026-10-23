@@ -368,7 +368,7 @@ pub async fn run_ci_cycle_loop() -> anyhow::Result<()> {
                     0 => 5,
                     1 => 60,
                     2 => 300,
-                    n => 300 * (1u64 << (n - 2)).min(18000), // Cap at 5 hours
+                    n => (300 * (1u64 << (n - 2).min(30))).min(18000), // Cap at 5 hours
                 };
 
                 let now = std::time::Instant::now();
