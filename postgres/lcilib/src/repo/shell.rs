@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use core::{fmt, ops};
-use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use chrono::{DateTime, Utc};
 
@@ -85,9 +86,36 @@ impl std::error::Error for ForgeError {
 #[derive(Debug)]
 pub struct RepoShell {
     inner: Arc<Mutex<xshell::Shell>>,
+    repo_lock: Arc<tokio::sync::Mutex<()>>,
     upstream: Upstream,
     // The project name in the form 'owner/repo' that the remote API wants.
     project_name: String,
+}
+
+/// Process-wide table of exclusive-access locks for repositories, keyed by the
+/// canonical path of the repository root.
+///
+/// A [`RepoShell`]'s own mutex only serializes commands issued through that one
+/// shell object, but many independent `RepoShell`s are constructed for the same
+/// repository (every `Repository::get_by_id` call creates one), including from
+/// concurrent daemon cycles. Those shells must not run mutating commands like
+/// `jj describe` against the same repository at the same time, so the
+/// cross-shell lock is looked up here by repository path.
+fn repo_locks() -> &'static Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>> {
+    static RET: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    RET.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Returns the process-wide exclusive-access lock for the repository at `path`.
+///
+/// Distinct `RepoShell`s constructed for the same repository directory share
+/// one lock; shells for different repositories get independent locks. The
+/// path is canonicalized so that e.g. shells constructed through a symlinked
+/// path and ones constructed through the real path still collide.
+fn repo_lock_for(path: PathBuf) -> Arc<tokio::sync::Mutex<()>> {
+    let key = path.canonicalize().unwrap_or(path);
+    let mut table = repo_locks().lock().unwrap();
+    Arc::clone(table.entry(key).or_default())
 }
 
 /// Attempts to parse a git remote URL and returns `(upstream, "owner/repo")` on success.
@@ -188,8 +216,10 @@ impl RepoShell {
         };
 
         let (upstream, project_name) = parse_remote_url(&shell, url.trim())?;
+        let repo_lock = repo_lock_for(shell.current_dir());
         Ok(Self {
             inner: Arc::new(Mutex::new(shell)),
+            repo_lock,
             upstream,
             project_name,
         })
@@ -214,12 +244,20 @@ impl RepoShell {
 
     /// Takes an exclusive lock to the shell and runs the given closure.
     ///
+    /// The closure runs with exclusive access to both this shell and, process-wide,
+    /// to the repository the shell points at (other `RepoShell`s for the same
+    /// repository block until it returns).
+    ///
     /// # Async
     ///
     /// This function internally locks a sync mutex before calling the closure,
     /// which it does inside of `async_scoped::spawn_blocking`. Therefore bad things
     /// will happen if the closure tries to do async things, e.g. with `block_on`.
     /// Just don't do it.
+    ///
+    /// The per-repository lock is not reentrant, so this function must not be
+    /// called while another `with_lock_blocking` closure for the same repository
+    /// is on the stack, or it will deadlock.
     ///
     /// # Errors
     ///
@@ -236,6 +274,7 @@ impl RepoShell {
         op: impl FnOnce(RepoShellLock<'_>) -> T + Send,
     ) -> Result<T, tokio::task::JoinError> {
         let arc = Arc::clone(&self.inner);
+        let repo_lock = Arc::clone(&self.repo_lock);
         // SAFETY: we immediately await the future and do not drop it.
         // See docs on `scope_and_collect` https://docs.rs/async-scoped/latest/async_scoped/struct.Scope.html#method.scope_and_collect
         // and this Reddit post https://old.reddit.com/r/rust/comments/ee3vsu/asyncscoped_spawn_non_static_futures_with_asyncstd/fbpis3c/
@@ -243,6 +282,10 @@ impl RepoShell {
         unsafe {
             let ((), mut res) = async_scoped::TokioScope::scope_and_collect(|scope| {
                 scope.spawn_blocking(|| {
+                    // The per-repository lock must be held across the whole
+                    // operation, including while waiting for the per-shell
+                    // mutex, or two shells for one repository could interleave.
+                    let _repo_guard = repo_lock.blocking_lock();
                     let lock = RepoShellLock {
                         inner: arc.lock().unwrap(),
                     };
