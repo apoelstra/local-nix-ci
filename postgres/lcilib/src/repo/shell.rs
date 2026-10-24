@@ -388,3 +388,133 @@ impl ops::Deref for RepoShellLock<'_> {
         &self.inner
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::future::Future;
+    use std::sync::atomic::{self, AtomicBool, AtomicUsize};
+    use std::time::Duration;
+    use xshell::cmd;
+
+    /// A minimal git repository is enough for `RepoShell::new`, which needs a
+    /// resolvable `origin` remote URL; nothing is fetched and nothing needs to
+    /// be reachable.
+    fn test_repo() -> (tempfile::TempDir, RepoShell) {
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path().to_owned();
+        let shell = xshell::Shell::new().expect("failed to create shell");
+        cmd!(shell, "git init --initial-branch=main {dir_path}").quiet().run().expect("git init failed");
+        cmd!(shell, "git -C {dir_path} remote add origin https://github.com/example/example.git")
+            .quiet()
+            .run()
+            .expect("git remote add failed");
+        let repo_shell = RepoShell::new(dir_path).expect("failed to create RepoShell");
+        (dir, repo_shell)
+    }
+
+    /// Runs `f` on a dedicated thread with its own current-thread tokio runtime
+    /// and joins it, panicking on the test thread if the task panicked. Used
+    /// instead of `#[tokio::test]` because lcilib's tokio features do not
+    /// include the macros for it.
+    fn run_task<F>(f: impl FnOnce() -> F + Send + 'static) -> F::Output
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("failed to build tokio runtime");
+            rt.block_on(f())
+        })
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    /// Two shells for one repository, driven from two threads each with its own
+    /// runtime, must serialize their `with_lock_blocking` closures.
+    #[test]
+    fn distinct_shells_same_repo_serialize() {
+        let (dir, shell_a) = test_repo();
+        let shell_b = RepoShell::new(dir.path()).expect("failed to create second RepoShell");
+
+        let max_concurrent = Arc::new(AtomicUsize::new(0));
+        let in_critical = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+
+        let mut handles = Vec::new();
+        for shell in [shell_a, shell_b] {
+            let max_concurrent = Arc::clone(&max_concurrent);
+            let in_critical = Arc::clone(&in_critical);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .expect("failed to build tokio runtime");
+                rt.block_on(async move {
+                    barrier.wait();
+                    for _ in 0..10 {
+                        shell
+                            .with_lock_blocking(|_lock| {
+                                let now = in_critical.fetch_add(1, atomic::Ordering::SeqCst) + 1;
+                                max_concurrent.fetch_max(now, atomic::Ordering::SeqCst);
+                                std::thread::sleep(Duration::from_millis(2));
+                                in_critical.fetch_sub(1, atomic::Ordering::SeqCst);
+                            })
+                            .await
+                            .expect("with_lock_blocking failed");
+                    }
+                });
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("task thread panicked");
+        }
+
+        assert_eq!(
+            max_concurrent.load(atomic::Ordering::SeqCst),
+            1,
+            "critical sections from two shells for the same repo overlapped"
+        );
+    }
+
+    /// Shells for different repositories must not block each other: while one
+    /// shell's closure holds its repo's lock, another shell's closure for a
+    /// different repository still completes.
+    #[test]
+    fn distinct_repos_do_not_serialize() {
+        let (_dir_a, shell_a) = test_repo();
+        let (_dir_b, shell_b) = test_repo();
+
+        let b_done = Arc::new(AtomicBool::new(false));
+        let b_done_2 = Arc::clone(&b_done);
+
+        let handle_b = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("failed to build tokio runtime");
+            rt.block_on(async move {
+                shell_b
+                    .with_lock_blocking(|_lock| {})
+                    .await
+                    .expect("with_lock_blocking failed");
+                b_done_2.store(true, atomic::Ordering::SeqCst);
+            });
+        });
+
+        run_task(async move || {
+            shell_a
+                .with_lock_blocking(|_lock| {
+                    std::thread::sleep(Duration::from_millis(150));
+                })
+                .await
+                .expect("with_lock_blocking failed");
+            assert!(
+                b_done.load(atomic::Ordering::SeqCst),
+                "shell for a different repository was blocked by shell_a's lock"
+            );
+        });
+        handle_b.join().expect("task thread panicked");
+    }
+}
