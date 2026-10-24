@@ -330,7 +330,16 @@ pub async fn get_current_git_commit_for_change_id(
         .map(|res| res.parse().expect("jj to output a valid commit ID"))
 }
 
-/// Update the description of a commit using jj
+/// Update the description of a commit using jj.
+///
+/// Does nothing if the commit already has exactly this description, modulo
+/// trailing newlines (which jj normalizes to a single one anyway): `jj
+/// describe` rewrites the commit even when the text is unchanged, which
+/// changes its commit ID and drops any signature, leaving the commit ID
+/// recorded in the database stale for no reason.
+///
+/// The read-compare-write sequence runs under the shell's repository lock, so
+/// concurrent callers cannot undo each other's skips.
 ///
 /// # Errors
 ///
@@ -342,6 +351,21 @@ pub async fn update_commit_description(
 ) -> Result<(), Error> {
     shell
         .with_lock_blocking(|shell| {
+            let current_description = jj(&shell)
+                .arg("log")
+                .arg("-r")
+                .arg(change_id)
+                .arg("--no-graph")
+                .arg("--color")
+                .arg("never")
+                .arg("-T")
+                .arg("description")
+                .read()
+                .map_err(Error::Shell)?;
+            if current_description.trim_end_matches('\n') == description.trim_end_matches('\n') {
+                return Ok(());
+            }
+
             jj(&shell)
                 .arg("describe")
                 .arg("--quiet")
