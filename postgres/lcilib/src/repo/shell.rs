@@ -395,23 +395,8 @@ mod tests {
     use core::future::Future;
     use std::sync::atomic::{self, AtomicBool, AtomicUsize};
     use std::time::Duration;
-    use xshell::cmd;
 
-    /// A minimal git repository is enough for `RepoShell::new`, which needs a
-    /// resolvable `origin` remote URL; nothing is fetched and nothing needs to
-    /// be reachable.
-    fn test_repo() -> (tempfile::TempDir, RepoShell) {
-        let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let dir_path = dir.path().to_owned();
-        let shell = xshell::Shell::new().expect("failed to create shell");
-        cmd!(shell, "git init --initial-branch=main {dir_path}").quiet().run().expect("git init failed");
-        cmd!(shell, "git -C {dir_path} remote add origin https://github.com/example/example.git")
-            .quiet()
-            .run()
-            .expect("git remote add failed");
-        let repo_shell = RepoShell::new(dir_path).expect("failed to create RepoShell");
-        (dir, repo_shell)
-    }
+    use crate::jj::test_repo;
 
     /// Runs `f` on a dedicated thread with its own current-thread tokio runtime
     /// and joins it, panicking on the test thread if the task panicked. Used

@@ -383,3 +383,159 @@ pub async fn update_commit_description(
 
     Ok(())
 }
+
+/// A git+jj colocated repository, whose origin URL is resolvable enough
+/// for `RepoShell::new`. `JJ_CONFIG` is set on the shell so the tests are
+/// hermetic with respect to host jj/git identity configuration.
+#[cfg(test)]
+pub(super) fn test_repo() -> (tempfile::TempDir, RepoShell) {
+    let dir = tempfile::tempdir().expect("failed to create temporary directory");
+    let dir_path = dir.path().to_owned();
+    let shell = xshell::Shell::new().expect("failed to create shell");
+
+    let config_path = dir_path.join("jj-config.toml");
+    std::fs::write(
+        &config_path,
+        "[user]\nname = \"local-ci-test\"\nemail = \"test@example.com\"\n",
+    )
+    .expect("failed to write jj config");
+    shell.set_var("JJ_CONFIG", &config_path);
+
+    cmd!(shell, "git init --initial-branch=main {dir_path}")
+        .quiet()
+        .run()
+        .expect("git init failed");
+    cmd!(shell, "git -C {dir_path} remote add origin https://github.com/example/example.git")
+        .quiet()
+        .run()
+        .expect("git remote add failed");
+    cmd!(shell, "git -C {dir_path} -c user.name=local-ci-test -c user.email=test@example.com commit --allow-empty -m initial")
+        .quiet()
+        .run()
+        .expect("git commit failed");
+    cmd!(shell, "jj git init --colocate {dir_path}")
+        .quiet()
+        .run()
+        .expect("jj init failed");
+
+    let repo_shell = RepoShell::new(&dir_path).expect("failed to create RepoShell");
+    (dir, repo_shell)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::future::Future;
+    use xshell::cmd;
+
+    /// Runs `f` on a dedicated thread with its own current-thread tokio runtime
+    /// and joins it, panicking on the test thread if the task panicked. Used
+    /// instead of `#[tokio::test]` because lcilib's tokio features do not
+    /// include the macros for it.
+    fn run_task<F>(f: impl FnOnce() -> F + Send + 'static) -> F::Output
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("failed to build tokio runtime");
+            rt.block_on(f())
+        })
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    /// If the commit already carries the wanted description, the update must
+    /// be skipped entirely. An actual `jj describe` invocation errors out on
+    /// an immutable commit even when the description is identical, so reaching
+    /// an `Ok` result proves the skip path was taken -- while a changed
+    /// description must still be written, which the immutable commit then
+    /// refuses.
+    #[test]
+    fn update_commit_description_skips_unchanged() {
+        let (_dir, shell) = test_repo();
+
+        run_task(move || async move {
+            let change_id: ChangeId = jj_log(&shell, Some("change_id"), "@")
+                .await
+                .expect("jj log failed")
+                .parse()
+                .expect("valid change id");
+
+            update_commit_description(&shell, &change_id, "stack merge description")
+                .await
+                .expect("initial describe failed");
+
+            // Make the working-copy commit immutable: 'jj describe' on it now
+            // fails even if the description is unchanged.
+            shell
+                .with_lock_blocking(|sh| {
+                    let key = r#"revset-aliases."immutable_heads()""#;
+                    let value = r#""@ | remote_bookmarks()""#;
+                    cmd!(sh, "jj config set --repo {key} {value}").quiet().run()
+                })
+                .await
+                .expect("with_lock_blocking failed")
+                .expect("config set failed");
+
+            update_commit_description(&shell, &change_id, "stack merge description")
+                .await
+                .expect("identical description must be skipped, not re-described");
+
+            let err = update_commit_description(&shell, &change_id, "different description")
+                .await
+                .expect_err("different description must actually run 'jj describe'");
+            assert!(
+                matches!(err, Error::Shell(_)),
+                "expected 'jj describe' failure, got {err:?}"
+            );
+        });
+    }
+
+    /// Descriptions are compared modulo trailing newlines (jj stores exactly
+    /// one, or none for the empty description), so an update differing only in
+    /// trailing newlines must not rewrite the commit.
+    #[test]
+    fn update_commit_description_ignores_trailing_newlines() {
+        let (_dir, shell) = test_repo();
+
+        run_task(move || async move {
+            let change_id: ChangeId = jj_log(&shell, Some("change_id"), "@")
+                .await
+                .expect("jj log failed")
+                .parse()
+                .expect("valid change id");
+
+            update_commit_description(&shell, &change_id, "some description")
+                .await
+                .expect("initial describe failed");
+            let commit_id =
+                get_current_git_commit_for_change_id(&shell, &change_id).await.expect("jj log failed");
+
+            for description in ["some description\n", "some description\n\n"] {
+                update_commit_description(&shell, &change_id, description)
+                    .await
+                    .unwrap_or_else(|e| panic!("update with {description:?} should be skipped: {e:?}"));
+                assert_eq!(
+                    get_current_git_commit_for_change_id(&shell, &change_id)
+                        .await
+                        .expect("jj log failed"),
+                    commit_id,
+                    "description differing only in trailing newlines must not rewrite the commit",
+                );
+            }
+
+            update_commit_description(&shell, &change_id, "some other description")
+                .await
+                .expect("describe with changed text failed");
+            assert_eq!(
+                jj_log(&shell, Some("description"), &change_id)
+                    .await
+                    .expect("jj log failed"),
+                "some other description",
+            );
+        });
+    }
+}
