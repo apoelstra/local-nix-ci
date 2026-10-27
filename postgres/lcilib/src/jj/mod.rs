@@ -409,7 +409,7 @@ pub(super) fn test_repo() -> (tempfile::TempDir, RepoShell) {
         .quiet()
         .run()
         .expect("git remote add failed");
-    cmd!(shell, "git -C {dir_path} -c user.name=local-ci-test -c user.email=test@example.com commit --allow-empty -m initial")
+    cmd!(shell, "git -C {dir_path} -c user.name=local-ci-test -c user.email=test@example.com -c commit.gpgSign=false commit --allow-empty -m initial")
         .quiet()
         .run()
         .expect("git commit failed");
