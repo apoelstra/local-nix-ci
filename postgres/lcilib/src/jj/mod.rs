@@ -198,7 +198,7 @@ pub async fn count_gpg_signed_commits(
     // a Vec to use join <.<.
     let cid_strs = change_ids.iter().map(ChangeId::to_string).collect::<Vec<_>>();
     let revset = format!("({}) & signed()", cid_strs.join("|"));
-    let output = jj_log(shell, Some("change_id"), &revset).await?;
+    let output = jj_log(shell, Some("change_id ++ \"\\n\""), &revset).await?;
 
     let mut count = 0;
     for line in output.lines() {
