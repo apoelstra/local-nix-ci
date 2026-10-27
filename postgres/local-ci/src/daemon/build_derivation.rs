@@ -284,6 +284,7 @@ async fn build_derivation_with_cancellation(
             "--no-build-output",
             "--no-out-link",
             "--keep-failed",
+            "--keep-going",
             derivation_path,
             "-v",
         ])
