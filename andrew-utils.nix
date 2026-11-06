@@ -838,6 +838,11 @@ rec {
           echo "Bitcoind exe: $BITCOIND_EXE"
           echo "Elementsd exe: $ELEMENTSD_EXE"
 
+          # The bitcoind and elementsd crates build their datadirs under TEMPDIR_ROOT, which
+          # defaults to the build directory which sometimes has multi-second fsync delays.
+          export TEMPDIR_ROOT=/dev/shm/local-ci-$$
+          mkdir -p "$TEMPDIR_ROOT"
+
           # We have "cannot find libstdc++" issues when compiling
           # rust-bitcoin with bitcoinconsensus on and rustc nightly
           # from 2024-05-22 onward (did not occur on 2024-05-04;
